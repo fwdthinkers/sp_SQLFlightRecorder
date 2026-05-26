@@ -1,12 +1,13 @@
 # Decision Log — SQL Server DBA Flight Recorder
 
-Complete, append-only decision log. Every decision ID from D-001 through D-187 appears below with its source section and status.
+Complete, append-only decision log. Every decision ID from D-001 through D-190 appears below with its source section and status.
 
 **Status legend:**
 - **Locked** — Final; only changeable in a major release per project versioning (D-171, D-126).
 - **Tentative** — Decision is committed but explicitly subject to revision based on user feedback (typically a default value or threshold).
 - **Deferred** — Decision identifies an item that has been moved to a later release; the target version is named.
 - **Superseded** — Replaced by a later decision; the superseding D-### is named. (None currently.)
+- **At Risk** — Locked, but the design lock review (`docs/design-lock-review.md`) flagged a residual risk that depends on post-launch validation. The decision stands; the risk is tracked.
 
 ---
 
@@ -52,7 +53,7 @@ Complete, append-only decision log. Every decision ID from D-001 through D-187 a
 | D-031 | §4.1 | Locked | Clustered index `SnapshotUtc`-leading | Report is hot read path | Slightly hotter inserts |
 | D-032 | §4.1 | Locked | Declared FKs, no cascades | Real RI, no surprise cascades | Purge code knows order |
 | D-033 | §4.8 | Locked | Wait-stats ignore list at collect time | Bounds largest table | Discontinuity on list change |
-| D-034 | §4.4 | Locked | `PAGE` compression default, edition fallback | Big savings on cumulative tables | Express gets less |
+| D-034 | §4.4 | At Risk | `PAGE` compression default, edition fallback | Big savings on cumulative tables | Express gets less. **Risk:** "Minimal storage" envelope (Charter §13) is modeled, not measured at scale; tracked by D-188. |
 | D-035 | §4.7 | Locked | `FR_RunLog` retained 4× snapshot retention | Self-instrumentation outlives data | More run-log rows |
 | D-036 | §4.6 | Locked | No Findings/Timeline persistence in v1 | Single source of truth | Cannot diff yesterday's findings |
 | D-037 | §4.3 | Locked | Defer some tables to v0.2/v0.3 | MVP discipline | Some "obvious" tables missing in v0.1 |
@@ -66,7 +67,7 @@ Complete, append-only decision log. Every decision ID from D-001 through D-187 a
 | ID | Source | Status | Decision | Rationale | Tradeoff accepted |
 |---|---|---|---|---|---|
 | D-042 | §5.1 | Locked | Default cadence 1 snapshot/min | Cheap; dense enough for `LAG()` | Sub-minute spikes invisible |
-| D-043 | §5.2 | Locked | Target median ~2–8 s, hard cap 30 s | Explicit envelope | §9 enforces |
+| D-043 | §5.2 | At Risk | Target median ~2–8 s, hard cap 30 s | Explicit envelope | §9 enforces. **Risk:** Synthetic CI workload (D-143) cannot reproduce all pathological production cases; validation depends on early adopters. Tracked by D-188. |
 | D-044 | §5.3 | Locked | QS collector reads only latest closed interval per DB | Bounds most expensive collector | No retroactive QS analysis |
 | D-045 | §5.3 | Locked | QS collector capped at 50% of run budget | Protects rest of snapshot | End-of-iter DBs may be skipped |
 | D-046 | §5.4 | Locked | No `CROSS APPLY dm_exec_query_plan` ever | Restates D-015 at collector level | Plan analysis limited to QS XML |
@@ -104,7 +105,7 @@ Complete, append-only decision log. Every decision ID from D-001 through D-187 a
 | D-073 | §6.5 | Locked | `EventType`/`Category` closed sets; additive in minors | Stable runbook integration | New types take minor release |
 | D-074 | §6.6 | Locked | Cross-category dedup forbidden; intra-category by anchor | Avoids duplication; preserves attribution | More complex than no-dedup |
 | D-075 | §6.6 | Locked | Coverage findings exempt from dedup | Absences must show | Extra rows |
-| D-076 | §6.7 | Locked | Wording rules enforced at code review | Operationalizes no-overclaiming | PR-review friction |
+| D-076 | §6.7 | At Risk | Wording rules enforced at code review | Operationalizes no-overclaiming | PR-review friction. **Risk:** No automated wording linter; relies on humans + checklist (D-157, D-158). Tracked by D-189. |
 | D-077 | §6.4 | Locked | Empty Findings → synthetic Informational | Prevents post-mortem misreading | Cannot return truly empty |
 | D-078 | §6.5 | Locked | Empty Timeline permitted | Honest when empty | Asymmetry intentional |
 | D-079 | §6.8 | Locked | Q-010 → Markdown single `nvarchar(max)` col `Report`; stable markers | Paste ergonomics; greppable | Markdown quality on us |
@@ -125,7 +126,7 @@ Complete, append-only decision log. Every decision ID from D-001 through D-187 a
 | D-089 | §7.2 | Locked | `RuleId` format `FR_R####_ShortName`; never renamed/reused | Stable runbook references | Retired IDs permanently reserved |
 | D-090 | §7.2 | Locked | Lifecycle: Active / Disabled / Deprecated / Retired | Graceful evolution | Deprecated rules consume cycles |
 | D-091 | §7.3 | Locked | Severity per-rule constant in `FR_Rules` | Prevents loudness inflation | Big/small incidents rank same |
-| D-092 | §7.4 | Locked | Baselines: 24h median excluding incident; ≥5 samples or Confidence=Low | Transparent, no-ML | Seasonality false-positives |
+| D-092 | §7.4 | At Risk | Baselines: 24h median excluding incident; ≥5 samples or Confidence=Low | Transparent, no-ML | Seasonality false-positives. **Risk:** Could be mischaracterized as "anomaly detection" / "AI magic" (Charter §16); transparency in rule docs (D-161) is the mitigation. Tracked by D-189. |
 | D-093 | §7.4 | Locked | "Critical wait types" allow-list hard-coded in v1 | Conservative community consensus | Not customizable in v1.0 |
 | D-094 | §7.5 | Locked | Maintenance job-name patterns hard-coded (Ola + Maintenance Plans) | Catches 95% | Custom job names get less |
 | D-095 | §7.6 | Locked | FR_R0010 window = 15 min before `@StartTime` through `@EndTime` | Catches triggering failures | Arbitrary; configurable later |
@@ -159,7 +160,7 @@ Complete, append-only decision log. Every decision ID from D-001 through D-187 a
 | D-118 | §8.5 | Locked | Perm tiers: VSS required; VAD recommended; sysadmin discouraged | Charter "no security changes by default" | Some collectors degrade |
 | D-119 | §8.5 | Locked | Missing perms reported in three places | At 2 AM users find one of three | Repetition by design |
 | D-120 | §8.6 | Locked | Tier 1 CI: 2017/2019/2022/2025 Linux containers; blocking | Free, scriptable, fast | 2012/2014/2016 not automated |
-| D-121 | §8.6 | Locked | Tier 2 manual: 2012/2014/2016 Win + MI + Azure SQL DB; not merge-blocking | Cannot containerize for free | Release notes must declare gaps |
+| D-121 | §8.6 | At Risk | Tier 2 manual: 2012/2014/2016 Win + MI + Azure SQL DB; not merge-blocking | Cannot containerize for free | Release notes must declare gaps. **Risk:** Attestation process (D-164) is unproven; first 18 months post-launch are the real test. Tracked by D-190. |
 | D-122 | §8.6 | Locked | Golden output tests per version; byte diff fails CI | Strongest determinism guarantee | Authors update goldens with rule changes |
 | D-123 | §8.6 | Locked | Capability-flag unit tests with simulated `CapabilitySnapshot` | Fast; covers interpretation across matrix | Doesn't test dynamic SQL compile |
 | D-124 | §8.7 | Locked | New majors evaluated within 90 days of GA | Forward-compat commitment | Some day-one lag |
@@ -212,7 +213,7 @@ Complete, append-only decision log. Every decision ID from D-001 through D-187 a
 | D-161 | §10.5 | Locked | Rule docs use fixed template (`docs/rules/_template.md`) including Severity rationale, Confidence rationale, FP risks, drill-down, suppress instructions | Predictability is itself a feature | Rule authors fill in 9 sections |
 | D-162 | §10.5 | Locked | Rule retirement: maintainer proposes; ≥30-day discussion; deprecated for ≥2 minors; retired only in major; `RuleId` reserved forever | Runbooks across years still work | Retirement is slow on purpose |
 | D-163 | §10.6 | Locked | `CODEOWNERS` routes by area (core, rule pack, compatibility, docs) | Right reviewers see the right PRs | Requires maintainer teams to be staffed |
-| D-164 | §10.7 | Locked | Q-034 → Tier 2 attestation issues auto-open per RC; missing for 3 minors → Unverified; missing for 6 → deprecation discussion | Honest signal; not pretending to test what we don't | Old engines may show Unverified for a while |
+| D-164 | §10.7 | At Risk | Q-034 → Tier 2 attestation issues auto-open per RC; missing for 3 minors → Unverified; missing for 6 → deprecation discussion | Honest signal; not pretending to test what we don't | Old engines may show Unverified for a while. **Risk:** Process is unproven; tracked by D-190. |
 | D-165 | §10.7 | Locked | Q-033 → compatibility matrix auto-generated from Tier 1 CI + Tier 2 attestations; README badge links to it; no manual edits to `matrix.md` | Users see true posture before installing | One generator script to maintain |
 | D-166 | §10.7 | Locked | Tier 3 community reports via Discussions category (non-binding) | Useful signal without commitment | No formal status for Tier 3 |
 | D-167 | §10.8 | Locked | Documentation rule: every page answers a user question in order asked; design doc published in `docs/design/` (no secret docs) | Contributors and maintainers share context | Design doc must be kept user-readable |
@@ -242,15 +243,28 @@ Complete, append-only decision log. Every decision ID from D-001 through D-187 a
 | D-186 | §10.4 | Locked | Q-039 → "Boring code" rejection is appealable to a second maintainer; safety/compatibility/performance objections remain non-appealable | Style judgement is reviewer-subjective; safety isn't | Some boring-vs-clever debates take two maintainers' time |
 | D-187 | §10.14 | Locked | Q-040 → Minimum local contributor environment is SSMS or Azure Data Studio + a writable SQL Server instance; Docker/CI parity recommended but not required for PR submission | DBA contributors are the target audience; many don't run Docker on workstations | First-pass CI failures may take an extra cycle when a maintainer relays results |
 
+## Design Lock Review (new decisions raised by the compliance review)
+
+These three decisions were created by the design lock / compliance review (see `docs/design-lock-review.md`). They acknowledge and operationalize risks that the review identified. None of them change the locked design; each is a tracking commitment.
+
+| ID | Source | Status | Decision | Rationale | Tradeoff accepted |
+|---|---|---|---|---|---|
+| D-188 | Design Lock Review §2 risk #1 + §13 (storage) | Locked | Operating envelope (D-043, D-131) and storage envelope (Charter §13) are **explicitly understood to require empirical validation in v0.1/v0.2 by real-world users**. The synthetic CI workload (D-143) is the floor, not the ceiling. Early-adopter feedback is treated as a release-process input, not a "nice to have." v0.2 release notes must report observed Collect durations and repository growth from at least one external production-class install before tagging. | Specifications are not validation; production is. Without an explicit commitment, the empirical-validation step can quietly slip. | v0.2 release may slip if no external production install has reported back. Acceptable cost to keep the "safe on production" claim honest. |
+| D-189 | Design Lock Review §2 risk #4 + §16 (no AI magic) | Locked | The two human-enforced disciplines — **wording compliance (D-076) and baseline-transparency (D-092)** — are explicitly named as ongoing maintainer responsibilities, not one-time setup. The PR template (D-157) and rule docs template (D-161) carry the load, but maintainers commit to re-reading the safety checklist (D-176) and the §6.7 wording rules **before approving any PR that touches `FR_Rules` seed data or rule logic.** A maintainer who has not re-read those two documents in the past 30 days is not eligible to be the second reviewer (D-158) on such PRs. | The compliance review noted that wording compliance has no automated linter and baseline math could be mischaracterized as ML. The mitigation is human; making it an explicit ongoing commitment (not just a checklist item) is what keeps the commitment alive. | Adds friction to maintainer rotation; small. |
+| D-190 | Design Lock Review §2 risk #2 + §10 (compat matrix process) | Locked | The Tier 2 attestation process (D-121, D-164) is **on probation for its first 18 months post-v1.0**. The maintainers commit to a public review of the attestation process at the v1.0 + 18 months point: how many attestations arrived per release, which targets went Unverified, whether the staleness-to-deprecation cascade (D-164) actually triggered when it should have. If the process produced no useful signal, it is replaced or supplemented in a v1.x minor (which is a process change, not a charter change). | The compliance review correctly noted that the attestation process is unproven and the first 18 months are the real test. An explicit review commitment prevents quiet erosion of the test matrix. | Maintainers must hold themselves to this review; nobody else will. |
+
 ---
 
 ## Summary
 
-- **Total decisions:** 187 (D-001 through D-187)
-- **Locked:** 186
+- **Total decisions:** 190 (D-001 through D-190)
+- **Locked:** 184
 - **Tentative:** 1 (D-181)
 - **Deferred items inside otherwise-locked decisions:** 2 (D-180 `@TimeZone` to v0.4; D-184 view layer to v0.2)
 - **Deferred:** 1 (D-182 to v0.2/v0.3)
+- **At Risk:** 6 (D-034, D-043, D-076, D-092, D-121, D-164) — each tracked by one of D-188/D-189/D-190
 - **Superseded:** 0
 
 No decisions have been silently merged, dropped, or simplified during reconciliation. If a future change supersedes a decision, append a new D-### entry and mark the superseded entry as `Superseded by D-###` rather than editing history.
+
+The three new decisions from the design lock review (D-188, D-189, D-190) are tracking commitments, not redesigns. They do not change v0.1 implementation scope. They make explicit what the design already assumed: that empirical validation, wording discipline, and compatibility-matrix honesty are ongoing responsibilities, not one-time checks.
