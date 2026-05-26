@@ -1,6 +1,8 @@
 # SQL Server DBA Flight Recorder — Design Document
 
-> **Note on provenance.** This consolidated document is assembled from the chartering and design conversation that produced decisions D-001 through D-187. Sections 6 through 11 were written in full during the design session and are preserved here faithfully. Sections 1 through 5 were established earlier in the design work; the text below reconstructs them from the decision log (D-001 to D-061) and cross-references in later sections, organized for readability. Where a reconstruction summarizes rather than reproduces original prose, that is noted. **Sections 12 and 13 have not yet been written.** They are listed in the table of contents and marked as "Not yet written" so the gap is visible rather than silently absent.
+> **Note on provenance.** This consolidated document is assembled from the chartering and design conversation that produced decisions D-001 through D-187. Sections 6 through 11 were written in full during the design session and are preserved here faithfully. Sections 1 through 5 were established earlier in the design work; the text below reconstructs them from the decision log (D-001 to D-061) and cross-references in later sections, organized for readability. Where a reconstruction summarizes rather than reproduces original prose, that is noted.
+>
+> **Design Lock Status:** A formal design lock / compliance review against the original Master Charter was completed (see `docs/design-lock-review.md`). All 18 charter requirements passed. All 40 design-time open questions (Q-001–Q-040) are resolved. 186 of 187 decisions are Locked; D-181 is Tentative (a runtime-tunable default). The design is approved for implementation planning at v0.1 scope.
 >
 > No decisions have been invented, dropped, or silently simplified. All D-### identifiers from the decision log appear in this document or in `docs/decisions.md`.
 
@@ -19,8 +21,8 @@
 9. [Performance and Safety Plan](#9-performance-and-safety-plan)
 10. [Open Source Contribution Model](#10-open-source-contribution-model)
 11. [MVP Scope and Phased Roadmap](#11-mvp-scope-and-phased-roadmap)
-12. [Section 12 — Not yet written](#12-not-yet-written)
-13. [Section 13 — Not yet written](#13-not-yet-written)
+12. [Section 12 — Deferred (security/threat model)](#12-deferred-securitythreat-model)
+13. [Section 13 — Deferred (appendices)](#13-deferred-appendices)
 
 ---
 
@@ -189,6 +191,8 @@ Deferred to later phases (**D-037**): `FR_Tempdb`, `FR_Memory`, `FR_AgentJob`, `
 - No `NVARCHAR(MAX)` on hot per-snapshot rows (**D-040**); bounded fields may truncate.
 - Sentinel values `DatabaseId = 0`, `SessionId = 0` for instance-scoped rows (**D-041**).
 
+> **At-risk note (Charter §13, "Minimal storage"):** The storage envelope of 200 MB – 1.5 GB at default 7-day retention (§4.2 modeled estimate) is unverified at scale. The `Status` mode surfaces actual repository growth; retention is configurable. Empirical validation is expected through v0.1/v0.2 early adopters.
+
 ### 4.5 Configuration storage
 
 - Multi-value config entries are semicolon-delimited (**D-026**, resolved Q-003).
@@ -225,6 +229,8 @@ Deferred to later phases (**D-037**): `FR_Tempdb`, `FR_Memory`, `FR_AgentJob`, `
 
 - Target median collect duration: ~2–8 seconds; hard cap 30 seconds (**D-043**).
 - §9 enforces the budget mechanically.
+
+> **At-risk note (Charter §5, "30-second collect cap"):** The 30-second cap is enforced cooperatively (D-010); pathological production cases cannot be reproduced in the synthetic CI workload (D-143). Mitigations: partial-success handling (D-059), FR_R0026 coverage findings, documented limits (D-146). Empirical validation depends on early-adopter feedback during v0.1.
 
 ### 5.3 Query Store collector
 
@@ -266,7 +272,7 @@ Deferred to later phases (**D-037**): `FR_Tempdb`, `FR_Memory`, `FR_AgentJob`, `
 
 ### 5.11 Row bounds
 
-- `MaxRowsPerCollector = 50` is the configurable v1 default (**D-181**, resolved Q-005), per-category overridable in `FR_Config`.
+- `MaxRowsPerCollector = 50` is the configurable v1 default (**D-181**, resolved Q-005), per-category overridable in `FR_Config`. **Status: Tentative** — revisable in any minor based on telemetry and community feedback.
 
 ---
 
@@ -312,6 +318,8 @@ Restart detection splits the window at the boundary; a Critical informational fi
 - Recommendation wording rules are enforced at code review (**D-076**): no "kill session," "force the plan," "use NOLOCK," "shrink," "clear the plan cache," "the root cause is," "always," "never" without qualification.
 - Required phrasing patterns: "consider … only after validating that …," "correlates with," "is consistent with."
 
+> **At-risk note (Charter §14, "Clear findings"):** Wording compliance is human-enforced (code review + PR template checklist D-157 + two-reviewer rule D-158). No automated wording linter exists. Defense in depth is real but not perfect. Considered acceptable risk per the design lock review.
+
 ### 6.8 Output formats
 
 - `Default` / `FindingsOnly` / `TimelineOnly` / `Markdown` (**D-079**).
@@ -353,6 +361,8 @@ Restart detection splits the window at the boundary; a Critical informational fi
 - Baselines: 24h median excluding the incident window; require ≥5 prior samples or Confidence downgraded to Low (**D-092**).
 - "Critical wait types" allow-list (`PAGEIOLATCH_*`, `WRITELOG`, `RESOURCE_SEMAPHORE`, `LCK_M_*`, `THREADPOOL`, `SOS_SCHEDULER_YIELD`) is hard-coded in v1 (**D-093**).
 - The `CriticalWaitTypes` config key is defined in v1.0 but only honored from v1.1 (**D-105**, resolved Q-028) — forward compatibility.
+
+> **At-risk note (Charter §16, "No AI magic"):** Baseline-relative rules use a transparent 24h median (D-092), not machine learning. This is statistical, not ML, and is documented as such in the rule docs (D-161). Skeptics could mischaracterize this; the transparency mechanism (every rule documents its baseline math) is the mitigation.
 
 ### 7.5 Maintenance pattern recognition
 
@@ -470,6 +480,8 @@ Restart detection splits the window at the boundary; a Critical informational fi
 - Golden output tests per version; any byte diff fails CI (**D-122**).
 - Capability-flag unit tests with simulated `CapabilitySnapshot` values (**D-123**).
 - New major engine releases evaluated within 90 days of GA; capability probes and rules added in a minor release (**D-124**).
+
+> **At-risk note (Charter §10, "SQL Server 2012–2025 compatibility"):** The three oldest supported versions (2012, 2014, 2016) are not in automated CI; they depend on Tier 2 manual attestation (D-121) and the staleness policy (D-164). The matrix badge (D-165) makes verification status visible to users before install. The first 18 months post-launch are the real test of the attestation process. Carried as a release-process risk; not a v0.1 implementation blocker.
 
 ### 8.7 Portability and support commitments
 
@@ -703,15 +715,30 @@ What it explicitly does *not* promise: catching every incident type; perfect rec
 
 ---
 
-## 12. Not yet written
+## 12. Deferred (security/threat model)
 
-This section was anticipated but not produced in the design conversation. Likely candidates based on the project's needs (not committed): security model, threat model, or compliance considerations. **Status: Missing — needs explicit design work before v1.0.**
+**Status: Deferred — target resolution before v1.0; not blocking v0.1.**
+
+The design lock review (see `docs/design-lock-review.md`) flagged that this section was anticipated but not produced during the design conversation. Likely scope: explicit threat model (what classes of attacker the tool defends against), security posture (permission tiers reaffirmed, audit considerations, data-sensitivity of repository contents — query text, parameter values that may appear in cached plans), and SECURITY.md disclosure process.
+
+Existing relevant decisions that this section will consolidate when written:
+- D-118 (permission tiers)
+- D-119 (missing-permission reporting in three places)
+- D-060 (xp_readerrorlog permission re-verification)
+- D-179 (no CLA/DCO at v1; MIT license)
+- §10.13 governance section (SECURITY.md referenced)
+
+**Not blocking v0.1 implementation.** Must be written before v1.0 release.
 
 ---
 
-## 13. Not yet written
+## 13. Deferred (appendices)
 
-This section was anticipated but not produced in the design conversation. Likely candidates: appendices (full glossary, references, charter quotation). **Status: Missing — needs explicit design work before v1.0.**
+**Status: Deferred — target resolution before v1.0; not blocking v0.1.**
+
+Likely scope: full glossary (Findings vs Timeline vs Coverage; Observed vs Inferred vs Possible vs Needs Validation; Tier 1/2/3); references (Microsoft documentation pointers, community baseline references for the rule pack); literal quotation of the Master Charter so the design doc is fully self-contained; the failure-mode catalog from §9.9 reprinted in its canonical form (currently lives in `docs/operations/troubleshooting.md` per the §10.1 repo layout).
+
+**Not blocking v0.1 implementation.** Must be written before v1.0 release.
 
 ---
 
@@ -720,12 +747,17 @@ This section was anticipated but not produced in the design conversation. Likely
 | Question | Resolved by | Section |
 |---|---|---|
 | Q-001 | D-065 | §6.3 |
+| Q-002 | D-180 | §1.6 |
 | Q-003 | D-026 | §4.5 |
 | Q-004 | D-027 | §4.5 |
+| Q-005 | D-181 | §5.11 |
 | Q-006 | D-066 | §6.3 |
+| Q-007 | D-182 | §11.4 (v0.3) |
 | Q-008 (storage) | D-028 | §4.5 |
 | Q-010 | D-079 | §6.8 |
+| Q-011 | D-183 | §2.1 |
 | Q-012 (storage) | D-029 | §3.7 |
+| Q-013 | D-184 | §11.3 (v0.2) |
 | Q-016 | D-057 | §4.8 |
 | Q-017 | D-058 | §5.1 |
 | Q-018 | D-059 | §5.3 |
@@ -751,20 +783,17 @@ This section was anticipated but not produced in the design conversation. Likely
 | Q-038 | D-185 | §10.6 |
 | Q-039 | D-186 | §10.4 |
 | Q-040 | D-187 | §10.14 |
-| Q-002 | D-180 | §1.6 |
-| Q-005 | D-181 | §5.11 |
-| Q-007 | D-182 | §11.4 (v0.3) |
-| Q-011 | D-183 | §2.1 |
-| Q-013 | D-184 | §11.3 (v0.2) |
+
+(Question numbers Q-009, Q-014, Q-015 were used during design as placeholders that were absorbed into larger discussions before formal resolution; no orphan questions remain.)
 
 ---
 
 ## Unresolved Conflicts
 
-None identified during reconciliation. All conflicts encountered during the design conversation were resolved at the time (e.g., the `@MinSeverity` default question in §6.3.4 was reconciled in-line; restart-detection cross-reference between §6.2.2 and FR_R0006 is consistent).
+None identified during the design lock review or earlier reconciliation. All conflicts encountered during the design conversation were resolved at the time.
 
 If any conflict surfaces during implementation, it should be added here rather than resolved silently.
 
 ---
 
-*End of consolidated design document. Sections 12 and 13 remain to be written. See `docs/decisions.md` for the complete decision log and `docs/open-questions.md` for any remaining open items.*
+*End of consolidated design document. The design lock review (`docs/design-lock-review.md`) approved this document for v0.1 implementation planning. Sections 12 and 13 are deferred to v1.0 and are not blockers for v0.1.*
