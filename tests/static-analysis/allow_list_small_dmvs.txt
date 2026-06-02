@@ -1,0 +1,137 @@
+# =============================================================================
+# FR-LINT-002 — Small-DMV allow-list.
+# -----------------------------------------------------------------------------
+# Part 2 of 9 (v0.1 Design Prototype).
+#
+# Per docs/design.md §9.3.3 and docs/decisions.md D-137, every external
+# SELECT (i.e., SELECT from anything outside the FR_* repository tables)
+# MUST either:
+#
+#   (a) include an explicit TOP(n) ORDER BY, OR
+#   (b) reference only objects listed in this allow-list.
+#
+# Entries in this file are objects that are by-construction small or
+# trivially bounded (a handful of rows, structural metadata, instance-wide
+# scalars), so a bare SELECT is acceptable without TOP/ORDER BY.
+#
+# The bounded-reads check (FR-LINT-002) is OFF by default in Part 2. It is
+# turned on per file in Part 4 (when the first collector lands) by adding the
+# file-level pragma:
+#
+#   -- lint:scan-bounded-reads
+#
+# near the top of src/sp_SQLFlightRecorder.sql. Listing items here in Part 2
+# is intentional: it locks the allow-set BEFORE collectors are written so
+# Part 4 cannot quietly expand it without a documented decision.
+#
+# How to amend this file:
+#   * Adding an entry: open a PR, cite the decision (D-### or design section)
+#     showing the object is bounded. Two-reviewer rule applies (D-158).
+#   * Removing an entry: requires a maintainer-approved decision in
+#     docs/decisions.md.
+#
+# Format:
+#   * Lines starting with '#' and blank lines are ignored.
+#   * Each non-comment line is a bareword identifier the linter matches
+#     case-insensitively as a whole token (\b...\b). Schema-qualified names
+#     are preferred (sys.<object>).
+# =============================================================================
+
+
+# -- Category: Instance-level scalars / structural metadata -------------------
+# Bounded by definition: one or a handful of rows, fixed shape per engine.
+sys.dm_os_sys_info
+sys.dm_os_host_info
+sys.dm_os_process_memory
+sys.dm_os_sys_memory
+
+
+# -- Category: Configuration ------------------------------------------------
+# `sys.configurations` is ~80 rows. Used by the Configuration collector
+# (Part 5) without TOP because it is already small and the full set is
+# diagnostically meaningful.
+sys.configurations
+sys.dm_database_encryption_keys
+
+
+# -- Category: Database catalogs (instance-scoped, structural) ----------------
+# Used by Install/Status (Part 3) for permission probes and DB enumeration.
+# Bounded by user database count.
+sys.databases
+sys.master_files
+
+
+# -- Category: Local-database object catalogs (Install/Status only) -----------
+# Used at Install/Uninstall/Status time to look up FR_* objects in the
+# install database (Part 3). Bounded by FR_* count plus user schema, but in
+# Install/Status code paths the join is always anchored on FR_* names, so a
+# bare SELECT is safe.
+sys.objects
+sys.indexes
+sys.tables
+sys.schemas
+sys.columns
+sys.types
+sys.extended_properties
+
+
+# -- Category: Partition-stat reads for repository size summary ---------------
+# Used by Status (Part 3) to report FR_* repository footprint. Always
+# filtered to object_id IN (FR_* OBJECT_IDs).
+sys.dm_db_partition_stats
+
+
+# -- Category: Permission probe -------------------------------------------
+# Used by Install (Part 3) and Configure (Part 8) to verify the caller has
+# the permissions the requested mode needs (D-118, D-119, D-060).
+sys.fn_my_permissions
+sys.server_principals
+sys.database_principals
+sys.server_permissions
+sys.database_permissions
+
+
+# -- Category: Edition / feature probe ----------------------------------------
+# SERVERPROPERTY and DATABASEPROPERTYEX return one scalar per call; the
+# linter treats them as bareword identifiers so they pass FR-LINT-002.
+SERVERPROPERTY
+DATABASEPROPERTYEX
+
+
+# -- Category: Capability probe support (Part 4) ------------------------------
+# Used only by the capability probe in Part 4 / D-008 / D-127. The probe
+# reads scalars and small structural rows; outputs go into the in-memory
+# #fr_capabilities temp table.
+sys.dm_os_loaded_modules
+sys.availability_groups
+sys.availability_replicas
+sys.dm_hadr_availability_replica_states
+
+
+# =============================================================================
+# Items intentionally NOT on the allow-list (documented here so future
+# contributors do not "fix" the omission). These either belong in collectors
+# behind explicit TOP(n) ORDER BY, or are on the forbidden list, or are
+# scheduled for a later release:
+#
+#   sys.dm_exec_requests           -- needs TOP(@TopN); bounded by requests
+#                                     collector in Part 5.
+#   sys.dm_exec_sessions           -- joined to dm_exec_requests; needs TOP.
+#   sys.dm_os_wait_stats           -- filtered by wait ignore-list at insert
+#                                     time (D-033, D-057); not a bare scan.
+#   sys.dm_io_virtual_file_stats   -- bounded read in the file-stats
+#                                     collector with file-count cap; Part 5.
+#   sys.dm_os_performance_counters -- allow-listed counter rows only (D-117).
+#   sys.query_store_*              -- v0.3 only; bounded; not in v0.1.
+#   sys.dm_tran_locks              -- forbidden by FR-LINT-001 until D-047's
+#                                     bounded wrapper lands.
+#   sys.dm_exec_sql_text           -- forbidden by FR-LINT-001 in v0.1.
+#   sys.dm_exec_query_plan*        -- forbidden by FR-LINT-001 and D-046.
+#   sys.dm_db_index_usage_stats    -- excluded from v1 entirely (§11.7).
+#   sys.dm_db_missing_index_*      -- excluded from v1 entirely (§11.7).
+#
+# These exclusions are deliberate. If a future part needs one of them,
+# the right path is: add a decision to docs/decisions.md, add the bounded
+# wrapper to the procedure, and either move the object here or keep it
+# off the list and require the TOP(n) ORDER BY discipline.
+# =============================================================================
