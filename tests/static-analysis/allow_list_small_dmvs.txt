@@ -81,6 +81,15 @@ sys.extended_properties
 sys.dm_db_partition_stats
 
 
+# -- Category: Repository size accounting (Status mode) -----------------------
+# Used by Status (Part 3) to report FR_* repository footprint. The Status
+# query joins sys.partitions to sys.allocation_units and filters by
+# OBJECT_NAME(...) LIKE 'FR\_%' ESCAPE '\', which bounds the row count to
+# the 12 v0.1 core tables (D-137).
+sys.partitions
+sys.allocation_units
+
+
 # -- Category: Permission probe -------------------------------------------
 # Used by Install (Part 3) and Configure (Part 8) to verify the caller has
 # the permissions the requested mode needs (D-118, D-119, D-060).
