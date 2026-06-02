@@ -11,8 +11,8 @@
 --   * Functional Install / Uninstall / Status modes
 --   * Part 1/2 safety + validation behavior preserved
 --
--- Install / Uninstall / Status are functional in Part 3 and create, drop,
--- and read FR_* repository tables in the install database. They also read
+-- Install / Uninstall / Status are functional in Part 3 and manage the
+-- FR_* repository tables in the install database. They also read
 -- a small allow-listed set of system catalogs (sys.tables, sys.partitions,
 -- sys.allocation_units, sys.dm_db_partition_stats, sys.fn_my_permissions)
 -- to verify install state and report repository footprint. No collectors,
@@ -43,9 +43,10 @@ SET QUOTED_IDENTIFIER ON;
 GO
 
 -- -----------------------------------------------------------------------------
--- Idempotent stub: create an empty procedure if it does not exist, so the
--- ALTER below always succeeds. This pattern is SQL Server 2012-compatible
--- (DROP PROCEDURE IF EXISTS is 2016+ and intentionally not used here).
+-- Idempotent stub: install an empty procedure if it does not exist, so the
+-- definition refresh below always succeeds. This pattern is SQL Server 2012-compatible
+-- (the IF-EXISTS form of procedure removal is 2016+ and intentionally
+-- not used here).
 -- -----------------------------------------------------------------------------
 IF OBJECT_ID(N'dbo.sp_SQLFlightRecorder', N'P') IS NULL
     EXEC sys.sp_executesql N'CREATE PROCEDURE dbo.sp_SQLFlightRecorder AS RETURN 0;';
