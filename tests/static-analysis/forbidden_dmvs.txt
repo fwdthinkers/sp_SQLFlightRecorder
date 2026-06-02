@@ -1,0 +1,128 @@
+# =============================================================================
+# FR-LINT-001 — Forbidden DMVs / procs / built-ins.
+# -----------------------------------------------------------------------------
+# Part 2 of 9 (v0.1 Design Prototype).
+#
+# Authoritative list per docs/design.md §9.4 and docs/decisions.md D-136.
+# Each entry is a bareword that the linter matches case-insensitively as a
+# whole identifier (\b...\b). Inline comments (lines starting with '#') and
+# blank lines are ignored.
+#
+# How to amend this file:
+#   * Adding an entry: open a PR, cite the decision (D-### or design section)
+#     that justifies the forbid. Two-reviewer rule applies (D-158).
+#   * Removing an entry: requires a maintainer-approved decision in
+#     docs/decisions.md and a CHANGELOG entry.
+#
+# How to use a forbidden item in a one-off legitimate case:
+#   Add an inline annotation on the SQL line:
+#     ... sys.dm_exec_query_plan(...)  -- lint:allow FR-LINT-001 reason: <why>
+#   Such annotations must survive PR review per the safety checklist
+#   (docs/contributing/safety-checklist.md).
+#
+# Categories below are documentation only; the linter does not parse them.
+# =============================================================================
+
+
+# -- Category: Plan shredding / parsing in T-SQL ------------------------------
+# Charter forbids shredding plan XML in T-SQL (D-015). The plan APPLY DMVs
+# are unsafe even when wrapped in TRY/CATCH because they can OOM or stall.
+sys.dm_exec_query_plan
+sys.dm_exec_text_query_plan
+sys.dm_exec_query_plan_stats
+sys.dm_exec_query_statistics_xml
+
+
+# -- Category: Cache-flushing / cost-shifting ---------------------------------
+# These do real damage if executed accidentally. Recommendations against
+# running them are also enforced separately at the wording-rules layer.
+DBCC FREEPROCCACHE
+DBCC FREESYSTEMCACHE
+DBCC DROPCLEANBUFFERS
+DBCC FLUSHPROCINDB
+
+
+# -- Category: Mutation / destructive --------------------------------------
+# The tool diagnoses; it does not remediate (Charter §15, D-176).
+sp_query_store_force_plan
+sp_query_store_unforce_plan
+sp_query_store_remove_plan
+sp_query_store_remove_query
+sp_query_store_reset_exec_stats
+KILL
+
+
+# -- Category: Server / DB configuration mutation -----------------------------
+# Charter forbids permanent server/DB changes by default (D-003 pillar).
+sp_configure
+RECONFIGURE
+
+
+# -- Category: External / shell ---------------------------------------------
+# Reinforced by FR-LINT-005, listed here too so the forbidden_dmvs.txt grep
+# catches them on its own.
+xp_cmdshell
+xp_dirtree
+xp_fileexist
+xp_subdirs
+xp_regread
+xp_regwrite
+xp_regdeletekey
+xp_regdeletevalue
+xp_regenumvalues
+
+
+# -- Category: Unbounded / lock-heavy DMVs by default -------------------------
+# Permitted ONLY through narrowly-scoped wrapper queries with predicate +
+# TOP(n) + ORDER BY, and only inside collectors that opt in with a
+# -- lint:allow FR-LINT-001 annotation citing the bounding strategy (D-047).
+# Until then they are forbidden outright so accidental usage cannot ship.
+sys.dm_tran_locks
+
+
+# -- Category: Per-row plan / sql_text fanout ---------------------------------
+# CROSS APPLY against these is the most common way these tools cause harm.
+# sys.dm_exec_sql_text is allowed in v0.2+ via the small-DMV allow-list when
+# bounded by handle; until then, forbid to keep Part 2/3 honest.
+sys.dm_exec_sql_text
+
+
+# -- Category: Page / extent inspection --------------------------------------
+# DBCC PAGE and friends can take latches we do not want to fight for.
+DBCC PAGE
+DBCC IND
+DBCC EXTENTINFO
+
+
+# -- Category: Stats / index modification -----------------------------------
+# We never rebuild, never update stats. (D-140)
+DBCC INDEXDEFRAG
+DBCC SHRINKDATABASE
+DBCC SHRINKFILE
+UPDATE STATISTICS
+sp_updatestats
+
+
+# -- Category: Output-related dangerous patterns ------------------------------
+# Reinforces FR-LINT-005.
+OPENROWSET
+OPENDATASOURCE
+
+
+# =============================================================================
+# Items intentionally NOT forbidden (documented here so future contributors
+# do not "fix" the omission):
+#
+#   sys.dm_exec_requests           -- bounded by TOP(@TopN) in the requests
+#                                     collector; arrives in Part 5.
+#   sys.dm_exec_sessions           -- joined to dm_exec_requests; bounded.
+#   sys.dm_os_wait_stats           -- read with ignore-list filter (D-033, D-057).
+#   sys.dm_io_virtual_file_stats   -- bounded read; Part 5.
+#   sys.dm_os_performance_counters -- allow-listed counters only (D-117); Part 5.
+#   sys.configurations             -- small DMV; Part 5.
+#   DBCC TRACESTATUS               -- read-only; allow-listed via Part 5.
+#
+# These DMVs live on the small-DMV allow-list in allow_list_small_dmvs.txt
+# (FR-LINT-002). They are allowed for collector reads but still subject to
+# code review per the safety checklist.
+# =============================================================================
