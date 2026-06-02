@@ -1,0 +1,13 @@
+# =============================================================================
+# Issue template chooser config — sp_SQLFlightRecorder
+# Per docs/decisions.md D-156.
+# Blank issues are disabled so every report fits one of the 8 templates.
+# =============================================================================
+blank_issues_enabled: false
+contact_links:
+  - name: Read the design and decision log first
+    url: https://github.com/forward-thinkers-lab/sp_SQLFlightRecorder/blob/main/docs/design.md
+    about: Most "should it do X?" questions are answered in docs/design.md or docs/decisions.md. Please skim before opening an issue.
+  - name: Implementation plan
+    url: https://github.com/forward-thinkers-lab/sp_SQLFlightRecorder/blob/main/docs/implementation-plan.md
+    about: If your idea targets a part that hasn't shipped yet, check the plan to see when it is scheduled.
