@@ -11,10 +11,15 @@
 --   * Functional Install / Uninstall / Status modes
 --   * Part 1/2 safety + validation behavior preserved
 --
--- This part is intentionally inert. It reads no DMVs, creates no tables,
--- creates no Agent job, and writes nothing. All other documented modes
--- return a clear "not yet implemented" message pointing at the part of the
--- v0.1 implementation plan that will deliver them.
+-- Install / Uninstall / Status are functional in Part 3 and create, drop,
+-- and read FR_* repository tables in the install database. They also read
+-- a small allow-listed set of system catalogs (sys.tables, sys.partitions,
+-- sys.allocation_units, sys.dm_db_partition_stats, sys.fn_my_permissions)
+-- to verify install state and report repository footprint. No collectors,
+-- no Report, no rules logic, no Agent job, and no DMV reads beyond the
+-- allow-listed set are present in this part. All remaining documented
+-- modes return a clear "not yet implemented" message naming the part of
+-- the v0.1 implementation plan that will deliver them.
 --
 -- Tool-Version:   0.1.0-alpha.2 (Part 3)
 -- Build-Date-Utc: 2026-06-02
@@ -687,7 +692,7 @@ CREATE TABLE dbo.FR_Wait
 )' + @TableCompressionClause + N';';
                 EXEC sys.sp_executesql @CreateSql;
 
-                SET @CreateSql = N'CREATE CLUSTERED INDEX CIX_FR_Wait_SnapshotUtc_WaitType ON dbo.FR_Wait (SnapshotUtc, WaitType)' + @IndexCompressionClause + N';';
+                SET @CreateSql = N'CREATE CLUSTERED INDEX CIX_FR_Wait_SnapshotUtc_WaitType ON dbo.FR_Wait (SnapshotUtc, SnapshotId, WaitType)' + @IndexCompressionClause + N';';
                 EXEC sys.sp_executesql @CreateSql;
             END;
 
