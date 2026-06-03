@@ -796,15 +796,17 @@ END;
                 );
 
                 IF OBJECT_ID(N'dbo.FR_RunLogStep', N'U') IS NOT NULL
+                DECLARE @RunLogStepNewname NVARCHAR(1024) =  CONCAT(N'FR_RunLogStep_Archive_', @UninstallArchiveSuffix);
                     EXEC sys.sp_rename
                           @objname = N'dbo.FR_RunLogStep'
-                        , @newname = CONCAT(N'FR_RunLogStep_Archive_', @UninstallArchiveSuffix)
+                        , @newname = @RunLogStepNewname
                         , @objtype = N'OBJECT';
 
                 IF OBJECT_ID(N'dbo.FR_RunLog', N'U') IS NOT NULL
+                DECLARE @RunLogNewname NVARCHAR(1024) =  CONCAT(N'FR_RunLog_Archive_', @UninstallArchiveSuffix);
                     EXEC sys.sp_rename
                           @objname = N'dbo.FR_RunLog'
-                        , @newname = CONCAT(N'FR_RunLog_Archive_', @UninstallArchiveSuffix)
+                        , @newname = @RunLogNewname
                         , @objtype = N'OBJECT';
             END
             ELSE
@@ -930,7 +932,7 @@ END;
         BEGIN
             SELECT
                   t.name AS TableName
-                , SUM(ps.row_count) AS RowCount
+                , SUM(ps.row_count) AS [RowCount]
                 , SUM(ps.used_page_count) * 8 AS UsedKb
             FROM sys.tables AS t
             INNER JOIN sys.dm_db_partition_stats AS ps
@@ -944,7 +946,7 @@ END;
         BEGIN
             SELECT
                   CAST(NULL AS sysname) AS TableName
-                , CAST(NULL AS bigint) AS RowCount
+                , CAST(NULL AS bigint) AS [RowCount]
                 , CAST(NULL AS bigint) AS UsedKb
             WHERE 1 = 0;
         END;
