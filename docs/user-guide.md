@@ -529,5 +529,1069 @@ Expected result:
 ```text
 A single report column containing Markdown text.
 ```
+---
 
-Continue with **Chunk 2 of 3** when ready.
+## 12. Output formats
+
+SQLFlightRecorder may support the following report output formats:
+
+    Default
+    FindingsOnly
+    TimelineOnly
+    Markdown
+
+### Default
+
+Example:
+
+    EXEC dbo.sp_SQLFlightRecorder
+        @Mode = N'Report',
+        @OutputFormat = N'Default';
+
+Expected result:
+
+    Findings result set
+    Timeline result set
+
+### FindingsOnly
+
+Example:
+
+    EXEC dbo.sp_SQLFlightRecorder
+        @Mode = N'Report',
+        @OutputFormat = N'FindingsOnly';
+
+Expected result:
+
+    Only findings.
+
+### TimelineOnly
+
+Example:
+
+    EXEC dbo.sp_SQLFlightRecorder
+        @Mode = N'Report',
+        @OutputFormat = N'TimelineOnly';
+
+Expected result:
+
+    Only timeline events.
+
+### Markdown
+
+Example:
+
+    EXEC dbo.sp_SQLFlightRecorder
+        @Mode = N'Report',
+        @OutputFormat = N'Markdown';
+
+Expected result:
+
+    One row / one column containing Markdown report text.
+
+If your build does not yet support a specific output format, the procedure should return a clear validation or not-supported message.
+
+---
+
+## 13. Findings
+
+A finding is a DBA-facing observation generated from collected data.
+
+A finding should answer:
+
+- What happened?
+- How severe is it?
+- How confident is the tool?
+- What evidence supports it?
+- What should the DBA do next?
+
+Common finding fields may include:
+
+    RuleId
+    Severity
+    Confidence
+    EvidenceType
+    Category
+    Title
+    Summary
+    Evidence
+    Recommendation
+    FirstSeenUtc
+    LastSeenUtc
+
+Severity values:
+
+    Informational
+    Low
+    Medium
+    High
+    Critical
+
+Confidence values may include:
+
+    Low
+    Medium
+    High
+
+Evidence types may include:
+
+    Observed
+    Inferred
+    Heuristic
+
+### Interpreting severity
+
+| Severity | Meaning |
+|---|---|
+| Informational | Useful context, coverage warning, or no-action status |
+| Low | Minor concern or early warning |
+| Medium | Worth DBA review |
+| High | Likely actionable issue |
+| Critical | Urgent condition or report-quality blocker |
+
+### Interpreting confidence
+
+| Confidence | Meaning |
+|---|---|
+| High | Strong direct evidence |
+| Medium | Evidence is meaningful but may need DBA interpretation |
+| Low | Weak signal or incomplete context |
+
+---
+
+## 14. Timeline
+
+Timeline output shows important events in chronological order.
+
+Examples:
+
+- Snapshot captured
+- Collector skipped
+- Blocking observed
+- Restart detected
+- Report coverage gap
+
+Timeline is useful when investigating:
+
+- when a problem began
+- whether symptoms changed over time
+- whether the server restarted during the window
+- whether collectors were skipped
+- whether data coverage is sufficient
+
+---
+
+## 15. Configure mode
+
+Configure mode reads and updates SQLFlightRecorder settings stored in:
+
+    dbo.FR_Config
+
+Read current configuration:
+
+    EXEC dbo.sp_SQLFlightRecorder @Mode = N'Configure';
+
+You can also view configuration through Status:
+
+    EXEC dbo.sp_SQLFlightRecorder @Mode = N'Status';
+
+### Updating configuration
+
+If your procedure supports `@ConfigKey` and `@ConfigValue`, update a known key like this:
+
+    EXEC dbo.sp_SQLFlightRecorder
+        @Mode = N'Configure',
+        @ConfigKey = N'SnapshotRetentionDays',
+        @ConfigValue = N'14';
+
+Note: Some earlier examples may use `RetentionDays`. Use the actual key present in `FR_Config`. In the current schema, the expected snapshot retention key is usually `SnapshotRetentionDays`.
+
+Verify:
+
+    SELECT 
+        ConfigKey,
+        ConfigValue,
+        Description,
+        ModifiedUtc
+    FROM dbo.FR_Config
+    WHERE ConfigKey = N'SnapshotRetentionDays';
+
+### Common configuration keys
+
+Your build may include keys such as:
+
+| Key | Purpose |
+|---|---|
+| `SchemaVersion` | Installed repository schema version |
+| `SnapshotIntervalSeconds` | Intended collection interval |
+| `SnapshotRetentionDays` | How long snapshot data is retained |
+| `RunLogRetentionDays` | How long run-log data is retained |
+| `MaxRowsPerCollector` | Per-collector row limit |
+| `DisabledRules` | Semicolon-delimited list of disabled rule IDs |
+
+### Configure safety expectations
+
+Configure should:
+
+- allow only known config keys
+- validate values where possible
+- refuse unknown keys cleanly
+- audit changes in `FR_RunLog`
+- avoid changing schema objects
+
+### Invalid key test
+
+    EXEC dbo.sp_SQLFlightRecorder
+        @Mode = N'Configure',
+        @ConfigKey = N'DoesNotExist',
+        @ConfigValue = N'123';
+
+Expected result:
+
+    Clean error or refusal.
+    No unknown row inserted into FR_Config.
+
+---
+
+## 16. Purge mode
+
+Purge mode removes old repository data according to retention settings.
+
+Use this to prevent unbounded growth of `FR_*` tables.
+
+Always preview first:
+
+    EXEC dbo.sp_SQLFlightRecorder
+        @Mode = N'Purge',
+        @WhatIf = 1;
+
+Expected behavior:
+
+- Returns what would be deleted.
+- Does not delete data.
+- Shows exact counts or estimated counts depending on implementation.
+
+### Run purge
+
+Only after reviewing `@WhatIf` output:
+
+    EXEC dbo.sp_SQLFlightRecorder
+        @Mode = N'Purge',
+        @WhatIf = 0;
+
+### Purge should be safe
+
+Purge should:
+
+- delete in batches
+- delete child rows before parent rows
+- avoid `TRUNCATE`
+- avoid database shrink
+- avoid index rebuilds
+- respect retention config
+- write run-log information
+- be safe to interrupt between batches
+
+### Typical purge dependency order
+
+The exact order depends on table constraints, but conceptually child tables should be purged before parent tables:
+
+    FR_InstanceSnapshot
+    FR_Configuration
+    FR_Request
+    FR_Wait
+    FR_FileStat
+    FR_PerfCounter
+    FR_Snapshot
+    FR_QueryText orphan cleanup
+    FR_RunLogStep
+    FR_RunLog
+
+### Configure retention
+
+Example:
+
+    EXEC dbo.sp_SQLFlightRecorder
+        @Mode = N'Configure',
+        @ConfigKey = N'SnapshotRetentionDays',
+        @ConfigValue = N'7';
+
+    EXEC dbo.sp_SQLFlightRecorder
+        @Mode = N'Configure',
+        @ConfigKey = N'RunLogRetentionDays',
+        @ConfigValue = N'28';
+
+Then preview:
+
+    EXEC dbo.sp_SQLFlightRecorder
+        @Mode = N'Purge',
+        @WhatIf = 1;
+
+---
+
+## 17. SQL Agent scheduling
+
+SQLFlightRecorder can be run manually, but scheduled collection is usually more useful.
+
+A typical schedule is:
+
+- Run Collect every 1 minute.
+- Run Purge daily or weekly.
+- Run Report manually during investigation.
+
+### Important
+
+SQL Agent job creation should be explicit opt-in only.
+
+Do not assume the Agent job exists unless you created it.
+
+### Create the Agent job
+
+If your procedure supports `@CreateAgentJob`, use:
+
+    EXEC dbo.sp_SQLFlightRecorder
+        @Mode = N'Install',
+        @CreateAgentJob = 1;
+
+If your build uses a different parameter or mode for scheduling, use Help to confirm:
+
+    EXEC dbo.sp_SQLFlightRecorder @Mode = N'Help';
+
+### Verify job exists
+
+    SELECT 
+        j.name,
+        j.enabled,
+        j.date_created,
+        j.date_modified
+    FROM msdb.dbo.sysjobs AS j
+    WHERE j.name LIKE N'%SQLFlightRecorder%';
+
+View schedule:
+
+    SELECT 
+        j.name AS JobName,
+        s.name AS ScheduleName,
+        s.freq_type,
+        s.freq_subday_type,
+        s.freq_subday_interval,
+        s.enabled
+    FROM msdb.dbo.sysjobs AS j
+    JOIN msdb.dbo.sysjobschedules AS js
+        ON js.job_id = j.job_id
+    JOIN msdb.dbo.sysschedules AS s
+        ON s.schedule_id = js.schedule_id
+    WHERE j.name LIKE N'%SQLFlightRecorder%';
+
+### Run job manually
+
+    EXEC msdb.dbo.sp_start_job
+        @job_name = N'SQLFlightRecorder Collect';
+
+If your implementation uses a different job name, adjust the command.
+
+### Disable job
+
+    EXEC msdb.dbo.sp_update_job
+        @job_name = N'SQLFlightRecorder Collect',
+        @enabled = 0;
+
+### Delete job manually
+
+Normally, `Uninstall` should remove a job created by SQLFlightRecorder.
+
+If manual cleanup is required:
+
+    EXEC msdb.dbo.sp_delete_job
+        @job_name = N'SQLFlightRecorder Collect';
+
+Use this only if you verified the job belongs to SQLFlightRecorder.
+
+### Environments without SQL Agent
+
+SQL Agent may be unavailable in:
+
+- SQL Server Express
+- Azure SQL Database
+- Some container environments
+- Some locked-down servers
+
+In those environments, schedule collection externally, for example:
+
+- Windows Task Scheduler plus sqlcmd
+- Linux cron plus sqlcmd
+- DBA automation tool
+- Azure Automation or Elastic Jobs where appropriate
+
+Example sqlcmd command:
+
+    sqlcmd -S MyServer -d MyDatabase -E -Q "EXEC dbo.sp_SQLFlightRecorder @Mode = N'Collect';"
+
+---
+
+## 18. Uninstall mode
+
+Uninstall removes SQLFlightRecorder repository objects.
+
+Always preview first:
+
+    EXEC dbo.sp_SQLFlightRecorder
+        @Mode = N'Uninstall',
+        @WhatIf = 1;
+
+Expected output:
+
+    Objects that would be dropped or archived.
+
+### Normal uninstall
+
+    EXEC dbo.sp_SQLFlightRecorder
+        @Mode = N'Uninstall';
+
+Expected behavior:
+
+- Removes `FR_*` repository tables.
+- Removes SQLFlightRecorder-created Agent job if implemented.
+- Leaves the stored procedure itself unless your version explicitly drops it.
+
+If you also want to remove the procedure:
+
+    DROP PROCEDURE dbo.sp_SQLFlightRecorder;
+
+### Preserve run log
+
+If supported:
+
+    EXEC dbo.sp_SQLFlightRecorder
+        @Mode = N'Uninstall',
+        @PreserveRunLog = 1;
+
+Expected behavior:
+
+- Drops snapshot and collector tables.
+- Archives or renames `FR_RunLog` and `FR_RunLogStep`.
+- Removes active repository tables.
+- Leaves archived run-log tables for audit/reference.
+
+### Verify uninstall
+
+    SELECT 
+        s.name AS SchemaName,
+        o.name AS ObjectName,
+        o.type_desc AS ObjectType
+    FROM sys.objects AS o
+    JOIN sys.schemas AS s
+        ON s.schema_id = o.schema_id
+    WHERE o.name LIKE N'FR[_]%'
+    ORDER BY o.name;
+
+After normal uninstall, expected result:
+
+    0 rows
+
+After preserve-run-log uninstall, expected result may include archived run-log tables.
+
+---
+
+## 19. Manual smoke test
+
+Use this sequence in a disposable test database.
+
+    EXEC dbo.sp_SQLFlightRecorder @Mode = N'About';
+    EXEC dbo.sp_SQLFlightRecorder @Mode = N'Help';
+
+    EXEC dbo.sp_SQLFlightRecorder @Mode = N'Install';
+    EXEC dbo.sp_SQLFlightRecorder @Mode = N'Install';
+
+    EXEC dbo.sp_SQLFlightRecorder @Mode = N'Status';
+
+    EXEC dbo.sp_SQLFlightRecorder @Mode = N'Collect';
+    WAITFOR DELAY '00:00:05';
+    EXEC dbo.sp_SQLFlightRecorder @Mode = N'Collect';
+
+    EXEC dbo.sp_SQLFlightRecorder @Mode = N'Report';
+
+    EXEC dbo.sp_SQLFlightRecorder @Mode = N'Configure';
+
+    EXEC dbo.sp_SQLFlightRecorder
+        @Mode = N'Purge',
+        @WhatIf = 1;
+
+    EXEC dbo.sp_SQLFlightRecorder
+        @Mode = N'Uninstall',
+        @WhatIf = 1;
+
+Only after reviewing the output:
+
+    EXEC dbo.sp_SQLFlightRecorder @Mode = N'Uninstall';
+---
+
+## 20. Troubleshooting
+
+### Procedure does not exist
+
+Symptom:
+
+    Could not find stored procedure 'dbo.sp_SQLFlightRecorder'.
+
+Fix:
+
+Run the full procedure file first:
+
+    src/sp_SQLFlightRecorder.sql
+
+Then confirm:
+
+    SELECT OBJECT_ID(N'dbo.sp_SQLFlightRecorder', N'P') AS ProcedureObjectId;
+
+---
+
+### Install refuses to run in system database
+
+Symptom:
+
+    Install is allowed only in a user database.
+
+Fix:
+
+Connect to a user database and run the procedure file there.
+
+Recommended:
+
+    USE YourUserDatabase;
+    GO
+
+Then run:
+
+    EXEC dbo.sp_SQLFlightRecorder @Mode = N'Install';
+
+Avoid installing repository tables in:
+
+- master
+- model
+- msdb
+- tempdb
+- distribution
+
+unless your version explicitly documents and supports that install target.
+
+---
+
+### Missing VIEW SERVER STATE
+
+Symptom:
+
+    Requires VIEW SERVER STATE permission.
+
+Fix:
+
+Ask a sysadmin to grant:
+
+    GRANT VIEW SERVER STATE TO [YourLoginOrUser];
+
+In some environments, this permission may be restricted by policy.
+
+Without this permission, collection may not be able to read required SQL Server diagnostic views.
+
+---
+
+### Database is read-only
+
+Symptom:
+
+    Database must be READ_WRITE.
+
+Fix:
+
+Install SQLFlightRecorder in a writable user database.
+
+For Always On Availability Groups, make sure you are connected to a writable primary replica if the repository is installed in that database.
+
+---
+
+### Status fails before Install
+
+Some versions may expect repository tables to exist before `Status` returns full output.
+
+Fix:
+
+Run:
+
+    EXEC dbo.sp_SQLFlightRecorder @Mode = N'Install';
+
+Then:
+
+    EXEC dbo.sp_SQLFlightRecorder @Mode = N'Status';
+
+If Status is intended to work before Install in your version, this should be reported as a bug.
+
+---
+
+### Collect returns Skipped
+
+Possible cause:
+
+    Another collection is already running.
+
+This is usually expected if the applock concurrency guard is working.
+
+Check recent runs:
+
+    SELECT TOP (20)
+        RunId,
+        StartUtc,
+        EndUtc,
+        Mode,
+        Status,
+        Reason,
+        ErrorMessage
+    FROM dbo.FR_RunLog
+    ORDER BY RunId DESC;
+
+If many runs are skipped, check whether:
+
+- SQL Agent schedule is too frequent
+- Collect is taking too long
+- a previous session is stuck
+- blocking exists in the database
+
+---
+
+### Collect returns PartialSuccess
+
+PartialSuccess means at least one collector failed or was skipped, but the procedure continued.
+
+Inspect step details:
+
+    SELECT TOP (100)
+        s.RunStepId,
+        s.RunId,
+        s.StepName,
+        s.StartUtc,
+        s.EndUtc,
+        s.Status,
+        s.RowsCollected,
+        s.Reason,
+        s.ErrorMessage
+    FROM dbo.FR_RunLogStep AS s
+    ORDER BY s.RunStepId DESC;
+
+Common causes:
+
+- missing permissions
+- DMV unavailable on this SQL Server version
+- unsupported platform feature
+- transient metadata access issue
+- timeout
+
+---
+
+### Report says insufficient data
+
+Reports are more useful with at least two snapshots.
+
+Fix:
+
+Run:
+
+    EXEC dbo.sp_SQLFlightRecorder @Mode = N'Collect';
+
+    WAITFOR DELAY '00:00:05';
+
+    EXEC dbo.sp_SQLFlightRecorder @Mode = N'Collect';
+
+Then:
+
+    EXEC dbo.sp_SQLFlightRecorder @Mode = N'Report';
+
+For normal usage, collect every minute for a useful incident window.
+
+---
+
+### Report returns no findings
+
+This can be normal.
+
+Possible explanations:
+
+- the selected time window has no significant issues
+- insufficient snapshots
+- relevant rules are disabled
+- the needed collector did not capture rows
+- severity filter is too high
+- report window is wrong
+
+Try:
+
+    EXEC dbo.sp_SQLFlightRecorder
+        @Mode = N'Report',
+        @MinSeverity = N'Informational',
+        @MaxFindings = 200;
+
+Check available snapshots:
+
+    SELECT 
+        MIN(SnapshotUtc) AS FirstSnapshotUtc,
+        MAX(SnapshotUtc) AS LastSnapshotUtc,
+        COUNT(*) AS SnapshotCount
+    FROM dbo.FR_Snapshot;
+
+---
+
+### Configure refuses an unknown key
+
+This is expected.
+
+SQLFlightRecorder should allow only known configuration keys.
+
+List current keys:
+
+    SELECT 
+        ConfigKey,
+        ConfigValue,
+        Description
+    FROM dbo.FR_Config
+    ORDER BY ConfigKey;
+
+Use one of the listed keys.
+
+---
+
+### Purge preview shows too many rows
+
+Check retention settings:
+
+    SELECT 
+        ConfigKey,
+        ConfigValue
+    FROM dbo.FR_Config
+    WHERE ConfigKey IN
+    (
+        N'SnapshotRetentionDays',
+        N'RunLogRetentionDays'
+    );
+
+If needed, update retention before purge:
+
+    EXEC dbo.sp_SQLFlightRecorder
+        @Mode = N'Configure',
+        @ConfigKey = N'SnapshotRetentionDays',
+        @ConfigValue = N'14';
+
+    EXEC dbo.sp_SQLFlightRecorder
+        @Mode = N'Configure',
+        @ConfigKey = N'RunLogRetentionDays',
+        @ConfigValue = N'56';
+
+Then preview again:
+
+    EXEC dbo.sp_SQLFlightRecorder
+        @Mode = N'Purge',
+        @WhatIf = 1;
+
+---
+
+### Uninstall fails because of foreign keys
+
+Uninstall must drop objects in dependency order.
+
+Correct conceptual order:
+
+    FR_InstanceSnapshot
+    FR_Configuration
+    FR_Request
+    FR_Wait
+    FR_FileStat
+    FR_PerfCounter
+    FR_QueryText
+    FR_Snapshot
+    FR_RunLogStep
+    FR_RunLog
+    FR_Rules
+    FR_Config
+
+If `@PreserveRunLog = 1`, snapshot children and `FR_Snapshot` must be removed before archiving or renaming `FR_RunLogStep` and `FR_RunLog`.
+
+If uninstall fails, capture the error and check for remaining objects:
+
+    SELECT 
+        s.name AS SchemaName,
+        o.name AS ObjectName,
+        o.type_desc AS ObjectType
+    FROM sys.objects AS o
+    JOIN sys.schemas AS s
+        ON s.schema_id = o.schema_id
+    WHERE o.name LIKE N'FR[_]%'
+    ORDER BY o.name;
+
+---
+
+### SQL Agent job was not created
+
+Possible causes:
+
+- `@CreateAgentJob` was not provided or is not supported by your build
+- SQL Agent is not installed or running
+- SQL Server Express
+- Azure SQL Database
+- insufficient permissions in `msdb`
+- job name already exists
+
+Check whether SQL Agent jobs are available:
+
+    SELECT 
+        SERVERPROPERTY(N'Edition') AS Edition,
+        SERVERPROPERTY(N'EngineEdition') AS EngineEdition;
+
+Check for an existing job:
+
+    SELECT 
+        name,
+        enabled,
+        date_created,
+        date_modified
+    FROM msdb.dbo.sysjobs
+    WHERE name LIKE N'%SQLFlightRecorder%';
+
+---
+
+### SQL Agent job exists but does not collect
+
+Check job history:
+
+    SELECT TOP (50)
+        j.name AS JobName,
+        h.step_id,
+        h.step_name,
+        h.run_date,
+        h.run_time,
+        h.run_duration,
+        h.run_status,
+        h.message
+    FROM msdb.dbo.sysjobhistory AS h
+    JOIN msdb.dbo.sysjobs AS j
+        ON j.job_id = h.job_id
+    WHERE j.name LIKE N'%SQLFlightRecorder%'
+    ORDER BY h.instance_id DESC;
+
+Check whether the job points to the correct database:
+
+    SELECT 
+        j.name AS JobName,
+        s.step_id,
+        s.step_name,
+        s.database_name,
+        s.command
+    FROM msdb.dbo.sysjobsteps AS s
+    JOIN msdb.dbo.sysjobs AS j
+        ON j.job_id = s.job_id
+    WHERE j.name LIKE N'%SQLFlightRecorder%';
+
+The command should call:
+
+    EXEC dbo.sp_SQLFlightRecorder @Mode = N'Collect';
+
+in the database where the procedure and repository are installed.
+
+---
+
+## 21. Operational recommendations
+
+### Start small
+
+First test in a disposable database:
+
+    EXEC dbo.sp_SQLFlightRecorder @Mode = N'Install';
+    EXEC dbo.sp_SQLFlightRecorder @Mode = N'Collect';
+    EXEC dbo.sp_SQLFlightRecorder @Mode = N'Report';
+    EXEC dbo.sp_SQLFlightRecorder @Mode = N'Uninstall';
+
+Then test on a non-production server with a real workload.
+
+### Keep collection interval reasonable
+
+A typical interval is:
+
+    60 seconds
+
+Avoid very aggressive schedules unless you have measured overhead.
+
+### Use UTC
+
+SQLFlightRecorder uses UTC timestamps. This makes reports consistent across time zones and daylight-saving changes.
+
+When investigating an incident, convert local times to UTC before passing `@StartTime` and `@EndTime`.
+
+### Keep retention bounded
+
+Recommended starting point:
+
+    SnapshotRetentionDays = 7
+    RunLogRetentionDays = 28
+
+Adjust based on:
+
+- server size
+- incident response needs
+- available storage
+- collection frequency
+
+### Purge regularly
+
+Schedule Purge separately from Collect, usually daily.
+
+Always test:
+
+    EXEC dbo.sp_SQLFlightRecorder @Mode = N'Purge', @WhatIf = 1;
+
+before enabling automated purge.
+
+### Do not edit repository tables casually
+
+Avoid manual updates/deletes to `FR_*` tables unless troubleshooting.
+
+Use:
+
+- Configure for settings
+- Purge for cleanup
+- Uninstall for removal
+
+---
+
+## 22. Manual validation checklist
+
+Before using SQLFlightRecorder on an important system, verify:
+
+- [ ] Procedure file runs successfully.
+- [ ] `Help` returns usage.
+- [ ] `About` returns version/build metadata.
+- [ ] `Install` succeeds.
+- [ ] Running `Install` twice is safe.
+- [ ] `Status` returns useful output.
+- [ ] `Collect` succeeds.
+- [ ] Running `Collect` twice creates at least two snapshots.
+- [ ] `Report` works after two snapshots.
+- [ ] `Configure` can read config.
+- [ ] Known config key update works.
+- [ ] Unknown config key is refused.
+- [ ] `Purge @WhatIf = 1` previews without deleting.
+- [ ] SQL Agent job creation works, if used.
+- [ ] SQL Agent job runs against the correct database, if used.
+- [ ] `Uninstall @WhatIf = 1` previews objects.
+- [ ] `Uninstall` removes repository objects.
+- [ ] `Uninstall @PreserveRunLog = 1` works, if used.
+
+---
+
+## 23. Minimal first-run script
+
+Use this on a disposable database:
+
+    EXEC dbo.sp_SQLFlightRecorder @Mode = N'About';
+    EXEC dbo.sp_SQLFlightRecorder @Mode = N'Help';
+
+    EXEC dbo.sp_SQLFlightRecorder @Mode = N'Install';
+    EXEC dbo.sp_SQLFlightRecorder @Mode = N'Status';
+
+    EXEC dbo.sp_SQLFlightRecorder @Mode = N'Collect';
+    WAITFOR DELAY '00:00:05';
+    EXEC dbo.sp_SQLFlightRecorder @Mode = N'Collect';
+
+    EXEC dbo.sp_SQLFlightRecorder
+        @Mode = N'Report',
+        @MinSeverity = N'Informational',
+        @OutputFormat = N'Default';
+
+    EXEC dbo.sp_SQLFlightRecorder
+        @Mode = N'Purge',
+        @WhatIf = 1;
+
+    EXEC dbo.sp_SQLFlightRecorder
+        @Mode = N'Uninstall',
+        @WhatIf = 1;
+
+Do not run the final uninstall until you are ready:
+
+    EXEC dbo.sp_SQLFlightRecorder @Mode = N'Uninstall';
+
+---
+
+## 24. Support and issue reporting
+
+When reporting a problem, include:
+
+- SQL Server version and edition
+- operating system
+- database compatibility level
+- SQLFlightRecorder version from `About`
+- exact command run
+- exact error message
+- relevant `FR_RunLog` rows
+- relevant `FR_RunLogStep` rows
+- whether SQL Agent is involved
+- whether the server is Azure SQL, Managed Instance, Express, Linux, or Windows
+
+Useful diagnostic queries:
+
+    EXEC dbo.sp_SQLFlightRecorder @Mode = N'About';
+    EXEC dbo.sp_SQLFlightRecorder @Mode = N'Status';
+
+    SELECT TOP (20)
+        *
+    FROM dbo.FR_RunLog
+    ORDER BY RunId DESC;
+
+    SELECT TOP (100)
+        *
+    FROM dbo.FR_RunLogStep
+    ORDER BY RunStepId DESC;
+
+---
+
+## 25. Removal summary
+
+To remove repository data:
+
+    EXEC dbo.sp_SQLFlightRecorder
+        @Mode = N'Uninstall';
+
+To preserve run-log tables if supported:
+
+    EXEC dbo.sp_SQLFlightRecorder
+        @Mode = N'Uninstall',
+        @PreserveRunLog = 1;
+
+To remove the procedure itself:
+
+    DROP PROCEDURE dbo.sp_SQLFlightRecorder;
+
+Verify:
+
+    SELECT 
+        s.name AS SchemaName,
+        o.name AS ObjectName,
+        o.type_desc AS ObjectType
+    FROM sys.objects AS o
+    JOIN sys.schemas AS s
+        ON s.schema_id = o.schema_id
+    WHERE o.name LIKE N'FR[_]%'
+       OR o.name = N'sp_SQLFlightRecorder'
+    ORDER BY o.name;
+
+---
+
+## 26. Final notes
+
+SQLFlightRecorder is intended to help DBAs capture short, useful diagnostic history without installing a large monitoring platform.
+
+It is not a replacement for:
+
+- full observability platforms
+- Query Store analysis
+- Extended Events incident traces
+- vendor monitoring tools
+- DBA judgment
+
+Use it as a lightweight incident recorder and triage assistant.
+
+Always test first.
