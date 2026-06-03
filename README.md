@@ -147,7 +147,7 @@ No external runtime.
 Open and execute:
 
 ```text
-src/sp_SQLFlightRecorder.sql
+sp_SQLFlightRecorder.sql
 ```
 
 This creates or updates:
@@ -500,7 +500,7 @@ docs/user-guide.md
 Main implementation file:
 
 ```text
-src/sp_SQLFlightRecorder.sql
+sp_SQLFlightRecorder.sql
 ```
 
 Useful commands:
