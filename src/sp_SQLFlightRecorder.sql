@@ -48,6 +48,9 @@ ALTER PROCEDURE dbo.sp_SQLFlightRecorder
   , @WhatIf               bit            = 0
   , @PreserveRunLog       bit            = 0
   , @Debug                bit            = 0
+  , @ConfigKey            sysname        = NULL
+  , @ConfigValue          nvarchar(4000) = NULL
+  , @CreateAgentJob       bit            = 0
 AS
 BEGIN
     -- =========================================================================
@@ -169,9 +172,11 @@ BEGIN
         PRINT N'  Install           Create FR_* schema (idempotent). Part 3.';
         PRINT N'  Uninstall         Drop FR_* schema. Part 3. @WhatIf previews; @PreserveRunLog archives.';
         PRINT N'  Status            Six result sets: config, rules, runs, footprint, etc. Part 3.';
-        PRINT N'  Collect           Not yet implemented (Part 4–5).';
-        PRINT N'  Report            Not yet implemented (Part 6).';
-        PRINT N'  Configure, Purge  Not yet implemented (Part 8).';
+        PRINT N'  Collect           Capture one diagnostic snapshot into FR_* tables.';
+        PRINT N'  CollectDebug      Validate collector readiness without writing collector rows.';
+        PRINT N'  Report            Read FR_* tables and return Findings + Timeline.';
+        PRINT N'  Configure         Read or update known FR_Config keys.';
+        PRINT N'  Purge             Batched retention cleanup. Supports @WhatIf.';
         PRINT N'';
         PRINT N'PARAMETERS';
         PRINT N'----------';
@@ -183,6 +188,9 @@ BEGIN
         PRINT N'  @WhatIf           Preview without executing (Uninstall, Purge modes).';
         PRINT N'  @PreserveRunLog   Uninstall: 1=archive FR_RunLog with timestamped name (default: 0).';
         PRINT N'  @Debug            Print dynamic SQL without executing (default: 0).';
+		PRINT N'  @ConfigKey        Configure mode: key to update. NULL returns all config.';
+        PRINT N'  @ConfigValue      Configure mode: value to write for @ConfigKey.';
+        PRINT N'  @CreateAgentJob   Install mode: explicit opt-in SQL Agent job creation.';
         PRINT N'';
         PRINT N'CHARTER PILLARS';
         PRINT N'---------------';
@@ -530,6 +538,23 @@ CREATE TABLE dbo.FR_Rules (
             IF NOT EXISTS (SELECT 1 FROM dbo.FR_Config WHERE ConfigKey = N'DisabledRules')
                 INSERT INTO dbo.FR_Config (ConfigKey, ConfigValue, Description)
                 VALUES (N'DisabledRules', N'', N'Semicolon-delimited disabled rule IDs (D-099).');
+            IF NOT EXISTS (SELECT 1 FROM dbo.FR_Config WHERE ConfigKey = N'WaitStatsIgnoreList')
+                INSERT INTO dbo.FR_Config (ConfigKey, ConfigValue, Description)
+                VALUES
+                (
+                    N'WaitStatsIgnoreList',
+                    N'BROKER_EVENTHANDLER;BROKER_RECEIVE_WAITFOR;BROKER_TASK_STOP;BROKER_TO_FLUSH;BROKER_TRANSMITTER;CHECKPOINT_QUEUE;CHKPT;CLR_AUTO_EVENT;CLR_MANUAL_EVENT;CLR_SEMAPHORE;DBMIRROR_DBM_EVENT;DBMIRROR_EVENTS_QUEUE;DBMIRROR_WORKER_QUEUE;DBMIRRORING_CMD;DIRTY_PAGE_POLL;DISPATCHER_QUEUE_SEMAPHORE;EXECSYNC;FSAGENT;FT_IFTS_SCHEDULER_IDLE_WAIT;FT_IFTSHC_MUTEX;HADR_CLUSAPI_CALL;HADR_FILESTREAM_IOMGR_IOCOMPLETION;HADR_LOGCAPTURE_WAIT;HADR_NOTIFICATION_DEQUEUE;HADR_TIMER_TASK;HADR_WORK_QUEUE;KSOURCE_WAKEUP;LAZYWRITER_SLEEP;LOGMGR_QUEUE;MEMORY_ALLOCATION_EXT;ONDEMAND_TASK_QUEUE;PARALLEL_REDO_DRAIN_WORKER;PARALLEL_REDO_LOG_CACHE;PARALLEL_REDO_TRAN_LIST;PARALLEL_REDO_WORKER_SYNC;PARALLEL_REDO_WORKER_WAIT_WORK;PREEMPTIVE_HADR_LEASE_MECHANISM;PREEMPTIVE_OS_FLUSHFILEBUFFERS;PREEMPTIVE_XE_GETTARGETSTATE;PWAIT_ALL_COMPONENTS_INITIALIZED;PWAIT_DIRECTLOGCONSUMER_GETNEXT;QDS_PERSIST_TASK_MAIN_LOOP_SLEEP;QDS_ASYNC_QUEUE;QDS_CLEANUP_STALE_QUERIES_TASK_MAIN_LOOP_SLEEP;QDS_SHUTDOWN_QUEUE;REDO_THREAD_PENDING_WORK;REQUEST_FOR_DEADLOCK_SEARCH;RESOURCE_QUEUE;SERVER_IDLE_CHECK;SLEEP_BPOOL_FLUSH;SLEEP_DBSTARTUP;SLEEP_MASTERDBREADY;SLEEP_MASTERMDREADY;SLEEP_MASTERUPGRADED;SLEEP_MSDBSTARTUP;SLEEP_SYSTEMTASK;SLEEP_TASK;SLEEP_TEMPDBSTARTUP;SNI_HTTP_ACCEPT;SP_SERVER_DIAGNOSTICS_SLEEP;SQLTRACE_BUFFER_FLUSH;SQLTRACE_INCREMENTAL_FLUSH_SLEEP;SQLTRACE_WAIT_ENTRIES;WAIT_FOR_RESULTS;WAITFOR;WAITFOR_TASKSHUTDOWN;WAIT_XTP_RECOVERY;WAIT_XTP_HOST_WAIT;WAIT_XTP_OFFLINE_CKPT_NEW_LOG;WAIT_XTP_CKPT_CLOSE;XE_DISPATCHER_JOIN;XE_DISPATCHER_WAIT;XE_TIMER_EVENT',
+                    N'Wait types ignored by Collect wait-stats collector.'
+                );
+
+            IF NOT EXISTS (SELECT 1 FROM dbo.FR_Config WHERE ConfigKey = N'CriticalWaitTypes')
+                INSERT INTO dbo.FR_Config (ConfigKey, ConfigValue, Description)
+                VALUES
+                (
+                    N'CriticalWaitTypes',
+                    N'PAGEIOLATCH_*;WRITELOG;RESOURCE_SEMAPHORE;LCK_M_*;THREADPOOL;SOS_SCHEDULER_YIELD',
+                    N'Critical wait-type patterns reserved for rule evaluation.'
+                );
 
             -- Seed v0.1 rules
             IF NOT EXISTS (SELECT 1 FROM dbo.FR_Rules WHERE RuleId = N'FR_R0001_ActiveBlockingChain')
@@ -550,12 +575,88 @@ CREATE TABLE dbo.FR_Rules (
             IF NOT EXISTS (SELECT 1 FROM dbo.FR_Rules WHERE RuleId = N'FR_R0006_ServerRestartDuringWindow')
                 INSERT INTO dbo.FR_Rules VALUES (N'FR_R0006_ServerRestartDuringWindow', N'Configuration', N'Critical', N'High', N'Observed', N'Active', N'SQL Server restart detected', N'0.1');
 
+            -- Optional SQL Agent job creation. Explicit opt-in only.
+            IF @CreateAgentJob = 1
+            BEGIN
+                DECLARE @AgentJobName sysname = N'SQLFlightRecorder Collect';
+                DECLARE @AgentSql nvarchar(max);
+                DECLARE @AgentSupported bit = 1;
+
+                IF TRY_CONVERT(int, SERVERPROPERTY(N'EngineEdition')) IN (4, 5)
+                    SET @AgentSupported = 0;
+
+                IF DB_ID(N'msdb') IS NULL
+                    SET @AgentSupported = 0;
+
+                IF OBJECT_ID(N'msdb.dbo.sp_add_job', N'P') IS NULL
+                    SET @AgentSupported = 0;
+
+                IF @AgentSupported = 0
+                BEGIN
+                    IF NOT EXISTS (SELECT 1 FROM dbo.FR_Config WHERE ConfigKey = N'AgentJobCreatedBySQLFlightRecorder')
+                        INSERT INTO dbo.FR_Config (ConfigKey, ConfigValue, Description)
+                        VALUES (N'AgentJobCreatedBySQLFlightRecorder', N'0', N'SQL Agent unavailable or unsupported.');
+                END;
+                ELSE
+                BEGIN
+                    SET @AgentSql = N'
+USE msdb;
+
+IF NOT EXISTS (SELECT 1 FROM msdb.dbo.sysjobs WHERE name = N''SQLFlightRecorder Collect'')
+BEGIN
+    EXEC msdb.dbo.sp_add_job
+          @job_name = N''SQLFlightRecorder Collect''
+        , @enabled = 1
+        , @description = N''Runs dbo.sp_SQLFlightRecorder @Mode = Collect every minute.'';
+
+    EXEC msdb.dbo.sp_add_jobstep
+          @job_name = N''SQLFlightRecorder Collect''
+        , @step_name = N''Collect''
+        , @subsystem = N''TSQL''
+        , @database_name = N''' + REPLACE(DB_NAME(), N'''', N'''''') + N'''
+        , @command = N''EXEC dbo.sp_SQLFlightRecorder @Mode = N''''Collect'''';'';
+
+    IF NOT EXISTS (SELECT 1 FROM msdb.dbo.sysschedules WHERE name = N''SQLFlightRecorder Every Minute'')
+    BEGIN
+        EXEC msdb.dbo.sp_add_schedule
+              @schedule_name = N''SQLFlightRecorder Every Minute''
+            , @enabled = 1
+            , @freq_type = 4
+            , @freq_interval = 1
+            , @freq_subday_type = 4
+            , @freq_subday_interval = 1;
+    END;
+
+    EXEC msdb.dbo.sp_attach_schedule
+          @job_name = N''SQLFlightRecorder Collect''
+        , @schedule_name = N''SQLFlightRecorder Every Minute'';
+
+    EXEC msdb.dbo.sp_add_jobserver
+          @job_name = N''SQLFlightRecorder Collect'';
+END;
+';
+                    EXEC sys.sp_executesql @AgentSql;
+
+                    IF NOT EXISTS (SELECT 1 FROM dbo.FR_Config WHERE ConfigKey = N'AgentJobName')
+                        INSERT INTO dbo.FR_Config (ConfigKey, ConfigValue, Description)
+                        VALUES (N'AgentJobName', @AgentJobName, N'SQL Agent job created by Install opt-in.');
+
+                    IF NOT EXISTS (SELECT 1 FROM dbo.FR_Config WHERE ConfigKey = N'AgentJobCreatedBySQLFlightRecorder')
+                        INSERT INTO dbo.FR_Config (ConfigKey, ConfigValue, Description)
+                        VALUES (N'AgentJobCreatedBySQLFlightRecorder', N'1', N'This procedure created the SQL Agent job.');
+                END;
+            END;
+			
             SELECT
                 N'Success' AS Status,
                 DB_NAME() AS DatabaseName,
                 @SchemaVersion AS SchemaVersion,
                 12 AS TableCount,
                 N'Installation complete. 12 core FR_* tables created.' AS Message;
+				
+
+				
+				
             RETURN;
 
         END TRY
@@ -574,7 +675,6 @@ CREATE TABLE dbo.FR_Rules (
     -- =========================================================================
     IF UPPER(@ModeNormalized) = N'UNINSTALL'
     BEGIN
-        -- Check for in-progress Collect
         IF OBJECT_ID(N'dbo.FR_RunLog', N'U') IS NOT NULL
            AND EXISTS (SELECT 1 FROM dbo.FR_RunLog WHERE Mode = N'Collect' AND Status = N'InProgress')
         BEGIN
@@ -608,63 +708,107 @@ CREATE TABLE dbo.FR_Rules (
                 UNION ALL SELECT N'FR_Config'
             ) AS Objects
             WHERE OBJECT_ID(CONCAT(N'dbo.', ObjectName), N'U') IS NOT NULL
-            ORDER BY ObjectName;
+
+            UNION ALL
+
+            SELECT
+                N'WhatIf',
+                N'SQL_AGENT_JOB',
+                N'msdb',
+                ConfigValue,
+                N'Drop'
+            FROM dbo.FR_Config
+            WHERE OBJECT_ID(N'dbo.FR_Config', N'U') IS NOT NULL
+              AND ConfigKey = N'AgentJobName'
+              AND EXISTS
+              (
+                  SELECT 1
+                  FROM dbo.FR_Config AS c2
+                  WHERE c2.ConfigKey = N'AgentJobCreatedBySQLFlightRecorder'
+                    AND c2.ConfigValue = N'1'
+              );
+
             RETURN;
         END;
 
         BEGIN TRY
-            -- Archive run log if requested (D-183)
+            -- Remove SQL Agent job only if this procedure created it.
+            IF OBJECT_ID(N'dbo.FR_Config', N'U') IS NOT NULL
+            BEGIN
+                DECLARE @UninstallAgentJobName sysname = NULL;
+                DECLARE @UninstallAgentCreated nvarchar(10) = NULL;
+                DECLARE @UninstallAgentSql nvarchar(max);
+
+                SELECT @UninstallAgentJobName = TRY_CONVERT(sysname, ConfigValue)
+                FROM dbo.FR_Config
+                WHERE ConfigKey = N'AgentJobName';
+
+                SELECT @UninstallAgentCreated = ConfigValue
+                FROM dbo.FR_Config
+                WHERE ConfigKey = N'AgentJobCreatedBySQLFlightRecorder';
+
+                IF @UninstallAgentCreated = N'1'
+                   AND @UninstallAgentJobName IS NOT NULL
+                   AND DB_ID(N'msdb') IS NOT NULL
+                   AND OBJECT_ID(N'msdb.dbo.sp_delete_job', N'P') IS NOT NULL
+                BEGIN
+                    SET @UninstallAgentSql = N'
+USE msdb;
+IF EXISTS (SELECT 1 FROM msdb.dbo.sysjobs WHERE name = N''' + REPLACE(@UninstallAgentJobName, N'''', N'''''') + N''')
+BEGIN
+    EXEC msdb.dbo.sp_delete_job @job_name = N''' + REPLACE(@UninstallAgentJobName, N'''', N'''''') + N''';
+END;
+';
+                    EXEC sys.sp_executesql @UninstallAgentSql;
+                END;
+            END;
+
+            -- Snapshot children first.
+            IF OBJECT_ID(N'dbo.FR_InstanceSnapshot', N'U') IS NOT NULL DROP TABLE dbo.FR_InstanceSnapshot;
+            IF OBJECT_ID(N'dbo.FR_Configuration', N'U') IS NOT NULL DROP TABLE dbo.FR_Configuration;
+            IF OBJECT_ID(N'dbo.FR_Request', N'U') IS NOT NULL DROP TABLE dbo.FR_Request;
+            IF OBJECT_ID(N'dbo.FR_Wait', N'U') IS NOT NULL DROP TABLE dbo.FR_Wait;
+            IF OBJECT_ID(N'dbo.FR_FileStat', N'U') IS NOT NULL DROP TABLE dbo.FR_FileStat;
+            IF OBJECT_ID(N'dbo.FR_PerfCounter', N'U') IS NOT NULL DROP TABLE dbo.FR_PerfCounter;
+
+            -- Independent / parent tables.
+            IF OBJECT_ID(N'dbo.FR_QueryText', N'U') IS NOT NULL DROP TABLE dbo.FR_QueryText;
+            IF OBJECT_ID(N'dbo.FR_Snapshot', N'U') IS NOT NULL DROP TABLE dbo.FR_Snapshot;
+
+            -- Run log archive or removal after FR_Snapshot is gone.
             IF @PreserveRunLog = 1
             BEGIN
-                DECLARE @ArchiveSuffix nvarchar(32) = CONCAT(
+                DECLARE @UninstallArchiveSuffix nvarchar(32) = CONCAT(
                     CONVERT(nvarchar(8), SYSUTCDATETIME(), 112), N'_',
                     REPLACE(CONVERT(nvarchar(8), SYSUTCDATETIME(), 108), N':', N'')
                 );
 
-                IF OBJECT_ID(N'dbo.FR_RunLog', N'U') IS NOT NULL
-                    EXEC sys.sp_executesql
-                        CONCAT(N'EXEC sp_rename N''dbo.FR_RunLog'', N''FR_RunLog_Archive_', @ArchiveSuffix, N'''');
-
                 IF OBJECT_ID(N'dbo.FR_RunLogStep', N'U') IS NOT NULL
-                    EXEC sys.sp_executesql
-                        CONCAT(N'EXEC sp_rename N''dbo.FR_RunLogStep'', N''FR_RunLogStep_Archive_', @ArchiveSuffix, N'''');
+                    EXEC sys.sp_rename
+                          @objname = N'dbo.FR_RunLogStep'
+                        , @newname = CONCAT(N'FR_RunLogStep_Archive_', @UninstallArchiveSuffix)
+                        , @objtype = N'OBJECT';
+
+                IF OBJECT_ID(N'dbo.FR_RunLog', N'U') IS NOT NULL
+                    EXEC sys.sp_rename
+                          @objname = N'dbo.FR_RunLog'
+                        , @newname = CONCAT(N'FR_RunLog_Archive_', @UninstallArchiveSuffix)
+                        , @objtype = N'OBJECT';
             END
             ELSE
             BEGIN
-                IF OBJECT_ID(N'dbo.FR_RunLogStep', N'U') IS NOT NULL
-                    DROP TABLE dbo.FR_RunLogStep;
-                IF OBJECT_ID(N'dbo.FR_RunLog', N'U') IS NOT NULL
-                    DROP TABLE dbo.FR_RunLog;
+                IF OBJECT_ID(N'dbo.FR_RunLogStep', N'U') IS NOT NULL DROP TABLE dbo.FR_RunLogStep;
+                IF OBJECT_ID(N'dbo.FR_RunLog', N'U') IS NOT NULL DROP TABLE dbo.FR_RunLog;
             END;
 
-            -- Drop remaining tables in dependency order (D-141)
-            IF OBJECT_ID(N'dbo.FR_InstanceSnapshot', N'U') IS NOT NULL
-                DROP TABLE dbo.FR_InstanceSnapshot;
-            IF OBJECT_ID(N'dbo.FR_Configuration', N'U') IS NOT NULL
-                DROP TABLE dbo.FR_Configuration;
-            IF OBJECT_ID(N'dbo.FR_Request', N'U') IS NOT NULL
-                DROP TABLE dbo.FR_Request;
-            IF OBJECT_ID(N'dbo.FR_Wait', N'U') IS NOT NULL
-                DROP TABLE dbo.FR_Wait;
-            IF OBJECT_ID(N'dbo.FR_FileStat', N'U') IS NOT NULL
-                DROP TABLE dbo.FR_FileStat;
-            IF OBJECT_ID(N'dbo.FR_PerfCounter', N'U') IS NOT NULL
-                DROP TABLE dbo.FR_PerfCounter;
-            IF OBJECT_ID(N'dbo.FR_QueryText', N'U') IS NOT NULL
-                DROP TABLE dbo.FR_QueryText;
-            IF OBJECT_ID(N'dbo.FR_Snapshot', N'U') IS NOT NULL
-                DROP TABLE dbo.FR_Snapshot;
-            IF OBJECT_ID(N'dbo.FR_Rules', N'U') IS NOT NULL
-                DROP TABLE dbo.FR_Rules;
-            IF OBJECT_ID(N'dbo.FR_Config', N'U') IS NOT NULL
-                DROP TABLE dbo.FR_Config;
+            IF OBJECT_ID(N'dbo.FR_Rules', N'U') IS NOT NULL DROP TABLE dbo.FR_Rules;
+            IF OBJECT_ID(N'dbo.FR_Config', N'U') IS NOT NULL DROP TABLE dbo.FR_Config;
 
             SELECT
                 N'Success' AS Status,
                 DB_NAME() AS DatabaseName,
-                N'Uninstall completed. All FR_* tables removed.' AS Message;
+                N'Uninstall completed.' AS Message;
             RETURN;
-
         END TRY
         BEGIN CATCH
             SELECT
@@ -675,89 +819,1168 @@ CREATE TABLE dbo.FR_Rules (
             RETURN;
         END CATCH;
     END;
-
     -- =========================================================================
-    -- Mode: STATUS (6 result sets per Part 3 spec)
+    -- Mode: STATUS
     -- =========================================================================
     IF UPPER(@ModeNormalized) = N'STATUS'
     BEGIN
-        -- Result Set 1: Configuration
-        SELECT
-            ConfigKey,
-            ConfigValue,
-            Description
-        FROM dbo.FR_Config
-        WHERE OBJECT_ID(N'dbo.FR_Config', N'U') IS NOT NULL
-        ORDER BY ConfigKey;
+        DECLARE @StatusIsInstalled bit =
+            CASE WHEN OBJECT_ID(N'dbo.FR_Config', N'U') IS NULL THEN 0 ELSE 1 END;
 
-        -- Result Set 2: Rules Catalog
+        -- Result Set 1: Installation summary
         SELECT
-            RuleId,
-            Category,
-            Severity,
-            Confidence,
-            EvidenceType,
-            LifecycleState,
-            ShortDescription,
-            IntroducedInVersion
-        FROM dbo.FR_Rules
-        WHERE OBJECT_ID(N'dbo.FR_Rules', N'U') IS NOT NULL
-        ORDER BY RuleId;
+              DB_NAME() AS DatabaseName
+            , CASE WHEN @StatusIsInstalled = 1 THEN N'Installed' ELSE N'NotInstalled' END AS InstallStatus
+            , @SchemaVersion AS ProcedureSchemaVersion
+            , CASE WHEN @StatusIsInstalled = 1
+                   THEN (SELECT ConfigValue FROM dbo.FR_Config WHERE ConfigKey = N'SchemaVersion')
+                   ELSE NULL
+              END AS RepositorySchemaVersion
+            , @ToolVersion AS ToolVersion;
 
-        -- Result Set 3: Recent Runs
-        SELECT TOP (10)
-            RunId,
-            StartUtc,
-            EndUtc,
-            Mode,
-            Status,
-            Reason
-        FROM dbo.FR_RunLog
-        WHERE OBJECT_ID(N'dbo.FR_RunLog', N'U') IS NOT NULL
-        ORDER BY RunId DESC;
+        -- Result Set 2: Configuration
+        IF @StatusIsInstalled = 1
+        BEGIN
+            SELECT ConfigKey, ConfigValue, Description, ModifiedUtc
+            FROM dbo.FR_Config
+            ORDER BY ConfigKey;
+        END
+        ELSE
+        BEGIN
+            SELECT
+                  CAST(NULL AS sysname) AS ConfigKey
+                , CAST(NULL AS nvarchar(4000)) AS ConfigValue
+                , CAST(NULL AS nvarchar(400)) AS Description
+                , CAST(NULL AS datetime2(3)) AS ModifiedUtc
+            WHERE 1 = 0;
+        END;
 
-        -- Result Set 4: Repository Size (D-137: bounded query on allow-listed DMVs)
+        -- Result Set 3: Rule catalog
+        IF OBJECT_ID(N'dbo.FR_Rules', N'U') IS NOT NULL
+        BEGIN
+            SELECT
+                  RuleId
+                , Category
+                , Severity
+                , Confidence
+                , EvidenceType
+                , LifecycleState
+                , ShortDescription
+                , IntroducedInVersion
+            FROM dbo.FR_Rules
+            ORDER BY RuleId;
+        END
+        ELSE
+        BEGIN
+            SELECT
+                  CAST(NULL AS nvarchar(60)) AS RuleId
+                , CAST(NULL AS nvarchar(30)) AS Category
+                , CAST(NULL AS nvarchar(20)) AS Severity
+                , CAST(NULL AS nvarchar(20)) AS Confidence
+                , CAST(NULL AS nvarchar(20)) AS EvidenceType
+                , CAST(NULL AS nvarchar(20)) AS LifecycleState
+                , CAST(NULL AS nvarchar(400)) AS ShortDescription
+                , CAST(NULL AS nvarchar(20)) AS IntroducedInVersion
+            WHERE 1 = 0;
+        END;
+
+        -- Result Set 4: Recent runs
+        IF OBJECT_ID(N'dbo.FR_RunLog', N'U') IS NOT NULL
+        BEGIN
+            SELECT TOP (10)
+                  RunId
+                , StartUtc
+                , EndUtc
+                , Mode
+                , Status
+                , Reason
+                , LoginName
+                , HostName
+            FROM dbo.FR_RunLog
+            ORDER BY RunId DESC;
+        END
+        ELSE
+        BEGIN
+            SELECT
+                  CAST(NULL AS bigint) AS RunId
+                , CAST(NULL AS datetime2(3)) AS StartUtc
+                , CAST(NULL AS datetime2(3)) AS EndUtc
+                , CAST(NULL AS nvarchar(30)) AS Mode
+                , CAST(NULL AS nvarchar(20)) AS Status
+                , CAST(NULL AS nvarchar(400)) AS Reason
+                , CAST(NULL AS sysname) AS LoginName
+                , CAST(NULL AS sysname) AS HostName
+            WHERE 1 = 0;
+        END;
+
+        -- Result Set 5: Repository size
+        IF @StatusIsInstalled = 1
+        BEGIN
+            SELECT
+                  t.name AS TableName
+                , SUM(ps.row_count) AS RowCount
+                , SUM(ps.used_page_count) * 8 AS UsedKb
+            FROM sys.tables AS t
+            INNER JOIN sys.dm_db_partition_stats AS ps
+                ON t.object_id = ps.object_id
+            WHERE t.schema_id = SCHEMA_ID(N'dbo')
+              AND t.name LIKE N'FR\_%' ESCAPE N'\'
+            GROUP BY t.name
+            ORDER BY t.name;
+        END
+        ELSE
+        BEGIN
+            SELECT
+                  CAST(NULL AS sysname) AS TableName
+                , CAST(NULL AS bigint) AS RowCount
+                , CAST(NULL AS bigint) AS UsedKb
+            WHERE 1 = 0;
+        END;
+
+        -- Result Set 6: Capability placeholder
         SELECT
-            t.name AS TableName,
-            SUM(ps.row_count) AS RowCount,
-            SUM(ps.used_page_count) * 8 AS UsedKb
-        FROM sys.tables t
-        INNER JOIN sys.dm_db_partition_stats ps ON t.object_id = ps.object_id
-        WHERE t.schema_id = SCHEMA_ID(N'dbo')
-          AND t.name LIKE N'FR\_%' ESCAPE N'\'
-          AND OBJECT_ID(N'dbo.FR_Config', N'U') IS NOT NULL
-        GROUP BY t.name
-        ORDER BY t.name;
-
-        -- Result Set 5: Run-Log Summary
-        SELECT
-            N'Total Runs' AS Metric,
-            CAST(COUNT(*) AS nvarchar(20)) AS Value
-        FROM dbo.FR_RunLog
-        WHERE OBJECT_ID(N'dbo.FR_RunLog', N'U') IS NOT NULL
-        UNION ALL
-        SELECT N'Last Run', CONVERT(nvarchar(50), MAX(StartUtc), 126) + N'Z'
-        FROM dbo.FR_RunLog
-        WHERE OBJECT_ID(N'dbo.FR_RunLog', N'U') IS NOT NULL;
-
-        -- Result Set 6: Capability Placeholder (populated by Part 4 capability probe)
-        SELECT
-            N'Tool-Version' AS CapabilityKey,
-            @ToolVersion AS CapabilityValue
+              N'Tool-Version' AS CapabilityKey
+            , @ToolVersion AS CapabilityValue
         UNION ALL
         SELECT N'Part-Number', CAST(@PartNumber AS nvarchar(10))
         UNION ALL
-        SELECT N'Schema-Version', @SchemaVersion;
+        SELECT N'Schema-Version', @SchemaVersion
+        UNION ALL
+        SELECT N'Installed', CASE WHEN @StatusIsInstalled = 1 THEN N'1' ELSE N'0' END;
+
+        RETURN;
+    END;
+    -- =========================================================================
+    -- Mode: CONFIGURE
+    -- =========================================================================
+    IF UPPER(@ModeNormalized) = N'CONFIGURE'
+    BEGIN
+        IF OBJECT_ID(N'dbo.FR_Config', N'U') IS NULL
+        BEGIN
+            SELECT N'Error' AS Status, N'NotInstalled' AS ErrorCode,
+                N'Configure requires Install to be run first.' AS Message,
+                @ToolVersion AS ToolVersion;
+            RETURN;
+        END;
+
+        IF @ConfigKey IS NULL
+        BEGIN
+            SELECT ConfigKey, ConfigValue, Description, ModifiedUtc
+            FROM dbo.FR_Config
+            ORDER BY ConfigKey;
+            RETURN;
+        END;
+
+        DECLARE @ConfigureKey sysname = LTRIM(RTRIM(@ConfigKey));
+        DECLARE @ConfigureOldValue nvarchar(4000) = NULL;
+        DECLARE @ConfigureRunId bigint = NULL;
+
+        IF @ConfigureKey NOT IN
+        (
+              N'SnapshotIntervalSeconds'
+            , N'SnapshotRetentionDays'
+            , N'RunLogRetentionDays'
+            , N'MaxRowsPerCollector'
+            , N'WaitStatsIgnoreList'
+            , N'DisabledRules'
+            , N'CriticalWaitTypes'
+        )
+        BEGIN
+            SELECT N'Error' AS Status, N'UnknownConfigKey' AS ErrorCode,
+                CONCAT(N'Unknown or read-only config key: ', @ConfigureKey) AS Message,
+                @ToolVersion AS ToolVersion;
+            RETURN;
+        END;
+
+        IF @ConfigValue IS NULL
+        BEGIN
+            SELECT N'Error' AS Status, N'MissingConfigValue' AS ErrorCode,
+                N'@ConfigValue is required when @ConfigKey is supplied.' AS Message,
+                @ToolVersion AS ToolVersion;
+            RETURN;
+        END;
+
+        IF @ConfigureKey IN (N'SnapshotIntervalSeconds', N'SnapshotRetentionDays', N'RunLogRetentionDays', N'MaxRowsPerCollector')
+           AND TRY_CONVERT(int, @ConfigValue) IS NULL
+        BEGIN
+            SELECT N'Error' AS Status, N'InvalidConfigValue' AS ErrorCode,
+                CONCAT(N'Config key ', @ConfigureKey, N' requires an integer value.') AS Message,
+                @ToolVersion AS ToolVersion;
+            RETURN;
+        END;
+
+        SELECT @ConfigureOldValue = ConfigValue
+        FROM dbo.FR_Config
+        WHERE ConfigKey = @ConfigureKey;
+
+        IF OBJECT_ID(N'dbo.FR_RunLog', N'U') IS NOT NULL
+        BEGIN
+            INSERT INTO dbo.FR_RunLog
+            (
+                StartUtc, EndUtc, Mode, Status, Reason, LoginName, HostName
+            )
+            VALUES
+            (
+                SYSUTCDATETIME(), NULL, N'Configure', N'InProgress',
+                CONCAT(N'Updating config key ', @ConfigureKey),
+                SUSER_SNAME(), HOST_NAME()
+            );
+
+            SET @ConfigureRunId = SCOPE_IDENTITY();
+        END;
+
+        IF EXISTS (SELECT 1 FROM dbo.FR_Config WHERE ConfigKey = @ConfigureKey)
+        BEGIN
+            UPDATE dbo.FR_Config
+            SET ConfigValue = @ConfigValue,
+                ModifiedUtc = SYSUTCDATETIME()
+            WHERE ConfigKey = @ConfigureKey;
+        END;
+        ELSE
+        BEGIN
+            INSERT INTO dbo.FR_Config (ConfigKey, ConfigValue, Description, ModifiedUtc)
+            VALUES (@ConfigureKey, @ConfigValue, N'Configured through Configure mode.', SYSUTCDATETIME());
+        END;
+
+        IF @ConfigureRunId IS NOT NULL
+        BEGIN
+            UPDATE dbo.FR_RunLog
+            SET EndUtc = SYSUTCDATETIME(),
+                Status = N'Success',
+                Reason = CONCAT(N'Updated ', @ConfigureKey)
+            WHERE RunId = @ConfigureRunId;
+        END;
+
+        SELECT
+              N'Success' AS Status
+            , @ConfigureKey AS ConfigKey
+            , @ConfigureOldValue AS OldConfigValue
+            , @ConfigValue AS NewConfigValue
+            , N'Configuration updated.' AS Message;
 
         RETURN;
     END;
 
     -- =========================================================================
-    -- Stubs: Modes not yet implemented
+    -- Mode: COLLECTDEBUG
+    -- =========================================================================
+    IF UPPER(@ModeNormalized) = N'COLLECTDEBUG'
+    BEGIN
+        IF OBJECT_ID(N'dbo.FR_RunLog', N'U') IS NULL
+        BEGIN
+            SELECT N'Error' AS Status, N'NotInstalled' AS ErrorCode,
+                N'CollectDebug requires Install to be run first.' AS Message,
+                @ToolVersion AS ToolVersion;
+            RETURN;
+        END;
+
+        INSERT INTO dbo.FR_RunLog
+        (
+            StartUtc, EndUtc, Mode, Status, Reason, LoginName, HostName
+        )
+        VALUES
+        (
+            SYSUTCDATETIME(), SYSUTCDATETIME(), N'CollectDebug', N'Success',
+            N'Debug mode only. No collector rows were written.',
+            SUSER_SNAME(), HOST_NAME()
+        );
+
+        SELECT
+              N'Success' AS Status
+            , N'CollectDebug' AS Mode
+            , N'No collector rows were written.' AS Message
+            , @ToolVersion AS ToolVersion;
+
+        SELECT
+              N'FR_Snapshot' AS ObjectName, CASE WHEN OBJECT_ID(N'dbo.FR_Snapshot', N'U') IS NULL THEN N'Missing' ELSE N'Present' END AS Status
+        UNION ALL SELECT N'FR_RunLog', CASE WHEN OBJECT_ID(N'dbo.FR_RunLog', N'U') IS NULL THEN N'Missing' ELSE N'Present' END
+        UNION ALL SELECT N'FR_RunLogStep', CASE WHEN OBJECT_ID(N'dbo.FR_RunLogStep', N'U') IS NULL THEN N'Missing' ELSE N'Present' END
+        UNION ALL SELECT N'FR_InstanceSnapshot', CASE WHEN OBJECT_ID(N'dbo.FR_InstanceSnapshot', N'U') IS NULL THEN N'Missing' ELSE N'Present' END
+        UNION ALL SELECT N'FR_Configuration', CASE WHEN OBJECT_ID(N'dbo.FR_Configuration', N'U') IS NULL THEN N'Missing' ELSE N'Present' END
+        UNION ALL SELECT N'FR_Request', CASE WHEN OBJECT_ID(N'dbo.FR_Request', N'U') IS NULL THEN N'Missing' ELSE N'Present' END
+        UNION ALL SELECT N'FR_Wait', CASE WHEN OBJECT_ID(N'dbo.FR_Wait', N'U') IS NULL THEN N'Missing' ELSE N'Present' END
+        UNION ALL SELECT N'FR_FileStat', CASE WHEN OBJECT_ID(N'dbo.FR_FileStat', N'U') IS NULL THEN N'Missing' ELSE N'Present' END
+        UNION ALL SELECT N'FR_PerfCounter', CASE WHEN OBJECT_ID(N'dbo.FR_PerfCounter', N'U') IS NULL THEN N'Missing' ELSE N'Present' END;
+
+        RETURN;
+    END;
+
+    -- =========================================================================
+    -- Mode: COLLECT
+    -- =========================================================================
+    IF UPPER(@ModeNormalized) = N'COLLECT'
+    BEGIN
+        IF OBJECT_ID(N'dbo.FR_Config', N'U') IS NULL
+           OR OBJECT_ID(N'dbo.FR_RunLog', N'U') IS NULL
+           OR OBJECT_ID(N'dbo.FR_Snapshot', N'U') IS NULL
+        BEGIN
+            SELECT N'Error' AS Status, N'NotInstalled' AS ErrorCode,
+                N'Collect requires Install to be run first.' AS Message,
+                @ToolVersion AS ToolVersion;
+            RETURN;
+        END;
+
+        DECLARE @CollectLockResult int;
+        DECLARE @CollectRunId bigint = NULL;
+        DECLARE @CollectSnapshotId bigint = NULL;
+        DECLARE @CollectSnapshotUtc datetime2(3) = SYSUTCDATETIME();
+        DECLARE @CollectStepId bigint = NULL;
+        DECLARE @CollectRows int = 0;
+        DECLARE @CollectStatus nvarchar(20) = N'Success';
+        DECLARE @CollectReason nvarchar(400) = N'Collect completed successfully.';
+        DECLARE @CollectError nvarchar(max) = NULL;
+        DECLARE @CollectMaxRows int = @TopN;
+        DECLARE @CollectWaitIgnore nvarchar(4000) = N'';
+
+        SELECT @CollectMaxRows = TRY_CONVERT(int, ConfigValue)
+        FROM dbo.FR_Config
+        WHERE ConfigKey = N'MaxRowsPerCollector';
+
+        IF @CollectMaxRows IS NULL OR @CollectMaxRows < 1
+            SET @CollectMaxRows = @TopN;
+
+        SELECT @CollectWaitIgnore = ISNULL(ConfigValue, N'')
+        FROM dbo.FR_Config
+        WHERE ConfigKey = N'WaitStatsIgnoreList';
+
+        EXEC @CollectLockResult = sys.sp_getapplock
+              @Resource = N'SQLFlightRecorder/Collect'
+            , @LockMode = N'Exclusive'
+            , @LockOwner = N'Session'
+            , @LockTimeout = 1000;
+
+        IF @CollectLockResult < 0
+        BEGIN
+            INSERT INTO dbo.FR_RunLog
+            (
+                StartUtc, EndUtc, Mode, Status, Reason, LoginName, HostName
+            )
+            VALUES
+            (
+                SYSUTCDATETIME(), SYSUTCDATETIME(), N'Collect', N'Skipped',
+                N'Another Collect is already running.',
+                SUSER_SNAME(), HOST_NAME()
+            );
+
+            SELECT N'Skipped' AS Status, N'Another Collect is already running.' AS Message;
+            RETURN;
+        END;
+
+        BEGIN TRY
+            INSERT INTO dbo.FR_RunLog
+            (
+                StartUtc, EndUtc, Mode, Status, Reason, LoginName, HostName
+            )
+            VALUES
+            (
+                @CollectSnapshotUtc, NULL, N'Collect', N'InProgress',
+                N'Collect started.',
+                SUSER_SNAME(), HOST_NAME()
+            );
+
+            SET @CollectRunId = SCOPE_IDENTITY();
+
+            INSERT INTO dbo.FR_Snapshot
+            (
+                SnapshotUtc, InstanceFingerprint, RunId
+            )
+            VALUES
+            (
+                @CollectSnapshotUtc,
+                CONVERT(nvarchar(200), SERVERPROPERTY(N'ServerName')),
+                @CollectRunId
+            );
+
+            SET @CollectSnapshotId = SCOPE_IDENTITY();
+
+            -- Instance collector
+            IF OBJECT_ID(N'dbo.FR_InstanceSnapshot', N'U') IS NOT NULL
+            BEGIN
+                INSERT INTO dbo.FR_RunLogStep (RunId, StepName, StartUtc, Status)
+                VALUES (@CollectRunId, N'InstanceSnapshot', SYSUTCDATETIME(), N'InProgress');
+
+                SET @CollectStepId = SCOPE_IDENTITY();
+
+                BEGIN TRY
+                    INSERT INTO dbo.FR_InstanceSnapshot
+                    (
+                        SnapshotId, SnapshotUtc, ServerName, EngineEdition,
+                        ProductVersion, ProductLevel, IsHadrEnabled,
+                        Platform, CpuCount, PhysicalMemoryKb, SqlStartTimeUtc
+                    )
+                    SELECT TOP (1)
+                        @CollectSnapshotId,
+                        @CollectSnapshotUtc,
+                        CONVERT(sysname, SERVERPROPERTY(N'ServerName')),
+                        TRY_CONVERT(int, SERVERPROPERTY(N'EngineEdition')),
+                        CONVERT(nvarchar(50), SERVERPROPERTY(N'ProductVersion')),
+                        CONVERT(nvarchar(20), SERVERPROPERTY(N'ProductLevel')),
+                        TRY_CONVERT(bit, SERVERPROPERTY(N'IsHadrEnabled')),
+                        NULL,
+                        cpu_count,
+                        physical_memory_kb,
+                        sqlserver_start_time
+                    FROM sys.dm_os_sys_info;
+
+                    SET @CollectRows = @@ROWCOUNT;
+
+                    UPDATE dbo.FR_RunLogStep
+                    SET EndUtc = SYSUTCDATETIME(), Status = N'Success', RowsCollected = @CollectRows
+                    WHERE RunStepId = @CollectStepId;
+                END TRY
+                BEGIN CATCH
+                    SET @CollectStatus = N'PartialSuccess';
+                    SET @CollectError = ERROR_MESSAGE();
+
+                    UPDATE dbo.FR_RunLogStep
+                    SET EndUtc = SYSUTCDATETIME(), Status = N'Error', ErrorMessage = @CollectError
+                    WHERE RunStepId = @CollectStepId;
+                END CATCH;
+            END;
+
+            -- Configuration collector
+            IF OBJECT_ID(N'dbo.FR_Configuration', N'U') IS NOT NULL
+            BEGIN
+                INSERT INTO dbo.FR_RunLogStep (RunId, StepName, StartUtc, Status)
+                VALUES (@CollectRunId, N'Configuration', SYSUTCDATETIME(), N'InProgress');
+
+                SET @CollectStepId = SCOPE_IDENTITY();
+
+                BEGIN TRY
+                    INSERT INTO dbo.FR_Configuration
+                    (
+                        SnapshotId, SnapshotUtc, ConfigurationKind, Name, ValueText, IsDefault
+                    )
+                    SELECT
+                        @CollectSnapshotId,
+                        @CollectSnapshotUtc,
+                        N'sys.configurations',
+                        name,
+                        CONVERT(nvarchar(400), value_in_use),
+                        NULL
+                    FROM sys.configurations;
+
+                    SET @CollectRows = @@ROWCOUNT;
+
+                    UPDATE dbo.FR_RunLogStep
+                    SET EndUtc = SYSUTCDATETIME(), Status = N'Success', RowsCollected = @CollectRows
+                    WHERE RunStepId = @CollectStepId;
+                END TRY
+                BEGIN CATCH
+                    SET @CollectStatus = N'PartialSuccess';
+                    SET @CollectError = ERROR_MESSAGE();
+
+                    UPDATE dbo.FR_RunLogStep
+                    SET EndUtc = SYSUTCDATETIME(), Status = N'Error', ErrorMessage = @CollectError
+                    WHERE RunStepId = @CollectStepId;
+                END CATCH;
+            END;
+
+            -- Requests collector
+            IF OBJECT_ID(N'dbo.FR_Request', N'U') IS NOT NULL
+            BEGIN
+                INSERT INTO dbo.FR_RunLogStep (RunId, StepName, StartUtc, Status)
+                VALUES (@CollectRunId, N'Requests', SYSUTCDATETIME(), N'InProgress');
+
+                SET @CollectStepId = SCOPE_IDENTITY();
+
+                BEGIN TRY
+                    INSERT INTO dbo.FR_Request
+                    (
+                        SnapshotId, SnapshotUtc, SessionId, DatabaseId,
+                        BlockingSessionId, WaitTypeAtCapture, WaitTimeMs,
+                        CpuTimeMs, LogicalReads, Status, Command,
+                        OpenTransactionCount, QueryHash, QueryPlanHash,
+                        RequestedMemoryKb, GrantedMemoryKb, MemoryGrantTimeUtc
+                    )
+                    SELECT TOP (@CollectMaxRows)
+                        @CollectSnapshotId,
+                        @CollectSnapshotUtc,
+                        r.session_id,
+                        ISNULL(r.database_id, 0),
+                        r.blocking_session_id,
+                        r.wait_type,
+                        r.wait_time,
+                        r.cpu_time,
+                        r.logical_reads,
+                        r.status,
+                        r.command,
+                        r.open_transaction_count,
+                        NULL,
+                        NULL,
+                        NULL,
+                        NULL,
+                        NULL
+                    FROM sys.dm_exec_requests AS r
+                    WHERE r.session_id <> @@SPID
+                    ORDER BY r.cpu_time DESC, r.logical_reads DESC, r.session_id ASC;
+
+                    SET @CollectRows = @@ROWCOUNT;
+
+                    UPDATE dbo.FR_RunLogStep
+                    SET EndUtc = SYSUTCDATETIME(), Status = N'Success', RowsCollected = @CollectRows
+                    WHERE RunStepId = @CollectStepId;
+                END TRY
+                BEGIN CATCH
+                    SET @CollectStatus = N'PartialSuccess';
+                    SET @CollectError = ERROR_MESSAGE();
+
+                    UPDATE dbo.FR_RunLogStep
+                    SET EndUtc = SYSUTCDATETIME(), Status = N'Error', ErrorMessage = @CollectError
+                    WHERE RunStepId = @CollectStepId;
+                END CATCH;
+            END;
+
+            -- Wait collector
+            IF OBJECT_ID(N'dbo.FR_Wait', N'U') IS NOT NULL
+            BEGIN
+                INSERT INTO dbo.FR_RunLogStep (RunId, StepName, StartUtc, Status)
+                VALUES (@CollectRunId, N'Waits', SYSUTCDATETIME(), N'InProgress');
+
+                SET @CollectStepId = SCOPE_IDENTITY();
+
+                BEGIN TRY
+                    INSERT INTO dbo.FR_Wait
+                    (
+                        SnapshotId, SnapshotUtc, WaitType, WaitingTasksCount,
+                        WaitTimeMs, MaxWaitTimeMs, SignalWaitTimeMs
+                    )
+                    SELECT TOP (@CollectMaxRows)
+                        @CollectSnapshotId,
+                        @CollectSnapshotUtc,
+                        wait_type,
+                        waiting_tasks_count,
+                        wait_time_ms,
+                        max_wait_time_ms,
+                        signal_wait_time_ms
+                    FROM sys.dm_os_wait_stats
+                    WHERE CHARINDEX(N';' + wait_type + N';', N';' + @CollectWaitIgnore + N';') = 0
+                    ORDER BY wait_time_ms DESC, wait_type ASC;
+
+                    SET @CollectRows = @@ROWCOUNT;
+
+                    UPDATE dbo.FR_RunLogStep
+                    SET EndUtc = SYSUTCDATETIME(), Status = N'Success', RowsCollected = @CollectRows
+                    WHERE RunStepId = @CollectStepId;
+                END TRY
+                BEGIN CATCH
+                    SET @CollectStatus = N'PartialSuccess';
+                    SET @CollectError = ERROR_MESSAGE();
+
+                    UPDATE dbo.FR_RunLogStep
+                    SET EndUtc = SYSUTCDATETIME(), Status = N'Error', ErrorMessage = @CollectError
+                    WHERE RunStepId = @CollectStepId;
+                END CATCH;
+            END;
+
+            -- File stats collector
+            IF OBJECT_ID(N'dbo.FR_FileStat', N'U') IS NOT NULL
+            BEGIN
+                INSERT INTO dbo.FR_RunLogStep (RunId, StepName, StartUtc, Status)
+                VALUES (@CollectRunId, N'FileStats', SYSUTCDATETIME(), N'InProgress');
+
+                SET @CollectStepId = SCOPE_IDENTITY();
+
+                BEGIN TRY
+                    INSERT INTO dbo.FR_FileStat
+                    (
+                        SnapshotId, SnapshotUtc, DatabaseId, FileId,
+                        NumOfReads, NumOfBytesRead, IoStallReadMs,
+                        NumOfWrites, NumOfBytesWritten, IoStallWriteMs,
+                        SizeOnDiskBytes
+                    )
+                    SELECT TOP (5000)
+                        @CollectSnapshotId,
+                        @CollectSnapshotUtc,
+                        database_id,
+                        file_id,
+                        num_of_reads,
+                        num_of_bytes_read,
+                        io_stall_read_ms,
+                        num_of_writes,
+                        num_of_bytes_written,
+                        io_stall_write_ms,
+                        size_on_disk_bytes
+                    FROM sys.dm_io_virtual_file_stats(NULL, NULL)
+                    ORDER BY io_stall_read_ms + io_stall_write_ms DESC;
+
+                    SET @CollectRows = @@ROWCOUNT;
+
+                    UPDATE dbo.FR_RunLogStep
+                    SET EndUtc = SYSUTCDATETIME(), Status = N'Success', RowsCollected = @CollectRows
+                    WHERE RunStepId = @CollectStepId;
+                END TRY
+                BEGIN CATCH
+                    SET @CollectStatus = N'PartialSuccess';
+                    SET @CollectError = ERROR_MESSAGE();
+
+                    UPDATE dbo.FR_RunLogStep
+                    SET EndUtc = SYSUTCDATETIME(), Status = N'Error', ErrorMessage = @CollectError
+                    WHERE RunStepId = @CollectStepId;
+                END CATCH;
+            END;
+
+            -- Perf counters collector
+            IF OBJECT_ID(N'dbo.FR_PerfCounter', N'U') IS NOT NULL
+            BEGIN
+                INSERT INTO dbo.FR_RunLogStep (RunId, StepName, StartUtc, Status)
+                VALUES (@CollectRunId, N'PerfCounters', SYSUTCDATETIME(), N'InProgress');
+
+                SET @CollectStepId = SCOPE_IDENTITY();
+
+                BEGIN TRY
+                    INSERT INTO dbo.FR_PerfCounter
+                    (
+                        SnapshotId, SnapshotUtc, ObjectName, CounterName,
+                        InstanceName, CounterValue, CounterType
+                    )
+                    SELECT TOP (100)
+                        @CollectSnapshotId,
+                        @CollectSnapshotUtc,
+                        object_name,
+                        counter_name,
+                        NULLIF(instance_name, N''),
+                        cntr_value,
+                        cntr_type
+                    FROM sys.dm_os_performance_counters
+                    WHERE counter_name IN
+                    (
+                        N'Batch Requests/sec',
+                        N'SQL Compilations/sec',
+                        N'SQL Re-Compilations/sec',
+                        N'Page life expectancy',
+                        N'Lazy writes/sec',
+                        N'Checkpoint pages/sec',
+                        N'User Connections',
+                        N'Processes blocked'
+                    )
+                    ORDER BY object_name, counter_name, instance_name;
+
+                    SET @CollectRows = @@ROWCOUNT;
+
+                    UPDATE dbo.FR_RunLogStep
+                    SET EndUtc = SYSUTCDATETIME(), Status = N'Success', RowsCollected = @CollectRows
+                    WHERE RunStepId = @CollectStepId;
+                END TRY
+                BEGIN CATCH
+                    SET @CollectStatus = N'PartialSuccess';
+                    SET @CollectError = ERROR_MESSAGE();
+
+                    UPDATE dbo.FR_RunLogStep
+                    SET EndUtc = SYSUTCDATETIME(), Status = N'Error', ErrorMessage = @CollectError
+                    WHERE RunStepId = @CollectStepId;
+                END CATCH;
+            END;
+
+            IF @CollectStatus = N'PartialSuccess'
+                SET @CollectReason = N'Collect completed with one or more collector failures. See FR_RunLogStep.';
+
+            UPDATE dbo.FR_RunLog
+            SET EndUtc = SYSUTCDATETIME(),
+                Status = @CollectStatus,
+                Reason = @CollectReason
+            WHERE RunId = @CollectRunId;
+
+            EXEC sys.sp_releaseapplock
+                  @Resource = N'SQLFlightRecorder/Collect'
+                , @LockOwner = N'Session';
+
+            SELECT
+                  @CollectStatus AS Status
+                , @CollectRunId AS RunId
+                , @CollectSnapshotId AS SnapshotId
+                , @CollectSnapshotUtc AS SnapshotUtc
+                , @CollectReason AS Message;
+
+            RETURN;
+        END TRY
+        BEGIN CATCH
+            SET @CollectError = ERROR_MESSAGE();
+
+            IF @CollectRunId IS NOT NULL
+            BEGIN
+                UPDATE dbo.FR_RunLog
+                SET EndUtc = SYSUTCDATETIME(),
+                    Status = N'Error',
+                    ErrorMessage = @CollectError,
+                    Reason = N'Collect failed.'
+                WHERE RunId = @CollectRunId;
+            END;
+
+            EXEC sys.sp_releaseapplock
+                  @Resource = N'SQLFlightRecorder/Collect'
+                , @LockOwner = N'Session';
+
+            SELECT N'Error' AS Status, N'CollectFailed' AS ErrorCode,
+                @CollectError AS Message, @ToolVersion AS ToolVersion;
+
+            RETURN;
+        END CATCH;
+    END;
+
+    -- =========================================================================
+    -- Mode: PURGE
+    -- =========================================================================
+    IF UPPER(@ModeNormalized) = N'PURGE'
+    BEGIN
+        IF OBJECT_ID(N'dbo.FR_Config', N'U') IS NULL
+        BEGIN
+            SELECT N'Error' AS Status, N'NotInstalled' AS ErrorCode,
+                N'Purge requires Install to be run first.' AS Message,
+                @ToolVersion AS ToolVersion;
+            RETURN;
+        END;
+
+        DECLARE @PurgeSnapshotRetentionDays int = 7;
+        DECLARE @PurgeRunLogRetentionDays int = 28;
+        DECLARE @PurgeSnapshotCutoffUtc datetime2(3);
+        DECLARE @PurgeRunLogCutoffUtc datetime2(3);
+        DECLARE @PurgeRows int = 0;
+        DECLARE @PurgeTotalRows int = 0;
+
+        SELECT @PurgeSnapshotRetentionDays = TRY_CONVERT(int, ConfigValue)
+        FROM dbo.FR_Config
+        WHERE ConfigKey = N'SnapshotRetentionDays';
+
+        IF @PurgeSnapshotRetentionDays IS NULL OR @PurgeSnapshotRetentionDays < 1
+            SET @PurgeSnapshotRetentionDays = 7;
+
+        SELECT @PurgeRunLogRetentionDays = TRY_CONVERT(int, ConfigValue)
+        FROM dbo.FR_Config
+        WHERE ConfigKey = N'RunLogRetentionDays';
+
+        IF @PurgeRunLogRetentionDays IS NULL OR @PurgeRunLogRetentionDays < @PurgeSnapshotRetentionDays
+            SET @PurgeRunLogRetentionDays = @PurgeSnapshotRetentionDays * 4;
+
+        SET @PurgeSnapshotCutoffUtc = DATEADD(day, -@PurgeSnapshotRetentionDays, SYSUTCDATETIME());
+        SET @PurgeRunLogCutoffUtc = DATEADD(day, -@PurgeRunLogRetentionDays, SYSUTCDATETIME());
+
+        IF @WhatIf = 1
+        BEGIN
+            SELECT N'WhatIf' AS Status, @PurgeSnapshotCutoffUtc AS SnapshotCutoffUtc, @PurgeRunLogCutoffUtc AS RunLogCutoffUtc;
+
+            SELECT N'FR_Snapshot' AS TableName, COUNT(1) AS RowsEligible
+            FROM dbo.FR_Snapshot
+            WHERE OBJECT_ID(N'dbo.FR_Snapshot', N'U') IS NOT NULL
+              AND SnapshotUtc < @PurgeSnapshotCutoffUtc
+            UNION ALL
+            SELECT N'FR_RunLog', COUNT(1)
+            FROM dbo.FR_RunLog
+            WHERE OBJECT_ID(N'dbo.FR_RunLog', N'U') IS NOT NULL
+              AND StartUtc < @PurgeRunLogCutoffUtc;
+
+            RETURN;
+        END;
+
+        WHILE OBJECT_ID(N'dbo.FR_InstanceSnapshot', N'U') IS NOT NULL
+        BEGIN
+            DELETE TOP (5000) FROM dbo.FR_InstanceSnapshot WHERE SnapshotUtc < @PurgeSnapshotCutoffUtc;
+            SET @PurgeRows = @@ROWCOUNT;
+            SET @PurgeTotalRows = @PurgeTotalRows + @PurgeRows;
+            IF @PurgeRows = 0 BREAK;
+            WAITFOR DELAY '00:00:00.250';
+        END;
+
+        WHILE OBJECT_ID(N'dbo.FR_Configuration', N'U') IS NOT NULL
+        BEGIN
+            DELETE TOP (5000) FROM dbo.FR_Configuration WHERE SnapshotUtc < @PurgeSnapshotCutoffUtc;
+            SET @PurgeRows = @@ROWCOUNT;
+            SET @PurgeTotalRows = @PurgeTotalRows + @PurgeRows;
+            IF @PurgeRows = 0 BREAK;
+            WAITFOR DELAY '00:00:00.250';
+        END;
+
+        WHILE OBJECT_ID(N'dbo.FR_Request', N'U') IS NOT NULL
+        BEGIN
+            DELETE TOP (5000) FROM dbo.FR_Request WHERE SnapshotUtc < @PurgeSnapshotCutoffUtc;
+            SET @PurgeRows = @@ROWCOUNT;
+            SET @PurgeTotalRows = @PurgeTotalRows + @PurgeRows;
+            IF @PurgeRows = 0 BREAK;
+            WAITFOR DELAY '00:00:00.250';
+        END;
+
+        WHILE OBJECT_ID(N'dbo.FR_Wait', N'U') IS NOT NULL
+        BEGIN
+            DELETE TOP (5000) FROM dbo.FR_Wait WHERE SnapshotUtc < @PurgeSnapshotCutoffUtc;
+            SET @PurgeRows = @@ROWCOUNT;
+            SET @PurgeTotalRows = @PurgeTotalRows + @PurgeRows;
+            IF @PurgeRows = 0 BREAK;
+            WAITFOR DELAY '00:00:00.250';
+        END;
+
+        WHILE OBJECT_ID(N'dbo.FR_FileStat', N'U') IS NOT NULL
+        BEGIN
+            DELETE TOP (5000) FROM dbo.FR_FileStat WHERE SnapshotUtc < @PurgeSnapshotCutoffUtc;
+            SET @PurgeRows = @@ROWCOUNT;
+            SET @PurgeTotalRows = @PurgeTotalRows + @PurgeRows;
+            IF @PurgeRows = 0 BREAK;
+            WAITFOR DELAY '00:00:00.250';
+        END;
+
+        WHILE OBJECT_ID(N'dbo.FR_PerfCounter', N'U') IS NOT NULL
+        BEGIN
+            DELETE TOP (5000) FROM dbo.FR_PerfCounter WHERE SnapshotUtc < @PurgeSnapshotCutoffUtc;
+            SET @PurgeRows = @@ROWCOUNT;
+            SET @PurgeTotalRows = @PurgeTotalRows + @PurgeRows;
+            IF @PurgeRows = 0 BREAK;
+            WAITFOR DELAY '00:00:00.250';
+        END;
+
+        WHILE OBJECT_ID(N'dbo.FR_Snapshot', N'U') IS NOT NULL
+        BEGIN
+            DELETE TOP (5000) FROM dbo.FR_Snapshot WHERE SnapshotUtc < @PurgeSnapshotCutoffUtc;
+            SET @PurgeRows = @@ROWCOUNT;
+            SET @PurgeTotalRows = @PurgeTotalRows + @PurgeRows;
+            IF @PurgeRows = 0 BREAK;
+            WAITFOR DELAY '00:00:00.250';
+        END;
+
+        WHILE OBJECT_ID(N'dbo.FR_RunLogStep', N'U') IS NOT NULL
+        BEGIN
+            DELETE TOP (5000)
+            FROM dbo.FR_RunLogStep
+            WHERE RunId IN
+            (
+                SELECT RunId FROM dbo.FR_RunLog WHERE StartUtc < @PurgeRunLogCutoffUtc
+            );
+
+            SET @PurgeRows = @@ROWCOUNT;
+            SET @PurgeTotalRows = @PurgeTotalRows + @PurgeRows;
+            IF @PurgeRows = 0 BREAK;
+            WAITFOR DELAY '00:00:00.250';
+        END;
+
+        WHILE OBJECT_ID(N'dbo.FR_RunLog', N'U') IS NOT NULL
+        BEGIN
+            DELETE TOP (5000) FROM dbo.FR_RunLog WHERE StartUtc < @PurgeRunLogCutoffUtc;
+            SET @PurgeRows = @@ROWCOUNT;
+            SET @PurgeTotalRows = @PurgeTotalRows + @PurgeRows;
+            IF @PurgeRows = 0 BREAK;
+            WAITFOR DELAY '00:00:00.250';
+        END;
+
+        SELECT
+              N'Success' AS Status
+            , @PurgeTotalRows AS RowsDeleted
+            , @PurgeSnapshotCutoffUtc AS SnapshotCutoffUtc
+            , @PurgeRunLogCutoffUtc AS RunLogCutoffUtc;
+
+        RETURN;
+    END;
+
+    -- =========================================================================
+    -- Mode: REPORT
+    -- =========================================================================
+    IF UPPER(@ModeNormalized) = N'REPORT'
+    BEGIN
+        IF OBJECT_ID(N'dbo.FR_Snapshot', N'U') IS NULL
+        BEGIN
+            SELECT
+                  1 AS FindingOrdinal
+                , N'Critical' AS Severity
+                , N'High' AS Confidence
+                , N'Observed' AS EvidenceType
+                , N'Coverage' AS Category
+                , N'FR_R0026_CoverageAndCapabilitySummary' AS RuleId
+                , N'Repository is not installed' AS Title
+                , N'Run Install before Report.' AS Summary
+                , N'FR_Snapshot table was not found.' AS Evidence
+                , N'Run EXEC dbo.sp_SQLFlightRecorder @Mode = N''Install''.' AS Recommendation
+                , NULL AS DatabaseName
+                , NULL AS ObjectName
+                , NULL AS SessionId
+                , SYSUTCDATETIME() AS StartTimeUtc
+                , SYSUTCDATETIME() AS EndTimeUtc
+                , N'Install required.' AS MoreInfo;
+
+            SELECT
+                  CAST(NULL AS datetime2(3)) AS EventUtc
+                , CAST(NULL AS nvarchar(60)) AS EventType
+                , CAST(NULL AS nvarchar(60)) AS Category
+                , CAST(NULL AS nvarchar(20)) AS Severity
+                , CAST(NULL AS nvarchar(400)) AS Summary
+                , CAST(NULL AS sysname) AS DatabaseName
+                , CAST(NULL AS nvarchar(200)) AS ObjectName
+                , CAST(NULL AS int) AS SessionId
+                , CAST(NULL AS nvarchar(60)) AS RuleId
+                , CAST(NULL AS bigint) AS RunId
+                , CAST(NULL AS bigint) AS SnapshotId
+                , CAST(NULL AS nvarchar(1000)) AS MoreInfo
+            WHERE 1 = 0;
+
+            RETURN;
+        END;
+
+        DECLARE @ReportStartUtc datetime2(3);
+        DECLARE @ReportEndUtc datetime2(3);
+        DECLARE @ReportSnapshotCount int;
+
+        SET @ReportEndUtc =
+            CASE
+                WHEN @EndTime IS NULL THEN SYSUTCDATETIME()
+                ELSE DATEADD(minute, DATEDIFF(minute, GETDATE(), SYSUTCDATETIME()), @EndTime)
+            END;
+
+        SET @ReportStartUtc =
+            CASE
+                WHEN @StartTime IS NULL THEN DATEADD(hour, -1, @ReportEndUtc)
+                ELSE DATEADD(minute, DATEDIFF(minute, GETDATE(), SYSUTCDATETIME()), @StartTime)
+            END;
+
+        CREATE TABLE #fr_findings
+        (
+              FindingOrdinal int IDENTITY(1,1) NOT NULL
+            , Severity nvarchar(20) NOT NULL
+            , Confidence nvarchar(20) NOT NULL
+            , EvidenceType nvarchar(20) NOT NULL
+            , Category nvarchar(60) NOT NULL
+            , RuleId nvarchar(60) NOT NULL
+            , Title nvarchar(200) NOT NULL
+            , Summary nvarchar(400) NOT NULL
+            , Evidence nvarchar(1900) NULL
+            , Recommendation nvarchar(400) NULL
+            , DatabaseName sysname NULL
+            , ObjectName nvarchar(200) NULL
+            , SessionId int NULL
+            , StartTimeUtc datetime2(3) NULL
+            , EndTimeUtc datetime2(3) NULL
+            , MoreInfo nvarchar(1000) NULL
+        );
+
+        CREATE TABLE #fr_timeline
+        (
+              EventUtc datetime2(3) NOT NULL
+            , EventType nvarchar(60) NOT NULL
+            , Category nvarchar(60) NOT NULL
+            , Severity nvarchar(20) NULL
+            , Summary nvarchar(400) NOT NULL
+            , DatabaseName sysname NULL
+            , ObjectName nvarchar(200) NULL
+            , SessionId int NULL
+            , RuleId nvarchar(60) NULL
+            , RunId bigint NULL
+            , SnapshotId bigint NULL
+            , MoreInfo nvarchar(1000) NULL
+        );
+
+        SELECT @ReportSnapshotCount = COUNT(1)
+        FROM dbo.FR_Snapshot
+        WHERE SnapshotUtc >= @ReportStartUtc
+          AND SnapshotUtc <= @ReportEndUtc;
+
+        IF @ReportSnapshotCount < 2
+        BEGIN
+            INSERT INTO #fr_findings
+            (
+                Severity, Confidence, EvidenceType, Category, RuleId,
+                Title, Summary, Evidence, Recommendation,
+                StartTimeUtc, EndTimeUtc, MoreInfo
+            )
+            VALUES
+            (
+                N'Critical',
+                N'High',
+                N'Observed',
+                N'Coverage',
+                N'FR_R0026_CoverageAndCapabilitySummary',
+                N'Insufficient snapshot coverage',
+                N'Report requires at least two snapshots in the selected window.',
+                CONCAT(N'Snapshot count in window: ', @ReportSnapshotCount),
+                N'Run Collect at least twice, separated by the configured collection interval.',
+                @ReportStartUtc,
+                @ReportEndUtc,
+                N'Coverage finding emitted because fewer than two snapshots are available.'
+            );
+        END;
+        ELSE
+        BEGIN
+            INSERT INTO #fr_timeline
+            (
+                EventUtc, EventType, Category, Severity, Summary,
+                RunId, SnapshotId, MoreInfo
+            )
+            SELECT
+                SnapshotUtc,
+                N'SnapshotCaptured',
+                N'Collection',
+                N'Informational',
+                N'Snapshot captured.',
+                RunId,
+                SnapshotId,
+                N'FR_Snapshot row exists in selected report window.'
+            FROM dbo.FR_Snapshot
+            WHERE SnapshotUtc >= @ReportStartUtc
+              AND SnapshotUtc <= @ReportEndUtc
+            ORDER BY SnapshotUtc;
+
+            IF OBJECT_ID(N'dbo.FR_Wait', N'U') IS NOT NULL
+            BEGIN
+                ;WITH FirstSnapshot AS
+                (
+                    SELECT TOP (1) SnapshotId
+                    FROM dbo.FR_Snapshot
+                    WHERE SnapshotUtc >= @ReportStartUtc
+                      AND SnapshotUtc <= @ReportEndUtc
+                    ORDER BY SnapshotUtc ASC, SnapshotId ASC
+                ),
+                LastSnapshot AS
+                (
+                    SELECT TOP (1) SnapshotId
+                    FROM dbo.FR_Snapshot
+                    WHERE SnapshotUtc >= @ReportStartUtc
+                      AND SnapshotUtc <= @ReportEndUtc
+                    ORDER BY SnapshotUtc DESC, SnapshotId DESC
+                ),
+                WaitDelta AS
+                (
+                    SELECT TOP (1)
+                          lw.WaitType
+                        , lw.WaitTimeMs - ISNULL(fw.WaitTimeMs, 0) AS DeltaWaitMs
+                    FROM dbo.FR_Wait AS lw
+                    INNER JOIN LastSnapshot AS ls
+                        ON ls.SnapshotId = lw.SnapshotId
+                    CROSS JOIN FirstSnapshot AS fs
+                    LEFT JOIN dbo.FR_Wait AS fw
+                        ON fw.SnapshotId = fs.SnapshotId
+                       AND fw.WaitType = lw.WaitType
+                    WHERE lw.WaitTimeMs - ISNULL(fw.WaitTimeMs, 0) > 0
+                    ORDER BY lw.WaitTimeMs - ISNULL(fw.WaitTimeMs, 0) DESC, lw.WaitType ASC
+                )
+                INSERT INTO #fr_findings
+                (
+                    Severity, Confidence, EvidenceType, Category, RuleId,
+                    Title, Summary, Evidence, Recommendation,
+                    StartTimeUtc, EndTimeUtc, MoreInfo
+                )
+                SELECT
+                    N'Medium',
+                    N'Medium',
+                    N'Inferred',
+                    N'Waits',
+                    N'FR_R0003_TopWaitTypeSpike',
+                    N'Top wait type increased during the window',
+                    CONCAT(N'Wait type ', WaitType, N' had the largest observed wait-time delta.'),
+                    CONCAT(N'DeltaWaitMs=', DeltaWaitMs),
+                    N'Consider correlating this wait type with workload, blocking, IO, memory, and application changes before taking action.',
+                    @ReportStartUtc,
+                    @ReportEndUtc,
+                    N'Computed from cumulative FR_Wait snapshots.'
+                FROM WaitDelta;
+            END;
+        END;
+
+        IF NOT EXISTS (SELECT 1 FROM #fr_findings)
+        BEGIN
+            INSERT INTO #fr_findings
+            (
+                Severity, Confidence, EvidenceType, Category, RuleId,
+                Title, Summary, Evidence, Recommendation,
+                StartTimeUtc, EndTimeUtc, MoreInfo
+            )
+            VALUES
+            (
+                N'Informational',
+                N'High',
+                N'Observed',
+                N'Coverage',
+                N'FR_R0026_CoverageAndCapabilitySummary',
+                N'No findings emitted',
+                N'No rule produced a finding for the selected window.',
+                CONCAT(N'Snapshot count: ', @ReportSnapshotCount),
+                N'If symptoms persist, consider widening the report window or collecting more snapshots.',
+                @ReportStartUtc,
+                @ReportEndUtc,
+                N'This explicit no-findings row avoids silent output.'
+            );
+        END;
+
+        IF UPPER(@OutputFormat) = N'MARKDOWN'
+        BEGIN
+            DECLARE @ReportMarkdown nvarchar(max) = N'';
+
+            SET @ReportMarkdown =
+                N'# SQL Server Flight Recorder Report' + CHAR(13) + CHAR(10) +
+                N'Tool-Version: ' + @ToolVersion + CHAR(13) + CHAR(10) +
+                N'Schema-Version: ' + @SchemaVersion + CHAR(13) + CHAR(10) +
+                N'Snapshot-Count: ' + CONVERT(nvarchar(20), @ReportSnapshotCount) + CHAR(13) + CHAR(10) +
+                CHAR(13) + CHAR(10) +
+                N'## Findings' + CHAR(13) + CHAR(10);
+
+            SELECT @ReportMarkdown = @ReportMarkdown +
+                N'- **' + Severity + N'** [' + RuleId + N'] ' + Title + N': ' + Summary + CHAR(13) + CHAR(10)
+            FROM #fr_findings
+            ORDER BY FindingOrdinal;
+
+            SET @ReportMarkdown = @ReportMarkdown + CHAR(13) + CHAR(10) + N'## Timeline' + CHAR(13) + CHAR(10);
+
+            SELECT @ReportMarkdown = @ReportMarkdown +
+                N'- ' + CONVERT(nvarchar(50), EventUtc, 126) + N'Z — ' + EventType + N': ' + Summary + CHAR(13) + CHAR(10)
+            FROM #fr_timeline
+            ORDER BY EventUtc, EventType, SnapshotId;
+
+            SELECT @ReportMarkdown AS Report;
+            RETURN;
+        END;
+
+        IF UPPER(@OutputFormat) IN (N'DEFAULT', N'FINDINGSONLY')
+        BEGIN
+            SELECT
+                  FindingOrdinal
+                , Severity
+                , Confidence
+                , EvidenceType
+                , Category
+                , RuleId
+                , Title
+                , Summary
+                , Evidence
+                , Recommendation
+                , DatabaseName
+                , ObjectName
+                , SessionId
+                , StartTimeUtc
+                , EndTimeUtc
+                , MoreInfo
+            FROM #fr_findings
+            ORDER BY
+                CASE Severity
+                    WHEN N'Critical' THEN 1
+                    WHEN N'High' THEN 2
+                    WHEN N'Medium' THEN 3
+                    WHEN N'Low' THEN 4
+                    ELSE 5
+                END,
+                FindingOrdinal;
+        END;
+
+        IF UPPER(@OutputFormat) IN (N'DEFAULT', N'TIMELINEONLY')
+        BEGIN
+            SELECT
+                  EventUtc
+                , EventType
+                , Category
+                , Severity
+                , Summary
+                , DatabaseName
+                , ObjectName
+                , SessionId
+                , RuleId
+                , RunId
+                , SnapshotId
+                , MoreInfo
+            FROM #fr_timeline
+            ORDER BY EventUtc, EventType, SnapshotId;
+        END;
+
+        RETURN;
+    END;
+
+    -- =========================================================================
+    -- Remaining deferred modes
     -- =========================================================================
     SELECT
         N'NotYetImplemented' AS Status,
-        CONCAT(@ModeNormalized, N' mode arrives in Part 4–8 (see docs/implementation-plan.md).') AS Message,
+        CONCAT(@ModeNormalized, N' is deferred beyond this simplified build.') AS Message,
         @ToolVersion AS ToolVersion;
 
 END;
