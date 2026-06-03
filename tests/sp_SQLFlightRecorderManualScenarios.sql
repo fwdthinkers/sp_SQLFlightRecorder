@@ -1,3 +1,4 @@
+
 /*==============================================================================
 sp_SQLFlightRecorder Manual Scenario Test Script
 
@@ -19,8 +20,8 @@ Expected:
 SET NOCOUNT ON;
 SET XACT_ABORT OFF;
 
-DECLARE @RunDestructiveTests bit = 0; -- 0=safe default, 1=run real Purge/Uninstall tests
-DECLARE @TestAgentJob        bit = 0; -- 0=skip Agent job test, 1=test @CreateAgentJob if supported
+DECLARE @RunDestructiveTests bit = 1; -- 0=safe default, 1=run real Purge/Uninstall tests
+DECLARE @TestAgentJob        bit = 1; -- 0=skip Agent job test, 1=test @CreateAgentJob if supported
 
 DECLARE @ProcName sysname = N'dbo.sp_SQLFlightRecorder';
 
@@ -276,7 +277,7 @@ INSERT #Cases (Scenario, Expected, SqlText)
 VALUES
 (N'Verify collection row counts', N'Shows row counts in repository tables.',
  N'
- SELECT N''FR_RunLog'' AS TableName, COUNT(*) AS RowCount FROM dbo.FR_RunLog
+ SELECT N''FR_RunLog'' AS TableName, COUNT(*) AS [RowCount] FROM dbo.FR_RunLog
  UNION ALL SELECT N''FR_RunLogStep'', COUNT(*) FROM dbo.FR_RunLogStep
  UNION ALL SELECT N''FR_Snapshot'', COUNT(*) FROM dbo.FR_Snapshot
  UNION ALL SELECT N''FR_InstanceSnapshot'', COUNT(*) FROM dbo.FR_InstanceSnapshot
