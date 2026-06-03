@@ -1,29 +1,41 @@
 -- =============================================================================
 -- sp_SQLFlightRecorder
--- SQL Server DBA Flight Recorder — Part 3 (Install, Uninstall, Status modes)
+-- SQL Server DBA Flight Recorder
 -- =============================================================================
--- A single pure-T-SQL stored procedure that captures SQL Server diagnostic
--- data on a schedule and produces prioritized findings about server health.
+-- Developed by: Ysaias Portes
+-- Company:      Forward Thinkers Consulting, LLC.
+-- Repository:   https://github.com/forward-thinkers-lab/sp_SQLFlightRecorder
+-- License:      MIT
 --
--- Part 3 scope (v0.1.0-alpha.3):
---   * Install mode: idempotent repository schema creation
---   * Uninstall mode: clean removal with optional archive
---   * Status mode: six result sets (config, rules, runs, footprint, etc.)
+-- A single pure-T-SQL stored procedure for capturing bounded SQL Server
+-- diagnostic snapshots and producing prioritized DBA findings.
+--
+-- Current implementation scope:
 --   * Help mode: usage and parameter documentation
---   * About mode: version metadata
---   * All other modes: "not yet implemented" stubs
+--   * About mode: version and build metadata
+--   * Install mode: idempotent FR_* repository schema creation
+--   * Uninstall mode: clean removal with optional run-log archive
+--   * Status mode: installation, configuration, rules, run, and footprint status
+--   * Collect / CollectDebug / Report / Configure / Purge:
+--       implemented as the procedure evolves through the v0.1 roadmap
 --
 -- Tool-Version:   0.1.0-alpha.3
 -- Build-Date-Utc: 2026-06-03
--- License:        MIT
--- Repository:     https://github.com/forward-thinkers-lab/sp_SQLFlightRecorder
--- Design:         docs/design.md | Decisions: docs/decisions.md
+-- Design:         docs/design.md
+-- Decisions:      docs/decisions.md
 --
--- SQL Server 2012–2025 compatible. Single file, no preprocessor.
--- Capability probe (D-008, D-127) and sp_executesql discipline (D-112)
--- enable single-source-of-truth deployment across all versions.
+-- Compatibility:
+--   SQL Server 2012–2025 compatible where practical.
+--   Single-file deployment. No preprocessor. No external runtime dependency.
 --
--- Default @Mode='Help' (D-003): safe to execute accidentally.
+-- Safety posture:
+--   Default @Mode = 'Help' so accidental execution is non-destructive.
+--   Production-oriented defaults: bounded reads, low deadlock priority,
+--   lock timeout, READ UNCOMMITTED, and explicit opt-in for destructive modes.
+--
+-- Notes:
+--   This procedure is intended to be installed in a user database by default.
+--   Review documentation and test in a non-production environment before use.
 -- =============================================================================
 
 SET NOCOUNT ON;
