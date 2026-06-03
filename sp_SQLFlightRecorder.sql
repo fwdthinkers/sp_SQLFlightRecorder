@@ -86,7 +86,7 @@ BEGIN
     DECLARE @SchemaVersion            nvarchar(20) = N'0.1.0-alpha.3';
     DECLARE @SupportedSqlServerRange nvarchar(50)  = N'SQL Server 2012–2025';
     DECLARE @PartNumber              int           = 3;
-    DECLARE @PartTotal               int           = 9;
+    DECLARE @PartTotal               int           = 3;
 
     -- =========================================================================
     -- Input normalization and validation
@@ -841,16 +841,27 @@ END;
         DECLARE @StatusIsInstalled bit =
             CASE WHEN OBJECT_ID(N'dbo.FR_Config', N'U') IS NULL THEN 0 ELSE 1 END;
 
+        DECLARE @StatusRepositorySchemaVersion nvarchar(4000) = NULL;
+
+        IF @StatusIsInstalled = 1
+        BEGIN
+            SELECT @StatusRepositorySchemaVersion = ConfigValue
+            FROM dbo.FR_Config
+            WHERE ConfigKey = N'SchemaVersion';
+        END;
+
         -- Result Set 1: Installation summary
         SELECT
               DB_NAME() AS DatabaseName
             , CASE WHEN @StatusIsInstalled = 1 THEN N'Installed' ELSE N'NotInstalled' END AS InstallStatus
             , @SchemaVersion AS ProcedureSchemaVersion
-            , CASE WHEN @StatusIsInstalled = 1
-                   THEN (SELECT ConfigValue FROM dbo.FR_Config WHERE ConfigKey = N'SchemaVersion')
-                   ELSE NULL
-              END AS RepositorySchemaVersion
-            , @ToolVersion AS ToolVersion;
+            , @StatusRepositorySchemaVersion AS RepositorySchemaVersion
+            , @ToolVersion AS ToolVersion
+            , CASE
+                  WHEN @StatusIsInstalled = 1
+                  THEN N'SQLFlightRecorder repository is installed.'
+                  ELSE N'SQLFlightRecorder repository is not installed. Run Install mode first.'
+              END AS Message;
 
         -- Result Set 2: Configuration
         IF @StatusIsInstalled = 1
