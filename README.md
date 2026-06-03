@@ -19,6 +19,7 @@ Developed by **Ysaias Portes — Forward Thinkers Consulting, LLC.**
 - [What it is not](#what-it-is-not)
 - [When it is a big help](#when-it-is-a-big-help)
 - [Quick start](#quick-start)
+- [Parameters](#Parameters)
 - [Common commands](#common-commands)
 - [Scheduling collection](#scheduling-collection)
 - [Configuration and retention](#configuration-and-retention)
@@ -193,6 +194,273 @@ EXEC dbo.sp_SQLFlightRecorder
     @MinSeverity = N'Informational',
     @OutputFormat = N'Default';
 ```
+---
+
+---
+
+## Parameters
+
+`sp_SQLFlightRecorder` is controlled by parameters. The most important one is `@Mode`.
+
+```sql
+EXEC dbo.sp_SQLFlightRecorder
+    @Mode = N'Help';
+```
+
+### Main parameters
+
+| Parameter | Default | Used by | Meaning |
+|---|---:|---|---|
+| `@Mode` | `Help` | All | Chooses what the procedure does. Examples: `Install`, `Collect`, `Report`, `Configure`, `Purge`, `Uninstall`. |
+| `@DatabaseName` | `NULL` | `Report` | Optional database filter for report output. |
+| `@StartTime` | `NULL` | `Report` | Optional report start time. If omitted, the procedure chooses a default window. |
+| `@EndTime` | `NULL` | `Report` | Optional report end time. If omitted, the procedure chooses a default window. |
+| `@MinSeverity` | `Low` | `Report` | Minimum severity to show: `Informational`, `Low`, `Medium`, `High`, or `Critical`. |
+| `@MaxFindings` | `200` | `Report` | Maximum number of findings to return. Valid range: `10` to `2000`. |
+| `@TopN` | `50` | `Collect` | Per-collector row cap for top-N style collection. Valid range: `1` to `1000`. |
+| `@OutputFormat` | `Default` | `Report` | Report format: `Default`, `FindingsOnly`, `TimelineOnly`, or `Markdown`. |
+| `@IncludeQueryPlans` | `0` | `Report` | Optional plan output if supported. Plans are not shredded by default. |
+| `@WhatIf` | `0` | `Purge`, `Uninstall` | Preview what would happen without making changes. |
+| `@PreserveRunLog` | `0` | `Uninstall` | When `1`, preserves or archives run-log tables during uninstall if supported. |
+| `@Debug` | `0` | `Collect`, internal/debug paths | Enables debug behavior. Useful for troubleshooting collector readiness. |
+| `@ConfigKey` | `NULL` | `Configure` | Configuration key to update. If omitted, returns current configuration. |
+| `@ConfigValue` | `NULL` | `Configure` | New value for `@ConfigKey`. |
+| `@CreateAgentJob` | `0` | `Install` | Explicit opt-in to create a SQL Agent job for scheduled collection. |
+
+### Common `@Mode` values
+
+| Mode | What it does |
+|---|---|
+| `Help` | Shows usage information. This is the default mode. |
+| `About` | Shows version and build information. |
+| `Install` | Creates the local `FR_*` repository tables and seed data. |
+| `Status` | Shows current configuration, rules, recent runs, and repository footprint. |
+| `Collect` | Captures one diagnostic snapshot. |
+| `CollectDebug` | Runs diagnostic/debug collection behavior. |
+| `Report` | Reads collected snapshots and returns findings/timeline output. |
+| `Configure` | Shows or updates configuration values. |
+| `Purge` | Deletes old repository data based on retention settings. |
+| `Uninstall` | Removes SQLFlightRecorder repository objects. |
+
+---
+
+## Examples
+
+These examples are copy/paste friendly.
+
+### Install SQLFlightRecorder
+
+```sql
+EXEC dbo.sp_SQLFlightRecorder
+    @Mode = N'Install';
+```
+
+### Install and create the SQL Agent job
+
+Only use this if SQL Agent is available and you want scheduled collection.
+
+```sql
+EXEC dbo.sp_SQLFlightRecorder
+    @Mode = N'Install',
+    @CreateAgentJob = 1;
+```
+
+### Check status
+
+```sql
+EXEC dbo.sp_SQLFlightRecorder
+    @Mode = N'Status';
+```
+
+### Collect one snapshot
+
+```sql
+EXEC dbo.sp_SQLFlightRecorder
+    @Mode = N'Collect';
+```
+
+### Collect with a smaller top-N cap
+
+Use this if you want collection to be more conservative.
+
+```sql
+EXEC dbo.sp_SQLFlightRecorder
+    @Mode = N'Collect',
+    @TopN = 25;
+```
+
+### Run a basic report
+
+```sql
+EXEC dbo.sp_SQLFlightRecorder
+    @Mode = N'Report';
+```
+
+### Run a report for the last hour
+
+```sql
+DECLARE @StartTime datetime2(3) = DATEADD(hour, -1, SYSUTCDATETIME());
+DECLARE @EndTime   datetime2(3) = SYSUTCDATETIME();
+
+EXEC dbo.sp_SQLFlightRecorder
+    @Mode = N'Report',
+    @StartTime = @StartTime,
+    @EndTime = @EndTime;
+```
+
+### Run a report for one database
+
+```sql
+EXEC dbo.sp_SQLFlightRecorder
+    @Mode = N'Report',
+    @DatabaseName = N'YourDatabaseName';
+```
+
+### Show only high-severity findings
+
+```sql
+EXEC dbo.sp_SQLFlightRecorder
+    @Mode = N'Report',
+    @MinSeverity = N'High';
+```
+
+### Return more findings
+
+```sql
+EXEC dbo.sp_SQLFlightRecorder
+    @Mode = N'Report',
+    @MaxFindings = 500;
+```
+
+### Return findings only
+
+```sql
+EXEC dbo.sp_SQLFlightRecorder
+    @Mode = N'Report',
+    @OutputFormat = N'FindingsOnly';
+```
+
+### Return timeline only
+
+```sql
+EXEC dbo.sp_SQLFlightRecorder
+    @Mode = N'Report',
+    @OutputFormat = N'TimelineOnly';
+```
+
+### Return Markdown output
+
+```sql
+EXEC dbo.sp_SQLFlightRecorder
+    @Mode = N'Report',
+    @OutputFormat = N'Markdown';
+```
+
+### Include query plans if supported
+
+Plans are optional and are not parsed/shredded by default.
+
+```sql
+EXEC dbo.sp_SQLFlightRecorder
+    @Mode = N'Report',
+    @IncludeQueryPlans = 1;
+```
+
+### Show current configuration
+
+```sql
+EXEC dbo.sp_SQLFlightRecorder
+    @Mode = N'Configure';
+```
+
+### Change snapshot retention
+
+```sql
+EXEC dbo.sp_SQLFlightRecorder
+    @Mode = N'Configure',
+    @ConfigKey = N'SnapshotRetentionDays',
+    @ConfigValue = N'7';
+```
+
+### Change run-log retention
+
+```sql
+EXEC dbo.sp_SQLFlightRecorder
+    @Mode = N'Configure',
+    @ConfigKey = N'RunLogRetentionDays',
+    @ConfigValue = N'28';
+```
+
+### Change the default row cap
+
+```sql
+EXEC dbo.sp_SQLFlightRecorder
+    @Mode = N'Configure',
+    @ConfigKey = N'MaxRowsPerCollector',
+    @ConfigValue = N'50';
+```
+
+### Disable one or more rules
+
+Use a semicolon-delimited list.
+
+```sql
+EXEC dbo.sp_SQLFlightRecorder
+    @Mode = N'Configure',
+    @ConfigKey = N'DisabledRules',
+    @ConfigValue = N'FR_R0003_TopWaitTypeSpike;FR_R0004_FileIoLatencySpike';
+```
+
+### Preview purge
+
+Always preview purge first.
+
+```sql
+EXEC dbo.sp_SQLFlightRecorder
+    @Mode = N'Purge',
+    @WhatIf = 1;
+```
+
+### Run purge
+
+```sql
+EXEC dbo.sp_SQLFlightRecorder
+    @Mode = N'Purge',
+    @WhatIf = 0;
+```
+
+### Preview uninstall
+
+```sql
+EXEC dbo.sp_SQLFlightRecorder
+    @Mode = N'Uninstall',
+    @WhatIf = 1;
+```
+
+### Uninstall but preserve run log
+
+```sql
+EXEC dbo.sp_SQLFlightRecorder
+    @Mode = N'Uninstall',
+    @PreserveRunLog = 1;
+```
+
+### Clean uninstall
+
+```sql
+EXEC dbo.sp_SQLFlightRecorder
+    @Mode = N'Uninstall',
+    @PreserveRunLog = 0;
+```
+
+### Remove the procedure itself
+
+`Uninstall` removes the repository objects. If you also want to remove the stored procedure:
+
+```sql
+DROP PROCEDURE dbo.sp_SQLFlightRecorder;
+```
+
 
 ---
 
