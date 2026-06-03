@@ -213,8 +213,8 @@ EXEC dbo.sp_SQLFlightRecorder
 |---|---:|---|---|
 | `@Mode` | `Help` | All | Chooses what the procedure does. Examples: `Install`, `Collect`, `Report`, `Configure`, `Purge`, `Uninstall`. |
 | `@DatabaseName` | `NULL` | `Report` | Optional database filter for report output. |
-| `@StartTime` | `NULL` | `Report` | Optional report start time. If omitted, the procedure chooses a default window. |
-| `@EndTime` | `NULL` | `Report` | Optional report end time. If omitted, the procedure chooses a default window. |
+| `@StartTime` | `NULL` | `Report` | Optional report start time. If omitted, the procedure chooses a default window. Default 1 hour back. |
+| `@EndTime` | `NULL` | `Report` | Optional report end time. If omitted, the procedure chooses a default window. Current datetime. |
 | `@MinSeverity` | `Low` | `Report` | Minimum severity to show: `Informational`, `Low`, `Medium`, `High`, or `Critical`. |
 | `@MaxFindings` | `200` | `Report` | Maximum number of findings to return. Valid range: `10` to `2000`. |
 | `@TopN` | `50` | `Collect` | Per-collector row cap for top-N style collection. Valid range: `1` to `1000`. |
