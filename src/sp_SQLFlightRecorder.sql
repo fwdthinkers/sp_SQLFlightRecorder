@@ -1,37 +1,29 @@
 -- =============================================================================
 -- sp_SQLFlightRecorder
--- -----------------------------------------------------------------------------
--- SQL Server DBA Flight Recorder
--- A single, pure-T-SQL stored procedure that captures SQL Server diagnostic
--- data on a schedule and produces honest, prioritized findings about server
--- health and recent incidents.
+-- SQL Server DBA Flight Recorder — Part 3 (Install, Uninstall, Status modes)
+-- =============================================================================
+-- A single pure-T-SQL stored procedure that captures SQL Server diagnostic
+-- data on a schedule and produces prioritized findings about server health.
 --
--- Part 1 of 9 (v0.1 Design Prototype):
---   * Procedure shell
---   * Approved parameter surface (per design doc §2.2)
---   * Help mode (default)
---   * About mode
---   * Defensive SET options (per D-132)
+-- Part 3 scope (v0.1.0-alpha.3):
+--   * Install mode: idempotent repository schema creation
+--   * Uninstall mode: clean removal with optional archive
+--   * Status mode: six result sets (config, rules, runs, footprint, etc.)
+--   * Help mode: usage and parameter documentation
+--   * About mode: version metadata
+--   * All other modes: "not yet implemented" stubs
 --
--- This part is intentionally inert. It reads no DMVs, creates no tables,
--- creates no Agent job, and writes nothing. All other documented modes
--- return a clear "not yet implemented" message pointing at the part of the
--- v0.1 implementation plan that will deliver them.
---
--- Tool-Version:   0.1.0-alpha.1 (Part 1)
--- Build-Date-Utc: 2026-06-02
+-- Tool-Version:   0.1.0-alpha.3
+-- Build-Date-Utc: 2026-06-03
 -- License:        MIT
 -- Repository:     https://github.com/forward-thinkers-lab/sp_SQLFlightRecorder
--- Design doc:     docs/design.md
--- Decisions:      docs/decisions.md
--- Plan:           docs/implementation-plan.md (this is Part 1)
+-- Design:         docs/design.md | Decisions: docs/decisions.md
 --
--- Supported SQL Server range: 2012 through 2025 (per D-108).
--- This file is SQL Server 2012-compatible. Anything version-conditional
--- that is added later will go through dynamic SQL per D-112.
+-- SQL Server 2012–2025 compatible. Single file, no preprocessor.
+-- Capability probe (D-008, D-127) and sp_executesql discipline (D-112)
+-- enable single-source-of-truth deployment across all versions.
 --
--- Default @Mode is 'Help' (D-003). Accidentally executing this procedure
--- with no parameters cannot harm a server.
+-- Default @Mode='Help' (D-003): safe to execute accidentally.
 -- =============================================================================
 
 SET NOCOUNT ON;
@@ -39,440 +31,734 @@ SET ANSI_NULLS ON;
 SET QUOTED_IDENTIFIER ON;
 GO
 
--- -----------------------------------------------------------------------------
--- Idempotent stub: create an empty procedure if it does not exist, so the
--- ALTER below always succeeds. This pattern is SQL Server 2012-compatible
--- (DROP PROCEDURE IF EXISTS is 2016+ and intentionally not used here).
--- -----------------------------------------------------------------------------
 IF OBJECT_ID(N'dbo.sp_SQLFlightRecorder', N'P') IS NULL
-    EXEC (N'CREATE PROCEDURE dbo.sp_SQLFlightRecorder AS RETURN 0;');
+    EXEC sys.sp_executesql N'CREATE PROCEDURE dbo.sp_SQLFlightRecorder AS RETURN 0;';
 GO
 
 ALTER PROCEDURE dbo.sp_SQLFlightRecorder
-    -- --------------------------------------------------------------------------
-    -- Parameter surface (design doc §2.2). Every parameter is declared in
-    -- Part 1 even when its implementing mode is not yet present. Defaults
-    -- match the design exactly.
-    -- --------------------------------------------------------------------------
-      @Mode                 nvarchar(30)   = N'Help'        -- D-003
-    , @DatabaseName         sysname        = NULL           -- D-070 (Report filter)
-    , @StartTime            datetime2(3)   = NULL           -- D-180 (server local time in v1)
-    , @EndTime              datetime2(3)   = NULL           -- D-180
-    , @MinSeverity          nvarchar(20)   = N'Low'         -- D-070
-    , @MaxFindings          int            = 200            -- D-087 (clamped 10..2000)
-    , @TopN                 int            = 50             -- D-181 (configurable v1 default)
-    , @OutputFormat         nvarchar(20)   = N'Default'     -- D-079
-    , @IncludeQueryPlans    bit            = 0              -- D-082 (no-op in v0.1)
-    , @WhatIf               bit            = 0              -- Uninstall/Purge
-    , @PreserveRunLog       bit            = 0              -- D-183 (Uninstall opt-in)
-    , @Debug                bit            = 0              -- D-114 / D-128
+    @Mode                 nvarchar(30)   = N'Help'
+  , @DatabaseName         sysname        = NULL
+  , @StartTime            datetime2(3)   = NULL
+  , @EndTime              datetime2(3)   = NULL
+  , @MinSeverity          nvarchar(20)   = N'Low'
+  , @MaxFindings          int            = 200
+  , @TopN                 int            = 50
+  , @OutputFormat         nvarchar(20)   = N'Default'
+  , @IncludeQueryPlans    bit            = 0
+  , @WhatIf               bit            = 0
+  , @PreserveRunLog       bit            = 0
+  , @Debug                bit            = 0
 AS
 BEGIN
-    -- ==========================================================================
-    -- Session-level safety primitives (D-132).
-    -- These are set unconditionally at the top of every mode handler so that
-    -- the caller's session defaults can never make the procedure unsafe.
-    -- ==========================================================================
+    -- =========================================================================
+    -- Session safety primitives (D-132, D-133, D-134)
+    -- =========================================================================
     SET NOCOUNT ON;
     SET XACT_ABORT ON;
     SET ANSI_NULLS ON;
     SET ANSI_WARNINGS ON;
     SET QUOTED_IDENTIFIER ON;
     SET ARITHABORT ON;
-    SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED;   -- D-017
-    SET LOCK_TIMEOUT 5000;                              -- D-133
-    SET DEADLOCK_PRIORITY LOW;                          -- D-134
+    SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED;
+    SET LOCK_TIMEOUT 5000;
+    SET DEADLOCK_PRIORITY LOW;
 
-    -- --------------------------------------------------------------------------
-    -- Local constants used by Help / About output.
-    -- These string literals are the canonical source of "what version is this".
-    -- They are also embedded in the file header comment above; keep both in
-    -- sync when bumping the version.
-    -- --------------------------------------------------------------------------
-    DECLARE @ToolVersion             nvarchar(30)  = N'0.1.0-alpha.1';
-    DECLARE @BuildDateUtc            datetime2(3)  = CONVERT(datetime2(3), '2026-06-02T00:00:00');
-    DECLARE @SupportedSqlServerRange nvarchar(50)  = N'SQL Server 2012 through 2025';
-    DECLARE @LicenseUrl              nvarchar(200) = N'https://github.com/forward-thinkers-lab/sp_SQLFlightRecorder/blob/main/LICENSE';
-    DECLARE @RepositoryUrl           nvarchar(200) = N'https://github.com/forward-thinkers-lab/sp_SQLFlightRecorder';
-    DECLARE @DesignDocUrl            nvarchar(200) = N'https://github.com/forward-thinkers-lab/sp_SQLFlightRecorder/blob/main/docs/design.md';
-    DECLARE @PartNumber              int           = 1;
+    -- =========================================================================
+    -- Constants and version info
+    -- =========================================================================
+    DECLARE @ToolVersion             nvarchar(30)  = N'0.1.0-alpha.3';
+    DECLARE @BuildDateUtc            datetime2(3)  = CONVERT(datetime2(3), '2026-06-03T00:00:00');
+    DECLARE @SchemaVersion            nvarchar(20) = N'0.1.0-alpha.3';
+    DECLARE @SupportedSqlServerRange nvarchar(50)  = N'SQL Server 2012–2025';
+    DECLARE @PartNumber              int           = 3;
     DECLARE @PartTotal               int           = 9;
 
-    -- --------------------------------------------------------------------------
-    -- Closed set of documented v1 modes (design doc §2.1).
-    -- Every entry either resolves below or returns a clean
-    -- "not yet implemented" message. Anything outside this set is rejected
-    -- as an unknown mode.
-    -- --------------------------------------------------------------------------
-    DECLARE @ModeNormalized nvarchar(30) = NULLIF(LTRIM(RTRIM(@Mode)), N'');
-    IF @ModeNormalized IS NULL
-        SET @ModeNormalized = N'Help';
+    -- =========================================================================
+    -- Input normalization and validation
+    -- =========================================================================
+    DECLARE @ModeNormalized nvarchar(30) = LTRIM(RTRIM(ISNULL(@Mode, N'Help')));
 
-    -- Accept 'Version' as an alias for 'About' so DBAs muscle-memory works.
+    -- Alias 'Version' → 'About'
     IF UPPER(@ModeNormalized) = N'VERSION'
         SET @ModeNormalized = N'About';
 
-    -- ==========================================================================
-    -- Parameter validation
-    --
-    -- Validation is performed BEFORE dispatch so that an out-of-range value
-    -- is caught even for not-yet-implemented modes. Errors are returned as a
-    -- single-row result set with a stable shape, not raised as exceptions
-    -- (the procedure exists to help DBAs at 2 AM; surfacing a friendly row
-    -- is more useful than a TRY/CATCH-able error number here).
-    -- ==========================================================================
-
-    -- @MinSeverity must be one of the closed set used by D-067 / D-070.
-    IF UPPER(ISNULL(@MinSeverity, N'')) NOT IN (N'INFORMATIONAL', N'LOW', N'MEDIUM', N'HIGH', N'CRITICAL')
-    BEGIN
-        SELECT
-              N'Error'                                              AS Status
-            , N'Invalid @MinSeverity'                               AS ErrorCode
-            , CONCAT(
-                  N'@MinSeverity must be one of: Informational, Low, Medium, High, Critical. '
-                , N'You passed: '''
-                , ISNULL(@MinSeverity, N'<NULL>')
-                , N''''
-              )                                                     AS Message
-            , @ToolVersion                                          AS ToolVersion;
-        RETURN;
-    END;
-
-    -- @MaxFindings must be in [10, 2000] per D-087.
-    IF @MaxFindings IS NULL OR @MaxFindings < 10 OR @MaxFindings > 2000
-    BEGIN
-        SELECT
-              N'Error'                                              AS Status
-            , N'Invalid @MaxFindings'                               AS ErrorCode
-            , CONCAT(
-                  N'@MaxFindings must be between 10 and 2000 (default 200). You passed: '
-                , ISNULL(CONVERT(nvarchar(20), @MaxFindings), N'<NULL>')
-              )                                                     AS Message
-            , @ToolVersion                                          AS ToolVersion;
-        RETURN;
-    END;
-
-    -- @TopN sanity check. The configurable default is 50 per D-181; we accept
-    -- 1..1000 here as the outer bound. Per-collector overrides will come via
-    -- FR_Config in Part 8.
-    IF @TopN IS NULL OR @TopN < 1 OR @TopN > 1000
-    BEGIN
-        SELECT
-              N'Error'                                              AS Status
-            , N'Invalid @TopN'                                      AS ErrorCode
-            , CONCAT(
-                  N'@TopN must be between 1 and 1000 (default 50). You passed: '
-                , ISNULL(CONVERT(nvarchar(20), @TopN), N'<NULL>')
-              )                                                     AS Message
-            , @ToolVersion                                          AS ToolVersion;
-        RETURN;
-    END;
-
-    -- @OutputFormat must be one of the closed set per D-079.
-    IF UPPER(ISNULL(@OutputFormat, N'')) NOT IN (N'DEFAULT', N'FINDINGSONLY', N'TIMELINEONLY', N'MARKDOWN')
-    BEGIN
-        SELECT
-              N'Error'                                              AS Status
-            , N'Invalid @OutputFormat'                              AS ErrorCode
-            , CONCAT(
-                  N'@OutputFormat must be one of: Default, FindingsOnly, TimelineOnly, Markdown. '
-                , N'You passed: '''
-                , ISNULL(@OutputFormat, N'<NULL>')
-                , N''''
-              )                                                     AS Message
-            , @ToolVersion                                          AS ToolVersion;
-        RETURN;
-    END;
-
-    -- @StartTime / @EndTime ordering (only validated when both supplied).
-    IF @StartTime IS NOT NULL AND @EndTime IS NOT NULL AND @StartTime >= @EndTime
-    BEGIN
-        SELECT
-              N'Error'                                              AS Status
-            , N'Invalid time window'                                AS ErrorCode
-            , N'@StartTime must be strictly less than @EndTime. Times are interpreted as server local time in v1 (see D-180).' AS Message
-            , @ToolVersion                                          AS ToolVersion;
-        RETURN;
-    END;
-
-    -- Unknown @Mode rejection (closed set per §2.1, plus 'About' added in Part 1).
+    -- Validate closed set of modes
     IF UPPER(@ModeNormalized) NOT IN (
-          N'HELP'
-        , N'ABOUT'
-        , N'INSTALL'
-        , N'UNINSTALL'
-        , N'COLLECT'
-        , N'COLLECTDEBUG'
-        , N'REPORT'
-        , N'STATUS'
-        , N'CONFIGURE'
-        , N'PURGE'
-        , N'COLLECTANDREPORT'
-        , N'INSTALLDEMODATA'
+        N'HELP', N'ABOUT', N'INSTALL', N'UNINSTALL',
+        N'STATUS', N'COLLECT', N'REPORT', N'CONFIGURE', N'PURGE',
+        N'COLLECTDEBUG', N'COLLECTANDREPORT', N'INSTALLDEMODATA'
     )
     BEGIN
         SELECT
-              N'Error'                                              AS Status
-            , N'Unknown @Mode'                                      AS ErrorCode
-            , CONCAT(
-                  N'@Mode must be one of: Help, About, Install, Uninstall, Collect, Report, Status, Configure, Purge, CollectAndReport, InstallDemoData. '
-                , N'You passed: '''
-                , ISNULL(@Mode, N'<NULL>')
-                , N'''. Run EXEC dbo.sp_SQLFlightRecorder @Mode = ''Help'' for usage.'
-              )                                                     AS Message
-            , @ToolVersion                                          AS ToolVersion;
+            N'Error' AS Status,
+            N'UnknownMode' AS ErrorCode,
+            CONCAT(N'@Mode must be Help, About, Install, Uninstall, Status, or other documented mode. You passed: ''', @Mode, N'''.') AS Message,
+            @ToolVersion AS ToolVersion;
         RETURN;
     END;
 
-    -- ==========================================================================
-    -- Mode dispatch
-    -- ==========================================================================
+    -- Validate parameters
+    IF UPPER(ISNULL(@MinSeverity, N'')) NOT IN (N'INFORMATIONAL', N'LOW', N'MEDIUM', N'HIGH', N'CRITICAL')
+    BEGIN
+        SELECT N'Error' AS Status, N'InvalidMinSeverity' AS ErrorCode,
+            N'@MinSeverity must be Informational, Low, Medium, High, or Critical.' AS Message,
+            @ToolVersion AS ToolVersion;
+        RETURN;
+    END;
 
-    -- --------------------------------------------------------------------------
-    -- About mode (Part 1)
-    --
-    -- One result set, one row, fixed columns. Documented in design doc §2.1.
-    -- The shape of this result is part of the public contract from v0.1
-    -- onwards; columns may be added in minor releases but never removed
-    -- or renamed (D-023, D-085 spirit).
-    -- --------------------------------------------------------------------------
+    IF @MaxFindings IS NULL OR @MaxFindings < 10 OR @MaxFindings > 2000
+    BEGIN
+        SELECT N'Error' AS Status, N'InvalidMaxFindings' AS ErrorCode,
+            N'@MaxFindings must be between 10 and 2000.' AS Message,
+            @ToolVersion AS ToolVersion;
+        RETURN;
+    END;
+
+    IF @TopN IS NULL OR @TopN < 1 OR @TopN > 1000
+    BEGIN
+        SELECT N'Error' AS Status, N'InvalidTopN' AS ErrorCode,
+            N'@TopN must be between 1 and 1000.' AS Message,
+            @ToolVersion AS ToolVersion;
+        RETURN;
+    END;
+
+    IF UPPER(ISNULL(@OutputFormat, N'')) NOT IN (N'DEFAULT', N'FINDINGSONLY', N'TIMELINEONLY', N'MARKDOWN')
+    BEGIN
+        SELECT N'Error' AS Status, N'InvalidOutputFormat' AS ErrorCode,
+            N'@OutputFormat must be Default, FindingsOnly, TimelineOnly, or Markdown.' AS Message,
+            @ToolVersion AS ToolVersion;
+        RETURN;
+    END;
+
+    IF @StartTime IS NOT NULL AND @EndTime IS NOT NULL AND @StartTime >= @EndTime
+    BEGIN
+        SELECT N'Error' AS Status, N'InvalidTimeWindow' AS ErrorCode,
+            N'@StartTime must be strictly less than @EndTime.' AS Message,
+            @ToolVersion AS ToolVersion;
+        RETURN;
+    END;
+
+    -- =========================================================================
+    -- Mode: ABOUT
+    -- =========================================================================
     IF UPPER(@ModeNormalized) = N'ABOUT'
     BEGIN
         SELECT
-              @ToolVersion                                          AS ToolVersion
-            , @BuildDateUtc                                         AS BuildDateUtc
-            , @SupportedSqlServerRange                              AS SupportedSqlServerRange
-            , CAST(@PartNumber AS nvarchar(10)) + N' of '
-              + CAST(@PartTotal AS nvarchar(10))                    AS ImplementationPart
-            , CONVERT(nvarchar(50), SYSUTCDATETIME(), 126) + N'Z'   AS InvocationUtc
-            , @LicenseUrl                                           AS LicenseUrl
-            , @RepositoryUrl                                        AS RepositoryUrl
-            , @DesignDocUrl                                         AS DesignDocUrl;
+            @ToolVersion AS ToolVersion,
+            @BuildDateUtc AS BuildDateUtc,
+            @SupportedSqlServerRange AS SupportedSqlServerRange,
+            CONCAT(@PartNumber, N' of ', @PartTotal) AS ImplementationPart,
+            CONVERT(nvarchar(50), SYSUTCDATETIME(), 126) + N'Z' AS InvocationUtc;
         RETURN;
     END;
 
-    -- --------------------------------------------------------------------------
-    -- Help mode (Part 1 default)
-    --
-    -- All output goes through PRINT so a DBA running this in SSMS or Azure
-    -- Data Studio sees readable text in the Messages tab without column
-    -- truncation. Help intentionally does not return a result set.
-    --
-    -- PRINT is limited to ~8000 chars per call; we therefore split into
-    -- several short PRINTs grouped by section.
-    -- --------------------------------------------------------------------------
+    -- =========================================================================
+    -- Mode: HELP
+    -- =========================================================================
     IF UPPER(@ModeNormalized) = N'HELP'
     BEGIN
-        PRINT N'';
         PRINT N'================================================================================';
-        PRINT N' sp_SQLFlightRecorder';
-        PRINT N' SQL Server DBA Flight Recorder';
-        PRINT N'--------------------------------------------------------------------------------';
-        PRINT N' Version : ' + @ToolVersion
-              + N'   Build : ' + CONVERT(nvarchar(10), @BuildDateUtc, 23)
-              + N'   Implementation part : '
-              + CAST(@PartNumber AS nvarchar(10)) + N' of '
-              + CAST(@PartTotal AS nvarchar(10));
-        PRINT N' License : MIT';
-        PRINT N' Repo    : ' + @RepositoryUrl;
-        PRINT N' Design  : ' + @DesignDocUrl;
+        PRINT N'sp_SQLFlightRecorder — SQL Server DBA Flight Recorder';
+        PRINT CONCAT(N'Version: ', @ToolVersion, N'  |  Part ', @PartNumber, N' of ', @PartTotal);
         PRINT N'================================================================================';
         PRINT N'';
-
-        PRINT N' WHAT THIS IS';
-        PRINT N' ------------';
-        PRINT N' A single, pure-T-SQL stored procedure that captures SQL Server diagnostic';
-        PRINT N' data on a schedule and produces honest, prioritized findings about server';
-        PRINT N' health and recent incidents. It is a DBA''s flight recorder: cheap to run';
-        PRINT N' continuously, useful after the fact.';
+        PRINT N'MODES';
+        PRINT N'-----';
+        PRINT N'  Help              Default. Print this message.';
+        PRINT N'  About             Return version metadata (one-row result set).';
+        PRINT N'  Install           Create FR_* schema (idempotent). Part 3.';
+        PRINT N'  Uninstall         Drop FR_* schema. Part 3. @WhatIf previews; @PreserveRunLog archives.';
+        PRINT N'  Status            Six result sets: config, rules, runs, footprint, etc. Part 3.';
+        PRINT N'  Collect           Not yet implemented (Part 4–5).';
+        PRINT N'  Report            Not yet implemented (Part 6).';
+        PRINT N'  Configure, Purge  Not yet implemented (Part 8).';
         PRINT N'';
-
-        PRINT N' WHAT THIS IS *NOT*';
-        PRINT N' ------------------';
-        PRINT N'   * Not a monitoring platform (no alerting, no dashboards).';
-        PRINT N'   * Not a notification system (no email, no webhooks).';
-        PRINT N'   * Not an "AI" tool (no ML, no anomaly detection).';
-        PRINT N'   * Not a multi-instance product (per-instance install only).';
-        PRINT N'   * Not a remediation tool (diagnoses only; never takes corrective action).';
+        PRINT N'PARAMETERS';
+        PRINT N'----------';
+        PRINT N'  @Mode             Which mode to run (default: Help).';
+        PRINT N'  @MinSeverity      Report filter: Informational, Low, Medium, High, Critical (default: Low).';
+        PRINT N'  @MaxFindings      Cap findings at 10–2000 rows (default: 200).';
+        PRINT N'  @TopN             Collector-side row cap per category (default: 50).';
+        PRINT N'  @OutputFormat     Default, FindingsOnly, TimelineOnly, or Markdown (default: Default).';
+        PRINT N'  @WhatIf           Preview without executing (Uninstall, Purge modes).';
+        PRINT N'  @PreserveRunLog   Uninstall: 1=archive FR_RunLog with timestamped name (default: 0).';
+        PRINT N'  @Debug            Print dynamic SQL without executing (default: 0).';
         PRINT N'';
-
-        PRINT N' CHARTER PILLARS';
-        PRINT N' ---------------';
-        PRINT N'   * Boring, transparent, easy to test. Deterministic behavior; auditable evidence.';
-        PRINT N'   * Honest. Severity / Confidence / EvidenceType on every finding;';
-        PRINT N'     no overclaiming; coverage gaps are findings, not silence.';
-        PRINT N'   * Safe on production. Bounded reads; no plan shredding; no user-table scans;';
-        PRINT N'     cooperative timeout.';
-        PRINT N'   * Compatible. SQL Server 2012 through 2025, on-prem and cloud;';
-        PRINT N'     capability-driven branching.';
-        PRINT N'   * Open source first. GitHub-native; DBA-friendly contribution model.';
+        PRINT N'CHARTER PILLARS';
+        PRINT N'---------------';
+        PRINT N'  * Boring, transparent, deterministic behavior.';
+        PRINT N'  * Honest: every finding has Severity, Confidence, EvidenceType.';
+        PRINT N'  * Safe on production: bounded reads, no plan shredding, READ UNCOMMITTED.';
+        PRINT N'  * Compatible: SQL Server 2012–2025 (capability-driven branching, no string parsing).';
+        PRINT N'  * Open source first: GitHub-native, DBA-friendly contribution model.';
         PRINT N'';
-
-        PRINT N' MODES (full v1 surface; Part 1 only implements Help and About)';
-        PRINT N' --------------------------------------------------------------';
-        PRINT N'   Help              Default. Prints this text. Cannot harm a server.';
-        PRINT N'   About             Returns version, build date, supported range, links.';
-        PRINT N'                     (Alias: Version)';
-        PRINT N'   Install           [Not yet implemented in Part 1; arrives in Part 3.]';
-        PRINT N'                     Creates the FR_* repository schema. Idempotent.';
-        PRINT N'   Uninstall         [Not yet implemented in Part 1; arrives in Part 3.]';
-        PRINT N'                     Drops all FR_* objects. Use @PreserveRunLog = 1 to keep';
-        PRINT N'                     the run log archived under a timestamped rename.';
-        PRINT N'   Collect           [Not yet implemented in Part 1; arrives in Part 4 (first';
-        PRINT N'                     collector) and Part 5 (remaining six v0.1 collectors).]';
-        PRINT N'                     Takes one snapshot of bounded diagnostic data.';
-        PRINT N'   Report            [Not yet implemented in Part 1; arrives in Part 6.]';
-        PRINT N'                     Produces Findings + Timeline for a time window.';
-        PRINT N'                     Returns at most two result sets.';
-        PRINT N'   Status            [Not yet implemented in Part 1; arrives in Part 3.]';
-        PRINT N'                     Reports current configuration, capability snapshot,';
-        PRINT N'                     run-log summary, and repository size.';
-        PRINT N'   Configure         [Not yet implemented in Part 1; arrives in Part 8.]';
-        PRINT N'                     Reads/writes FR_Config entries with validation.';
-        PRINT N'   Purge             [Not yet implemented in Part 1; arrives in Part 8.]';
-        PRINT N'                     Batched retention cleanup. Honors @WhatIf.';
-        PRINT N'   CollectAndReport  Documented as non-recommended; ad-hoc use only.';
-        PRINT N'                     [Not yet implemented in Part 1.]';
-        PRINT N'   InstallDemoData   [Not yet implemented in v0.1; deferred to v0.2/v0.3.]';
-        PRINT N'';
-
-        PRINT N' PARAMETERS';
-        PRINT N' ----------';
-        PRINT N'   @Mode                nvarchar(30)   Default: N''Help''';
-        PRINT N'                        Which mode to run. See list above.';
-        PRINT N'   @DatabaseName        sysname        Default: NULL';
-        PRINT N'                        Restrict Report findings to one database.';
-        PRINT N'   @StartTime           datetime2(3)   Default: NULL';
-        PRINT N'                        Report window start. Interpreted as SERVER LOCAL TIME';
-        PRINT N'                        in v1 (D-180). Explicit @TimeZone deferred to v0.4+.';
-        PRINT N'   @EndTime             datetime2(3)   Default: NULL';
-        PRINT N'                        Report window end. Server local time. Must be > @StartTime.';
-        PRINT N'   @MinSeverity         nvarchar(20)   Default: N''Low''';
-        PRINT N'                        Post-evaluation filter (D-070). Cannot hide Critical';
-        PRINT N'                        coverage findings. Valid: Informational, Low, Medium,';
-        PRINT N'                        High, Critical.';
-        PRINT N'   @MaxFindings         int            Default: 200   (clamped 10..2000)';
-        PRINT N'                        Safety cap on Findings result-set size (D-087).';
-        PRINT N'                        Overflow truncates with one Informational row.';
-        PRINT N'   @TopN                int            Default: 50    (clamped 1..1000)';
-        PRINT N'                        Collector-side row cap per category (D-070, D-181).';
-        PRINT N'                        Per-category override via FR_Config in Part 8.';
-        PRINT N'   @OutputFormat        nvarchar(20)   Default: N''Default''';
-        PRINT N'                        One of: Default, FindingsOnly, TimelineOnly, Markdown.';
-        PRINT N'   @IncludeQueryPlans   bit            Default: 0';
-        PRINT N'                        Surface Query Store plan XML by handle. Never parsed';
-        PRINT N'                        in T-SQL (D-015, D-082). No-op in v0.1.';
-        PRINT N'   @WhatIf              bit            Default: 0';
-        PRINT N'                        Used by Uninstall and Purge to preview without acting.';
-        PRINT N'   @PreserveRunLog      bit            Default: 0';
-        PRINT N'                        Uninstall opt-in (D-183). When 1, FR_RunLog and';
-        PRINT N'                        FR_RunLogStep are renamed to FR_RunLog_Archive_<ts>.';
-        PRINT N'   @Debug               bit            Default: 0';
-        PRINT N'                        PRINTs dynamic SQL without executing (D-114).';
-        PRINT N'                        Collect runs as Mode=''CollectDebug'' with no rows';
-        PRINT N'                        persisted (D-128). No-op in Part 1.';
-        PRINT N'';
-
-        PRINT N' SAFETY';
-        PRINT N' ------';
-        PRINT N'   The procedure sets these session-level safety primitives at the top of';
-        PRINT N'   every mode handler (D-132). Caller session defaults cannot make the tool';
-        PRINT N'   unsafe:';
-        PRINT N'     SET NOCOUNT ON';
-        PRINT N'     SET XACT_ABORT ON';
-        PRINT N'     SET ANSI_NULLS, ANSI_WARNINGS, QUOTED_IDENTIFIER, ARITHABORT ON';
-        PRINT N'     SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED   -- D-017';
-        PRINT N'     SET LOCK_TIMEOUT 5000                              -- D-133';
-        PRINT N'     SET DEADLOCK_PRIORITY LOW                          -- D-134';
-        PRINT N'';
-        PRINT N'   Part 1 does NOT read DMVs, does NOT create tables, does NOT create an';
-        PRINT N'   Agent job, and does NOT write anywhere. Running this procedure with no';
-        PRINT N'   parameters cannot harm a server.';
-        PRINT N'';
-
-        PRINT N' EXAMPLES';
-        PRINT N' --------';
-        PRINT N'   -- Show this help text:';
-        PRINT N'   EXEC dbo.sp_SQLFlightRecorder;';
-        PRINT N'';
-        PRINT N'   -- Show version metadata (one-row result set):';
-        PRINT N'   EXEC dbo.sp_SQLFlightRecorder @Mode = N''About'';';
-        PRINT N'';
-        PRINT N'   -- Equivalent alias:';
-        PRINT N'   EXEC dbo.sp_SQLFlightRecorder @Mode = N''Version'';';
-        PRINT N'';
-
-        PRINT N' STATUS OF THIS BUILD';
-        PRINT N' --------------------';
-        PRINT N'   This is implementation Part ' + CAST(@PartNumber AS nvarchar(10))
-              + N' of ' + CAST(@PartTotal AS nvarchar(10))
-              + N' on the v0.1 roadmap. Only Help and';
-        PRINT N'   About are functional. All other documented modes return a clear';
-        PRINT N'   "not yet implemented" notice naming the part that will deliver them.';
-        PRINT N'   See docs/implementation-plan.md for the full plan.';
-        PRINT N'';
-        PRINT N' TROUBLESHOOTING';
-        PRINT N' ---------------';
-        PRINT N'   The user-facing failure-mode catalog (D-147) lives at:';
-        PRINT N'     docs/operations/troubleshooting.md';
-        PRINT N'   It is intentionally not duplicated here so the canonical version cannot';
-        PRINT N'   drift out of sync.';
         PRINT N'================================================================================';
-        PRINT N'';
         RETURN;
     END;
 
-    -- --------------------------------------------------------------------------
-    -- All other documented modes: clean "not yet implemented" message.
-    --
-    -- Per Part 1 acceptance criterion #5, every documented @Mode value must
-    -- return either real output or a clear "not yet implemented" message --
-    -- never an exception, never silence.
-    --
-    -- One result set, fixed shape, no side effects.
-    -- --------------------------------------------------------------------------
-    DECLARE @TargetPart nvarchar(40);
-    SET @TargetPart =
-        CASE UPPER(@ModeNormalized)
-            WHEN N'INSTALL'          THEN N'Part 3'
-            WHEN N'UNINSTALL'        THEN N'Part 3'
-            WHEN N'STATUS'           THEN N'Part 3'
-            WHEN N'COLLECT'          THEN N'Part 4 (first collector) and Part 5'
-            WHEN N'COLLECTDEBUG'     THEN N'Part 4'
-            WHEN N'REPORT'           THEN N'Part 6'
-            WHEN N'CONFIGURE'        THEN N'Part 8'
-            WHEN N'PURGE'            THEN N'Part 8'
-            WHEN N'COLLECTANDREPORT' THEN N'Part 6 (depends on Collect from Part 4/5)'
-            WHEN N'INSTALLDEMODATA'  THEN N'deferred to v0.2/v0.3 (per D-182)'
-            ELSE N'a later part'
+    -- =========================================================================
+    -- Mode: INSTALL
+    -- =========================================================================
+    IF UPPER(@ModeNormalized) = N'INSTALL'
+    BEGIN
+        -- Validation
+        IF DB_NAME() IN (N'master', N'model', N'msdb', N'tempdb', N'distribution')
+        BEGIN
+            SELECT N'Error' AS Status, N'SystemDatabaseRefused' AS ErrorCode,
+                N'Install is allowed only in a user database (D-004).' AS Message,
+                @ToolVersion AS ToolVersion;
+            RETURN;
         END;
 
-    SELECT
-          N'NotYetImplemented'                                              AS Status
-        , @ModeNormalized                                                   AS RequestedMode
-        , CONCAT(
-              N'Mode '''
-            , @ModeNormalized
-            , N''' is documented but not yet implemented in this build. '
-            , N'Scheduled to arrive in '
-            , @TargetPart
-            , N'. This build is implementation Part '
-            , CAST(@PartNumber AS nvarchar(10))
-            , N' of '
-            , CAST(@PartTotal AS nvarchar(10))
-            , N' on the v0.1 roadmap. Run EXEC dbo.sp_SQLFlightRecorder @Mode = N''Help'' for the full mode list.'
-          )                                                                 AS Message
-        , @ToolVersion                                                      AS ToolVersion
-        , CAST(@PartNumber AS nvarchar(10)) + N' of '
-          + CAST(@PartTotal AS nvarchar(10))                                AS ImplementationPart
-        , @DesignDocUrl                                                     AS DesignDocUrl;
+        IF ISNULL(CONVERT(nvarchar(20), DATABASEPROPERTYEX(DB_NAME(), N'Updateability')), N'') <> N'READ_WRITE'
+        BEGIN
+            SELECT N'Error' AS Status, N'ReadOnlyDatabaseRefused' AS ErrorCode,
+                N'Database must be READ_WRITE.' AS Message,
+                @ToolVersion AS ToolVersion;
+            RETURN;
+        END;
 
-    RETURN;
+        IF NOT EXISTS (
+            SELECT 1 FROM sys.fn_my_permissions(NULL, N'SERVER') p
+            WHERE p.permission_name = N'VIEW SERVER STATE'
+        )
+        BEGIN
+            SELECT N'Error' AS Status, N'MissingViewServerState' AS ErrorCode,
+                N'Requires VIEW SERVER STATE permission (D-118).' AS Message,
+                @ToolVersion AS ToolVersion;
+            RETURN;
+        END;
+
+        -- Check existing schema version (D-038, D-039: forward-only, no downgrade)
+        DECLARE @ExistingSchemaVersion nvarchar(20) = NULL;
+        IF OBJECT_ID(N'dbo.FR_Config', N'U') IS NOT NULL
+        BEGIN
+            SELECT @ExistingSchemaVersion = ConfigValue
+            FROM dbo.FR_Config
+            WHERE ConfigKey = N'SchemaVersion';
+        END;
+
+        IF @ExistingSchemaVersion IS NOT NULL AND @ExistingSchemaVersion > @SchemaVersion
+        BEGIN
+            SELECT N'Error' AS Status, N'DowngradeBlocked' AS ErrorCode,
+                CONCAT(N'Existing schema version ', @ExistingSchemaVersion, N' > ', @SchemaVersion, N'. Downgrade not supported (D-039).') AS Message,
+                @ToolVersion AS ToolVersion;
+            RETURN;
+        END;
+
+        -- Compression settings (D-034)
+        DECLARE @EngineEdition int = TRY_CONVERT(int, SERVERPROPERTY(N'EngineEdition'));
+        DECLARE @ProductMajorVersion int = TRY_CONVERT(int, SERVERPROPERTY(N'ProductMajorVersion'));
+        DECLARE @UsePageCompression bit = 0;
+        DECLARE @CreateSql nvarchar(max);
+        DECLARE @TableCompressionClause nvarchar(64) = N'';
+        DECLARE @IndexCompressionClause nvarchar(64) = N'';
+
+        IF @EngineEdition IN (3, 5, 8) OR (@EngineEdition = 2 AND ISNULL(@ProductMajorVersion, 0) >= 13)
+        BEGIN
+            SET @TableCompressionClause = N' WITH (DATA_COMPRESSION = PAGE)';
+            SET @IndexCompressionClause = @TableCompressionClause;
+        END;
+
+        BEGIN TRY
+            -- Create FR_Config (D-025, D-026, D-030, D-031)
+            IF OBJECT_ID(N'dbo.FR_Config', N'U') IS NULL
+            BEGIN
+                SET @CreateSql = N'
+CREATE TABLE dbo.FR_Config (
+    ConfigKey    sysname         NOT NULL PRIMARY KEY CLUSTERED,
+    ConfigValue  nvarchar(4000)  NULL,
+    Description  nvarchar(400)   NULL,
+    ModifiedUtc  datetime2(3)    NOT NULL DEFAULT (SYSUTCDATETIME())
+)' + @TableCompressionClause;
+                EXEC sys.sp_executesql @CreateSql;
+            END;
+
+            -- Create FR_RunLog (D-030, D-031)
+            IF OBJECT_ID(N'dbo.FR_RunLog', N'U') IS NULL
+            BEGIN
+                SET @CreateSql = N'
+CREATE TABLE dbo.FR_RunLog (
+    RunId               bigint         IDENTITY(1,1) NOT NULL PRIMARY KEY NONCLUSTERED,
+    StartUtc            datetime2(3)   NOT NULL,
+    EndUtc              datetime2(3)   NULL,
+    Mode                nvarchar(30)   NOT NULL,
+    Status              nvarchar(20)   NULL,
+    Reason              nvarchar(400)  NULL,
+    InstanceFingerprint nvarchar(200)  NULL,
+    CapabilitySnapshot  nvarchar(max)  NULL,
+    ErrorMessage        nvarchar(max)  NULL,
+    LoginName           sysname        NULL,
+    HostName            sysname        NULL
+)' + @TableCompressionClause;
+                EXEC sys.sp_executesql @CreateSql;
+
+                SET @CreateSql = N'CREATE CLUSTERED INDEX CIX_FR_RunLog_StartUtc_RunId ON dbo.FR_RunLog (StartUtc, RunId)' + @IndexCompressionClause;
+                EXEC sys.sp_executesql @CreateSql;
+            END;
+
+            -- Create FR_RunLogStep
+            IF OBJECT_ID(N'dbo.FR_RunLogStep', N'U') IS NULL
+            BEGIN
+                SET @CreateSql = N'
+CREATE TABLE dbo.FR_RunLogStep (
+    RunStepId     bigint         IDENTITY(1,1) NOT NULL PRIMARY KEY NONCLUSTERED,
+    RunId         bigint         NOT NULL FOREIGN KEY REFERENCES dbo.FR_RunLog (RunId),
+    StepName      nvarchar(60)   NOT NULL,
+    StartUtc      datetime2(3)   NOT NULL,
+    EndUtc        datetime2(3)   NULL,
+    Status        nvarchar(20)   NULL,
+    RowsCollected int            NULL,
+    Reason        nvarchar(400)  NULL,
+    ErrorMessage  nvarchar(max)  NULL
+)' + @TableCompressionClause;
+                EXEC sys.sp_executesql @CreateSql;
+
+                SET @CreateSql = N'CREATE CLUSTERED INDEX CIX_FR_RunLogStep_StartUtc_RunStepId ON dbo.FR_RunLogStep (StartUtc, RunStepId)' + @IndexCompressionClause;
+                EXEC sys.sp_executesql @CreateSql;
+            END;
+
+            -- Create FR_Snapshot (D-135: inserted after children)
+            IF OBJECT_ID(N'dbo.FR_Snapshot', N'U') IS NULL
+            BEGIN
+                SET @CreateSql = N'
+CREATE TABLE dbo.FR_Snapshot (
+    SnapshotId            bigint         IDENTITY(1,1) NOT NULL PRIMARY KEY NONCLUSTERED,
+    SnapshotUtc           datetime2(3)   NOT NULL,
+    InstanceFingerprint   nvarchar(200)  NULL,
+    RunId                 bigint         NULL FOREIGN KEY REFERENCES dbo.FR_RunLog (RunId)
+)' + @TableCompressionClause;
+                EXEC sys.sp_executesql @CreateSql;
+
+                SET @CreateSql = N'CREATE CLUSTERED INDEX CIX_FR_Snapshot_SnapshotUtc_SnapshotId ON dbo.FR_Snapshot (SnapshotUtc, SnapshotId)' + @IndexCompressionClause;
+                EXEC sys.sp_executesql @CreateSql;
+            END;
+
+            -- Create FR_InstanceSnapshot
+            IF OBJECT_ID(N'dbo.FR_InstanceSnapshot', N'U') IS NULL
+            BEGIN
+                SET @CreateSql = N'
+CREATE TABLE dbo.FR_InstanceSnapshot (
+    InstanceSnapshotId  bigint         IDENTITY(1,1) NOT NULL PRIMARY KEY NONCLUSTERED,
+    SnapshotId          bigint         NOT NULL FOREIGN KEY REFERENCES dbo.FR_Snapshot (SnapshotId),
+    SnapshotUtc         datetime2(3)   NOT NULL,
+    ServerName          sysname        NULL,
+    EngineEdition       int            NULL,
+    ProductVersion      nvarchar(50)   NULL,
+    ProductLevel        nvarchar(20)   NULL,
+    IsHadrEnabled       bit            NULL,
+    Platform            nvarchar(20)   NULL,
+    CpuCount            int            NULL,
+    PhysicalMemoryKb    bigint         NULL,
+    SqlStartTimeUtc     datetime2(3)   NULL
+)' + @TableCompressionClause;
+                EXEC sys.sp_executesql @CreateSql;
+
+                SET @CreateSql = N'CREATE CLUSTERED INDEX CIX_FR_InstanceSnapshot_SnapshotUtc_InstanceSnapshotId ON dbo.FR_InstanceSnapshot (SnapshotUtc, InstanceSnapshotId)' + @IndexCompressionClause;
+                EXEC sys.sp_executesql @CreateSql;
+            END;
+
+            -- Create FR_Configuration
+            IF OBJECT_ID(N'dbo.FR_Configuration', N'U') IS NULL
+            BEGIN
+                SET @CreateSql = N'
+CREATE TABLE dbo.FR_Configuration (
+    ConfigurationId    bigint         IDENTITY(1,1) NOT NULL PRIMARY KEY NONCLUSTERED,
+    SnapshotId         bigint         NOT NULL FOREIGN KEY REFERENCES dbo.FR_Snapshot (SnapshotId),
+    SnapshotUtc        datetime2(3)   NOT NULL,
+    ConfigurationKind  nvarchar(30)   NOT NULL,
+    Name               nvarchar(200)  NOT NULL,
+    ValueText          nvarchar(400)  NULL,
+    IsDefault          bit            NULL
+)' + @TableCompressionClause;
+                EXEC sys.sp_executesql @CreateSql;
+
+                SET @CreateSql = N'CREATE CLUSTERED INDEX CIX_FR_Configuration_SnapshotUtc_ConfigurationId ON dbo.FR_Configuration (SnapshotUtc, ConfigurationId)' + @IndexCompressionClause;
+                EXEC sys.sp_executesql @CreateSql;
+            END;
+
+            -- Create FR_Request
+            IF OBJECT_ID(N'dbo.FR_Request', N'U') IS NULL
+            BEGIN
+                SET @CreateSql = N'
+CREATE TABLE dbo.FR_Request (
+    RequestId            bigint         IDENTITY(1,1) NOT NULL PRIMARY KEY NONCLUSTERED,
+    SnapshotId           bigint         NOT NULL FOREIGN KEY REFERENCES dbo.FR_Snapshot (SnapshotId),
+    SnapshotUtc          datetime2(3)   NOT NULL,
+    SessionId            int            NOT NULL,
+    DatabaseId           int            NOT NULL,
+    BlockingSessionId    int            NULL,
+    WaitTypeAtCapture    nvarchar(60)   NULL,
+    WaitTimeMs           int            NULL,
+    CpuTimeMs            int            NULL,
+    LogicalReads         bigint         NULL,
+    Status               nvarchar(30)   NULL,
+    Command              nvarchar(60)   NULL,
+    OpenTransactionCount int            NULL,
+    QueryHash            binary(8)      NULL,
+    QueryPlanHash        binary(8)      NULL,
+    RequestedMemoryKb    bigint         NULL,
+    GrantedMemoryKb      bigint         NULL,
+    MemoryGrantTimeUtc   datetime2(3)   NULL
+)' + @TableCompressionClause;
+                EXEC sys.sp_executesql @CreateSql;
+
+                SET @CreateSql = N'CREATE CLUSTERED INDEX CIX_FR_Request_SnapshotUtc_RequestId ON dbo.FR_Request (SnapshotUtc, RequestId)' + @IndexCompressionClause;
+                EXEC sys.sp_executesql @CreateSql;
+            END;
+
+            -- Create FR_Wait (D-031: clustered on SnapshotUtc, SnapshotId, WaitType)
+            IF OBJECT_ID(N'dbo.FR_Wait', N'U') IS NULL
+            BEGIN
+                SET @CreateSql = N'
+CREATE TABLE dbo.FR_Wait (
+    WaitId              bigint         IDENTITY(1,1) NOT NULL PRIMARY KEY NONCLUSTERED,
+    SnapshotId          bigint         NOT NULL FOREIGN KEY REFERENCES dbo.FR_Snapshot (SnapshotId),
+    SnapshotUtc         datetime2(3)   NOT NULL,
+    WaitType            nvarchar(60)   NOT NULL,
+    WaitingTasksCount   bigint         NOT NULL,
+    WaitTimeMs          bigint         NOT NULL,
+    MaxWaitTimeMs       bigint         NOT NULL,
+    SignalWaitTimeMs    bigint         NOT NULL
+)' + @TableCompressionClause;
+                EXEC sys.sp_executesql @CreateSql;
+
+                SET @CreateSql = N'CREATE CLUSTERED INDEX CIX_FR_Wait_SnapshotUtc_SnapshotId_WaitType ON dbo.FR_Wait (SnapshotUtc, SnapshotId, WaitType)' + @IndexCompressionClause;
+                EXEC sys.sp_executesql @CreateSql;
+            END;
+
+            -- Create FR_FileStat
+            IF OBJECT_ID(N'dbo.FR_FileStat', N'U') IS NULL
+            BEGIN
+                SET @CreateSql = N'
+CREATE TABLE dbo.FR_FileStat (
+    FileStatId          bigint         IDENTITY(1,1) NOT NULL PRIMARY KEY NONCLUSTERED,
+    SnapshotId          bigint         NOT NULL FOREIGN KEY REFERENCES dbo.FR_Snapshot (SnapshotId),
+    SnapshotUtc         datetime2(3)   NOT NULL,
+    DatabaseId          int            NOT NULL,
+    FileId              int            NOT NULL,
+    NumOfReads          bigint         NOT NULL,
+    NumOfBytesRead      bigint         NOT NULL,
+    IoStallReadMs       bigint         NOT NULL,
+    NumOfWrites         bigint         NOT NULL,
+    NumOfBytesWritten   bigint         NOT NULL,
+    IoStallWriteMs      bigint         NOT NULL,
+    SizeOnDiskBytes     bigint         NULL
+)' + @TableCompressionClause;
+                EXEC sys.sp_executesql @CreateSql;
+
+                SET @CreateSql = N'CREATE CLUSTERED INDEX CIX_FR_FileStat_SnapshotUtc_DatabaseId_FileId ON dbo.FR_FileStat (SnapshotUtc, DatabaseId, FileId)' + @IndexCompressionClause;
+                EXEC sys.sp_executesql @CreateSql;
+            END;
+
+            -- Create FR_PerfCounter
+            IF OBJECT_ID(N'dbo.FR_PerfCounter', N'U') IS NULL
+            BEGIN
+                SET @CreateSql = N'
+CREATE TABLE dbo.FR_PerfCounter (
+    PerfCounterId   bigint          IDENTITY(1,1) NOT NULL PRIMARY KEY NONCLUSTERED,
+    SnapshotId      bigint          NOT NULL FOREIGN KEY REFERENCES dbo.FR_Snapshot (SnapshotId),
+    SnapshotUtc     datetime2(3)    NOT NULL,
+    ObjectName      nvarchar(128)   NOT NULL,
+    CounterName     nvarchar(128)   NOT NULL,
+    InstanceName    nvarchar(128)   NULL,
+    CounterValue    bigint          NOT NULL,
+    CounterType     int             NOT NULL
+)' + @TableCompressionClause;
+                EXEC sys.sp_executesql @CreateSql;
+
+                SET @CreateSql = N'CREATE CLUSTERED INDEX CIX_FR_PerfCounter_SnapshotUtc_ObjectName_CounterName_InstanceName ON dbo.FR_PerfCounter (SnapshotUtc, ObjectName, CounterName, InstanceName)' + @IndexCompressionClause;
+                EXEC sys.sp_executesql @CreateSql;
+            END;
+
+            -- Create FR_QueryText (D-027)
+            IF OBJECT_ID(N'dbo.FR_QueryText', N'U') IS NULL
+            BEGIN
+                SET @CreateSql = N'
+CREATE TABLE dbo.FR_QueryText (
+    QueryTextId    bigint         IDENTITY(1,1) NOT NULL PRIMARY KEY CLUSTERED,
+    QueryHash      binary(8)      NOT NULL,
+    TextHash       binary(32)     NOT NULL,
+    SqlText        nvarchar(max)  NULL,
+    FirstSeenUtc   datetime2(3)   NOT NULL DEFAULT (SYSUTCDATETIME()),
+    LastSeenUtc    datetime2(3)   NOT NULL DEFAULT (SYSUTCDATETIME())
+)' + @TableCompressionClause;
+                EXEC sys.sp_executesql @CreateSql;
+
+                SET @CreateSql = N'CREATE UNIQUE NONCLUSTERED INDEX UX_FR_QueryText_QueryHash_TextHash ON dbo.FR_QueryText (QueryHash, TextHash)' + @IndexCompressionClause;
+                EXEC sys.sp_executesql @CreateSql;
+            END;
+
+            -- Create FR_Rules (D-029: metadata only; logic in code)
+            IF OBJECT_ID(N'dbo.FR_Rules', N'U') IS NULL
+            BEGIN
+                SET @CreateSql = N'
+CREATE TABLE dbo.FR_Rules (
+    RuleId              nvarchar(60)   NOT NULL PRIMARY KEY CLUSTERED,
+    Category            nvarchar(30)   NOT NULL,
+    Severity            nvarchar(20)   NOT NULL,
+    Confidence          nvarchar(20)   NOT NULL,
+    EvidenceType        nvarchar(20)   NOT NULL,
+    LifecycleState      nvarchar(20)   NOT NULL DEFAULT N''Active'',
+    ShortDescription    nvarchar(400)  NOT NULL,
+    IntroducedInVersion nvarchar(20)   NOT NULL
+)' + @TableCompressionClause;
+                EXEC sys.sp_executesql @CreateSql;
+            END;
+
+            -- Seed FR_Config
+            IF NOT EXISTS (SELECT 1 FROM dbo.FR_Config WHERE ConfigKey = N'SchemaVersion')
+                INSERT INTO dbo.FR_Config (ConfigKey, ConfigValue, Description)
+                VALUES (N'SchemaVersion', @SchemaVersion, N'Forward-only migration marker (D-038).');
+
+            IF NOT EXISTS (SELECT 1 FROM dbo.FR_Config WHERE ConfigKey = N'SnapshotIntervalSeconds')
+                INSERT INTO dbo.FR_Config (ConfigKey, ConfigValue, Description)
+                VALUES (N'SnapshotIntervalSeconds', N'60', N'Default snapshot cadence (D-042).');
+
+            IF NOT EXISTS (SELECT 1 FROM dbo.FR_Config WHERE ConfigKey = N'SnapshotRetentionDays')
+                INSERT INTO dbo.FR_Config (ConfigKey, ConfigValue, Description)
+                VALUES (N'SnapshotRetentionDays', N'7', N'Snapshot retention (7 days).');
+
+            IF NOT EXISTS (SELECT 1 FROM dbo.FR_Config WHERE ConfigKey = N'RunLogRetentionDays')
+                INSERT INTO dbo.FR_Config (ConfigKey, ConfigValue, Description)
+                VALUES (N'RunLogRetentionDays', N'28', N'Run-log retention is 4x snapshot retention (D-035).');
+
+            IF NOT EXISTS (SELECT 1 FROM dbo.FR_Config WHERE ConfigKey = N'MaxRowsPerCollector')
+                INSERT INTO dbo.FR_Config (ConfigKey, ConfigValue, Description)
+                VALUES (N'MaxRowsPerCollector', N'50', N'Default per-collector row cap (D-181).');
+
+            IF NOT EXISTS (SELECT 1 FROM dbo.FR_Config WHERE ConfigKey = N'DisabledRules')
+                INSERT INTO dbo.FR_Config (ConfigKey, ConfigValue, Description)
+                VALUES (N'DisabledRules', N'', N'Semicolon-delimited disabled rule IDs (D-099).');
+
+            -- Seed v0.1 rules
+            IF NOT EXISTS (SELECT 1 FROM dbo.FR_Rules WHERE RuleId = N'FR_R0001_ActiveBlockingChain')
+                INSERT INTO dbo.FR_Rules VALUES (N'FR_R0001_ActiveBlockingChain', N'Blocking', N'High', N'High', N'Observed', N'Active', N'Active blocking chain observed', N'0.1');
+
+            IF NOT EXISTS (SELECT 1 FROM dbo.FR_Rules WHERE RuleId = N'FR_R0002_LongRunningOpenTransaction')
+                INSERT INTO dbo.FR_Rules VALUES (N'FR_R0002_LongRunningOpenTransaction', N'Blocking', N'Medium', N'High', N'Observed', N'Active', N'Long-running open transaction', N'0.1');
+
+            IF NOT EXISTS (SELECT 1 FROM dbo.FR_Rules WHERE RuleId = N'FR_R0003_TopWaitTypeSpike')
+                INSERT INTO dbo.FR_Rules VALUES (N'FR_R0003_TopWaitTypeSpike', N'Waits', N'Medium', N'Medium', N'Inferred', N'Active', N'Top wait type increased', N'0.1');
+
+            IF NOT EXISTS (SELECT 1 FROM dbo.FR_Rules WHERE RuleId = N'FR_R0004_FileIoLatencySpike')
+                INSERT INTO dbo.FR_Rules VALUES (N'FR_R0004_FileIoLatencySpike', N'IO', N'Medium', N'Medium', N'Inferred', N'Active', N'File I/O latency increased', N'0.1');
+
+            IF NOT EXISTS (SELECT 1 FROM dbo.FR_Rules WHERE RuleId = N'FR_R0005_MemoryGrantsPending')
+                INSERT INTO dbo.FR_Rules VALUES (N'FR_R0005_MemoryGrantsPending', N'Memory', N'High', N'High', N'Observed', N'Active', N'Memory grants pending', N'0.1');
+
+            IF NOT EXISTS (SELECT 1 FROM dbo.FR_Rules WHERE RuleId = N'FR_R0006_ServerRestartDuringWindow')
+                INSERT INTO dbo.FR_Rules VALUES (N'FR_R0006_ServerRestartDuringWindow', N'Configuration', N'Critical', N'High', N'Observed', N'Active', N'SQL Server restart detected', N'0.1');
+
+            SELECT
+                N'Success' AS Status,
+                DB_NAME() AS DatabaseName,
+                @SchemaVersion AS SchemaVersion,
+                12 AS TableCount,
+                N'Installation complete. 12 core FR_* tables created.' AS Message;
+            RETURN;
+
+        END TRY
+        BEGIN CATCH
+            SELECT
+                N'Error' AS Status,
+                N'InstallFailed' AS ErrorCode,
+                ERROR_MESSAGE() AS Message,
+                @ToolVersion AS ToolVersion;
+            RETURN;
+        END CATCH;
+    END;
+
+    -- =========================================================================
+    -- Mode: UNINSTALL (D-183)
+    -- =========================================================================
+    IF UPPER(@ModeNormalized) = N'UNINSTALL'
+    BEGIN
+        -- Check for in-progress Collect
+        IF OBJECT_ID(N'dbo.FR_RunLog', N'U') IS NOT NULL
+           AND EXISTS (SELECT 1 FROM dbo.FR_RunLog WHERE Mode = N'Collect' AND Status = N'InProgress')
+        BEGIN
+            SELECT N'Error' AS Status, N'CollectInProgress' AS ErrorCode,
+                N'Collect is in progress. Retry uninstall later.' AS Message,
+                @ToolVersion AS ToolVersion;
+            RETURN;
+        END;
+
+        IF @WhatIf = 1
+        BEGIN
+            SELECT
+                N'WhatIf' AS Status,
+                N'TABLE' AS ObjectType,
+                N'dbo' AS SchemaName,
+                ObjectName,
+                CASE WHEN @PreserveRunLog = 1 AND ObjectName IN (N'FR_RunLog', N'FR_RunLogStep')
+                     THEN N'Rename' ELSE N'Drop' END AS Action
+            FROM (
+                SELECT N'FR_InstanceSnapshot' AS ObjectName
+                UNION ALL SELECT N'FR_Configuration'
+                UNION ALL SELECT N'FR_Request'
+                UNION ALL SELECT N'FR_Wait'
+                UNION ALL SELECT N'FR_FileStat'
+                UNION ALL SELECT N'FR_PerfCounter'
+                UNION ALL SELECT N'FR_QueryText'
+                UNION ALL SELECT N'FR_Snapshot'
+                UNION ALL SELECT N'FR_RunLogStep'
+                UNION ALL SELECT N'FR_RunLog'
+                UNION ALL SELECT N'FR_Rules'
+                UNION ALL SELECT N'FR_Config'
+            ) AS Objects
+            WHERE OBJECT_ID(CONCAT(N'dbo.', ObjectName), N'U') IS NOT NULL
+            ORDER BY ObjectName;
+            RETURN;
+        END;
+
+        BEGIN TRY
+            -- Archive run log if requested (D-183)
+            IF @PreserveRunLog = 1
+            BEGIN
+                DECLARE @ArchiveSuffix nvarchar(32) = CONCAT(
+                    CONVERT(nvarchar(8), SYSUTCDATETIME(), 112), N'_',
+                    REPLACE(CONVERT(nvarchar(8), SYSUTCDATETIME(), 108), N':', N'')
+                );
+
+                IF OBJECT_ID(N'dbo.FR_RunLog', N'U') IS NOT NULL
+                    EXEC sys.sp_executesql
+                        CONCAT(N'EXEC sp_rename N''dbo.FR_RunLog'', N''FR_RunLog_Archive_', @ArchiveSuffix, N'''');
+
+                IF OBJECT_ID(N'dbo.FR_RunLogStep', N'U') IS NOT NULL
+                    EXEC sys.sp_executesql
+                        CONCAT(N'EXEC sp_rename N''dbo.FR_RunLogStep'', N''FR_RunLogStep_Archive_', @ArchiveSuffix, N'''');
+            END
+            ELSE
+            BEGIN
+                IF OBJECT_ID(N'dbo.FR_RunLogStep', N'U') IS NOT NULL
+                    DROP TABLE dbo.FR_RunLogStep;
+                IF OBJECT_ID(N'dbo.FR_RunLog', N'U') IS NOT NULL
+                    DROP TABLE dbo.FR_RunLog;
+            END;
+
+            -- Drop remaining tables in dependency order (D-141)
+            IF OBJECT_ID(N'dbo.FR_InstanceSnapshot', N'U') IS NOT NULL
+                DROP TABLE dbo.FR_InstanceSnapshot;
+            IF OBJECT_ID(N'dbo.FR_Configuration', N'U') IS NOT NULL
+                DROP TABLE dbo.FR_Configuration;
+            IF OBJECT_ID(N'dbo.FR_Request', N'U') IS NOT NULL
+                DROP TABLE dbo.FR_Request;
+            IF OBJECT_ID(N'dbo.FR_Wait', N'U') IS NOT NULL
+                DROP TABLE dbo.FR_Wait;
+            IF OBJECT_ID(N'dbo.FR_FileStat', N'U') IS NOT NULL
+                DROP TABLE dbo.FR_FileStat;
+            IF OBJECT_ID(N'dbo.FR_PerfCounter', N'U') IS NOT NULL
+                DROP TABLE dbo.FR_PerfCounter;
+            IF OBJECT_ID(N'dbo.FR_QueryText', N'U') IS NOT NULL
+                DROP TABLE dbo.FR_QueryText;
+            IF OBJECT_ID(N'dbo.FR_Snapshot', N'U') IS NOT NULL
+                DROP TABLE dbo.FR_Snapshot;
+            IF OBJECT_ID(N'dbo.FR_Rules', N'U') IS NOT NULL
+                DROP TABLE dbo.FR_Rules;
+            IF OBJECT_ID(N'dbo.FR_Config', N'U') IS NOT NULL
+                DROP TABLE dbo.FR_Config;
+
+            SELECT
+                N'Success' AS Status,
+                DB_NAME() AS DatabaseName,
+                N'Uninstall completed. All FR_* tables removed.' AS Message;
+            RETURN;
+
+        END TRY
+        BEGIN CATCH
+            SELECT
+                N'Error' AS Status,
+                N'UninstallFailed' AS ErrorCode,
+                ERROR_MESSAGE() AS Message,
+                @ToolVersion AS ToolVersion;
+            RETURN;
+        END CATCH;
+    END;
+
+    -- =========================================================================
+    -- Mode: STATUS (6 result sets per Part 3 spec)
+    -- =========================================================================
+    IF UPPER(@ModeNormalized) = N'STATUS'
+    BEGIN
+        -- Result Set 1: Configuration
+        SELECT
+            ConfigKey,
+            ConfigValue,
+            Description
+        FROM dbo.FR_Config
+        WHERE OBJECT_ID(N'dbo.FR_Config', N'U') IS NOT NULL
+        ORDER BY ConfigKey;
+
+        -- Result Set 2: Rules Catalog
+        SELECT
+            RuleId,
+            Category,
+            Severity,
+            Confidence,
+            EvidenceType,
+            LifecycleState,
+            ShortDescription,
+            IntroducedInVersion
+        FROM dbo.FR_Rules
+        WHERE OBJECT_ID(N'dbo.FR_Rules', N'U') IS NOT NULL
+        ORDER BY RuleId;
+
+        -- Result Set 3: Recent Runs
+        SELECT TOP (10)
+            RunId,
+            StartUtc,
+            EndUtc,
+            Mode,
+            Status,
+            Reason
+        FROM dbo.FR_RunLog
+        WHERE OBJECT_ID(N'dbo.FR_RunLog', N'U') IS NOT NULL
+        ORDER BY RunId DESC;
+
+        -- Result Set 4: Repository Size (D-137: bounded query on allow-listed DMVs)
+        SELECT
+            t.name AS TableName,
+            SUM(ps.row_count) AS RowCount,
+            SUM(ps.used_page_count) * 8 AS UsedKb
+        FROM sys.tables t
+        INNER JOIN sys.dm_db_partition_stats ps ON t.object_id = ps.object_id
+        WHERE t.schema_id = SCHEMA_ID(N'dbo')
+          AND t.name LIKE N'FR\_%' ESCAPE N'\'
+          AND OBJECT_ID(N'dbo.FR_Config', N'U') IS NOT NULL
+        GROUP BY t.name
+        ORDER BY t.name;
+
+        -- Result Set 5: Run-Log Summary
+        SELECT
+            N'Total Runs' AS Metric,
+            CAST(COUNT(*) AS nvarchar(20)) AS Value
+        FROM dbo.FR_RunLog
+        WHERE OBJECT_ID(N'dbo.FR_RunLog', N'U') IS NOT NULL
+        UNION ALL
+        SELECT N'Last Run', CONVERT(nvarchar(50), MAX(StartUtc), 126) + N'Z'
+        FROM dbo.FR_RunLog
+        WHERE OBJECT_ID(N'dbo.FR_RunLog', N'U') IS NOT NULL;
+
+        -- Result Set 6: Capability Placeholder (populated by Part 4 capability probe)
+        SELECT
+            N'Tool-Version' AS CapabilityKey,
+            @ToolVersion AS CapabilityValue
+        UNION ALL
+        SELECT N'Part-Number', CAST(@PartNumber AS nvarchar(10))
+        UNION ALL
+        SELECT N'Schema-Version', @SchemaVersion;
+
+        RETURN;
+    END;
+
+    -- =========================================================================
+    -- Stubs: Modes not yet implemented
+    -- =========================================================================
+    SELECT
+        N'NotYetImplemented' AS Status,
+        CONCAT(@ModeNormalized, N' mode arrives in Part 4–8 (see docs/implementation-plan.md).') AS Message,
+        @ToolVersion AS ToolVersion;
+
 END;
 GO
-
--- =============================================================================
--- End of file. Re-run idempotency: this file may be re-executed in the same
--- database without error; the IF OBJECT_ID stub plus ALTER PROCEDURE pattern
--- handles both first-install and upgrade-in-place.
--- =============================================================================
