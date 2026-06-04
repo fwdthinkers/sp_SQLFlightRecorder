@@ -240,7 +240,19 @@ BEGIN
         PRINT N'  CollectDebug      Validate collector readiness without writing collector rows.';
         PRINT N'  Report            Read FR_* tables and return Findings + Timeline.';
         PRINT N'  Configure         Read or update known FR_Config keys.';
-        PRINT N'  Purge             Batched retention cleanup. Supports @WhatIf.';
+        PRINT N'  Purge             Batched retention cleanup. Applock-gated; logged. Supports @WhatIf.';
+        PRINT N'';
+        PRINT N'v0.2 COLLECTORS (run automatically by Collect; capability-gated)';
+        PRINT N'-----------------------------------------------------------------';
+        PRINT N'  Tempdb, Memory, AgentJobs, BackupHistory, AlwaysOnState, Deadlocks.';
+        PRINT N'  Plan collection runs only when @IncludeQueryPlans = 1.';
+        PRINT N'';
+        PRINT N'v0.2 RULES';
+        PRINT N'----------';
+        PRINT N'  FR_R0007 BlockingStorm, FR_R0008 TempdbVersionStoreGrowth,';
+        PRINT N'  FR_R0009 TempdbFileImbalanceOrPressure, FR_R0010 FailedSqlAgentJobNearIncident,';
+        PRINT N'  FR_R0011 MaintenanceJobOverlap, FR_R0012 BackupOverlapWithIncident,';
+        PRINT N'  FR_R0013 DeadlocksObserved, FR_R0014 AlwaysOnRoleOrStateChange.';
         PRINT N'';
         PRINT N'PARAMETERS';
         PRINT N'----------';
@@ -249,9 +261,15 @@ BEGIN
         PRINT N'  @MaxFindings      Cap findings at 10–2000 rows (default: 200).';
         PRINT N'  @TopN             Collector-side row cap per category (default: 50).';
         PRINT N'  @OutputFormat     Default, FindingsOnly, TimelineOnly, or Markdown (default: Default).';
-        PRINT N'  @IncludeQueryPlans 0=off (default). 1=bounded, opt-in plan collection/shredding for';
-        PRINT N'                    plan-level recommendations. Captures plans only for active requests';
-        PRINT N'                    (bounded by @TopN / MaxRowsPerCollector). May add overhead.';
+        PRINT N'  @IncludeQueryPlans 0=off (default). 1=bounded, opt-in plan collection and shredding';
+        PRINT N'                    for active requests only (bounded by @TopN / MaxRowsPerCollector).';
+        PRINT N'                    Surfaces evidence-only plan findings (missing index, implicit';
+        PRINT N'                    conversion, tempdb spill, warnings, parallelism). May add overhead.';
+        PRINT N'  @DatabaseName     Report: scope DB-bound findings/timeline to one database.';
+        PRINT N'                    Instance-level and Coverage findings are always retained.';
+        PRINT N'  @MinSeverity      Report filter applied after rules: Informational, Low, Medium,';
+        PRINT N'                    High, Critical (default: Low). Critical and Coverage are never hidden.';
+        PRINT N'  @Debug            1 with @Mode=Collect routes to safe CollectDebug (no collector rows).';
         PRINT N'  @WhatIf           Preview without executing (Uninstall, Purge modes).';
         PRINT N'  @PreserveRunLog   Uninstall: 1=archive FR_RunLog with timestamped name (default: 0).';
         PRINT N'  @Debug            Print dynamic SQL without executing (default: 0).';
@@ -960,12 +978,80 @@ END;
                 END;
             END;
 			
+            -- v0.2 views (FR_v_*). Drop-then-create for 2012/2014 compatibility
+            -- (no CREATE OR ALTER before 2016). Each view is bounded/simple.
+            DECLARE @ViewSql nvarchar(max);
+
+            IF OBJECT_ID(N'dbo.FR_v_RecentRuns', N'V') IS NOT NULL DROP VIEW dbo.FR_v_RecentRuns;
+            SET @ViewSql = N'
+CREATE VIEW dbo.FR_v_RecentRuns
+AS
+SELECT TOP (100)
+      RunId, Mode, Status, StartUtc, EndUtc,
+      DATEDIFF(millisecond, StartUtc, ISNULL(EndUtc, SYSUTCDATETIME())) AS DurationMs,
+      Reason, LoginName, HostName
+FROM dbo.FR_RunLog
+ORDER BY RunId DESC;';
+            EXEC sys.sp_executesql @ViewSql;
+
+            IF OBJECT_ID(N'dbo.FR_v_LatestSnapshots', N'V') IS NOT NULL DROP VIEW dbo.FR_v_LatestSnapshots;
+            SET @ViewSql = N'
+CREATE VIEW dbo.FR_v_LatestSnapshots
+AS
+SELECT TOP (100)
+      s.SnapshotId, s.SnapshotUtc, s.RunId, s.InstanceFingerprint
+FROM dbo.FR_Snapshot AS s
+ORDER BY s.SnapshotUtc DESC, s.SnapshotId DESC;';
+            EXEC sys.sp_executesql @ViewSql;
+
+            IF OBJECT_ID(N'dbo.FR_v_CollectorHealth', N'V') IS NOT NULL DROP VIEW dbo.FR_v_CollectorHealth;
+            SET @ViewSql = N'
+CREATE VIEW dbo.FR_v_CollectorHealth
+AS
+SELECT
+      st.StepName,
+      COUNT(1)                                            AS TotalSteps,
+      SUM(CASE WHEN st.Status = N''Success'' THEN 1 ELSE 0 END) AS SuccessCount,
+      SUM(CASE WHEN st.Status = N''Error''   THEN 1 ELSE 0 END) AS ErrorCount,
+      SUM(CASE WHEN st.Status = N''Skipped'' THEN 1 ELSE 0 END) AS SkippedCount,
+      MAX(st.StartUtc)                                    AS LastRunUtc
+FROM dbo.FR_RunLogStep AS st
+GROUP BY st.StepName;';
+            EXEC sys.sp_executesql @ViewSql;
+
+            IF OBJECT_ID(N'dbo.FR_v_RepositoryFootprint', N'V') IS NOT NULL DROP VIEW dbo.FR_v_RepositoryFootprint;
+            SET @ViewSql = N'
+CREATE VIEW dbo.FR_v_RepositoryFootprint
+AS
+SELECT
+      t.name                          AS TableName,
+      SUM(ps.row_count)               AS [RowCount],
+      SUM(ps.used_page_count) * 8     AS UsedKb
+FROM sys.tables AS t
+INNER JOIN sys.dm_db_partition_stats AS ps ON ps.object_id = t.object_id
+WHERE t.schema_id = SCHEMA_ID(N''dbo'')
+  AND t.name LIKE N''FR\_%'' ESCAPE N''\''
+GROUP BY t.name;';
+            EXEC sys.sp_executesql @ViewSql;
+
+            IF OBJECT_ID(N'dbo.FR_v_StatusSupport', N'V') IS NOT NULL DROP VIEW dbo.FR_v_StatusSupport;
+            SET @ViewSql = N'
+CREATE VIEW dbo.FR_v_StatusSupport
+AS
+SELECT
+      (SELECT COUNT(1) FROM dbo.FR_Snapshot)                       AS SnapshotCount,
+      (SELECT MAX(SnapshotUtc) FROM dbo.FR_Snapshot)               AS LatestSnapshotUtc,
+      (SELECT COUNT(1) FROM dbo.FR_RunLog)                         AS RunCount,
+      (SELECT COUNT(1) FROM dbo.FR_RunLog WHERE Status = N''Error'') AS RunErrorCount,
+      (SELECT ConfigValue FROM dbo.FR_Config WHERE ConfigKey = N''SchemaVersion'') AS SchemaVersion;';
+            EXEC sys.sp_executesql @ViewSql;
+
             SELECT
                 N'Success' AS Status,
                 DB_NAME() AS DatabaseName,
                 @SchemaVersion AS SchemaVersion,
                 19 AS TableCount,
-                N'Installation complete. 19 core FR_* tables created (12 v0.1 + 7 v0.2).' AS Message;
+                N'Installation complete. 19 core FR_* tables + 5 FR_v_* views created.' AS Message;
 
 				
 				
@@ -1000,27 +1086,39 @@ END;
         BEGIN
             SELECT
                 N'WhatIf' AS Status,
-                N'TABLE' AS ObjectType,
+                ObjectType,
                 N'dbo' AS SchemaName,
                 ObjectName,
                 CASE WHEN @PreserveRunLog = 1 AND ObjectName IN (N'FR_RunLog', N'FR_RunLogStep')
                      THEN N'Rename' ELSE N'Drop' END AS Action
             FROM (
-                SELECT N'FR_InstanceSnapshot' AS ObjectName
-                UNION ALL SELECT N'FR_Configuration'
-                UNION ALL SELECT N'FR_Request'
-                UNION ALL SELECT N'FR_Wait'
-                UNION ALL SELECT N'FR_FileStat'
-                UNION ALL SELECT N'FR_PerfCounter'
-                UNION ALL SELECT N'FR_QueryPlan'
-                UNION ALL SELECT N'FR_QueryText'
-                UNION ALL SELECT N'FR_Snapshot'
-                UNION ALL SELECT N'FR_RunLogStep'
-                UNION ALL SELECT N'FR_RunLog'
-                UNION ALL SELECT N'FR_Rules'
-                UNION ALL SELECT N'FR_Config'
+                SELECT N'VIEW' AS ObjectType, N'FR_v_RecentRuns' AS ObjectName
+                UNION ALL SELECT N'VIEW', N'FR_v_LatestSnapshots'
+                UNION ALL SELECT N'VIEW', N'FR_v_CollectorHealth'
+                UNION ALL SELECT N'VIEW', N'FR_v_RepositoryFootprint'
+                UNION ALL SELECT N'VIEW', N'FR_v_StatusSupport'
+                UNION ALL SELECT N'TABLE', N'FR_InstanceSnapshot'
+                UNION ALL SELECT N'TABLE', N'FR_Configuration'
+                UNION ALL SELECT N'TABLE', N'FR_Request'
+                UNION ALL SELECT N'TABLE', N'FR_Wait'
+                UNION ALL SELECT N'TABLE', N'FR_FileStat'
+                UNION ALL SELECT N'TABLE', N'FR_PerfCounter'
+                UNION ALL SELECT N'TABLE', N'FR_Tempdb'
+                UNION ALL SELECT N'TABLE', N'FR_Memory'
+                UNION ALL SELECT N'TABLE', N'FR_AgentJob'
+                UNION ALL SELECT N'TABLE', N'FR_BackupHistory'
+                UNION ALL SELECT N'TABLE', N'FR_AlwaysOnState'
+                UNION ALL SELECT N'TABLE', N'FR_Deadlock'
+                UNION ALL SELECT N'TABLE', N'FR_QueryPlan'
+                UNION ALL SELECT N'TABLE', N'FR_QueryText'
+                UNION ALL SELECT N'TABLE', N'FR_Snapshot'
+                UNION ALL SELECT N'TABLE', N'FR_RunLogStep'
+                UNION ALL SELECT N'TABLE', N'FR_RunLog'
+                UNION ALL SELECT N'TABLE', N'FR_Rules'
+                UNION ALL SELECT N'TABLE', N'FR_Config'
             ) AS Objects
-            WHERE OBJECT_ID(CONCAT(N'dbo.', ObjectName), N'U') IS NOT NULL
+            WHERE (ObjectType = N'TABLE' AND OBJECT_ID(CONCAT(N'dbo.', ObjectName), N'U') IS NOT NULL)
+               OR (ObjectType = N'VIEW'  AND OBJECT_ID(CONCAT(N'dbo.', ObjectName), N'V') IS NOT NULL)
 
             UNION ALL
 
@@ -1045,6 +1143,13 @@ END;
         END;
 
         BEGIN TRY
+            -- Drop v0.2 views first (no dependencies; safe in any order).
+            IF OBJECT_ID(N'dbo.FR_v_RecentRuns', N'V') IS NOT NULL DROP VIEW dbo.FR_v_RecentRuns;
+            IF OBJECT_ID(N'dbo.FR_v_LatestSnapshots', N'V') IS NOT NULL DROP VIEW dbo.FR_v_LatestSnapshots;
+            IF OBJECT_ID(N'dbo.FR_v_CollectorHealth', N'V') IS NOT NULL DROP VIEW dbo.FR_v_CollectorHealth;
+            IF OBJECT_ID(N'dbo.FR_v_RepositoryFootprint', N'V') IS NOT NULL DROP VIEW dbo.FR_v_RepositoryFootprint;
+            IF OBJECT_ID(N'dbo.FR_v_StatusSupport', N'V') IS NOT NULL DROP VIEW dbo.FR_v_StatusSupport;
+
             -- Remove SQL Agent job only if this procedure created it.
             IF OBJECT_ID(N'dbo.FR_Config', N'U') IS NOT NULL
             BEGIN
@@ -1083,6 +1188,12 @@ END;
             IF OBJECT_ID(N'dbo.FR_Wait', N'U') IS NOT NULL DROP TABLE dbo.FR_Wait;
             IF OBJECT_ID(N'dbo.FR_FileStat', N'U') IS NOT NULL DROP TABLE dbo.FR_FileStat;
             IF OBJECT_ID(N'dbo.FR_PerfCounter', N'U') IS NOT NULL DROP TABLE dbo.FR_PerfCounter;
+            IF OBJECT_ID(N'dbo.FR_Tempdb', N'U') IS NOT NULL DROP TABLE dbo.FR_Tempdb;
+            IF OBJECT_ID(N'dbo.FR_Memory', N'U') IS NOT NULL DROP TABLE dbo.FR_Memory;
+            IF OBJECT_ID(N'dbo.FR_AgentJob', N'U') IS NOT NULL DROP TABLE dbo.FR_AgentJob;
+            IF OBJECT_ID(N'dbo.FR_BackupHistory', N'U') IS NOT NULL DROP TABLE dbo.FR_BackupHistory;
+            IF OBJECT_ID(N'dbo.FR_AlwaysOnState', N'U') IS NOT NULL DROP TABLE dbo.FR_AlwaysOnState;
+            IF OBJECT_ID(N'dbo.FR_Deadlock', N'U') IS NOT NULL DROP TABLE dbo.FR_Deadlock;
             IF OBJECT_ID(N'dbo.FR_QueryPlan', N'U') IS NOT NULL DROP TABLE dbo.FR_QueryPlan;
 
             -- Independent / parent tables.
@@ -1264,16 +1375,20 @@ END;
             WHERE 1 = 0;
         END;
 
-        -- Result Set 6: Capability placeholder
-        SELECT
-              N'Tool-Version' AS CapabilityKey
-            , @ToolVersion AS CapabilityValue
-        UNION ALL
-        SELECT N'Part-Number', CAST(@PartNumber AS nvarchar(10))
-        UNION ALL
-        SELECT N'Schema-Version', @SchemaVersion
-        UNION ALL
-        SELECT N'Installed', CASE WHEN @StatusIsInstalled = 1 THEN N'1' ELSE N'0' END;
+        -- Result Set 6: Capability snapshot (real probe data; closed key set, D-127)
+        SELECT N'Tool-Version' AS CapabilityKey, @ToolVersion AS CapabilityValue
+        UNION ALL SELECT N'Part-Number', CAST(@PartNumber AS nvarchar(10))
+        UNION ALL SELECT N'Schema-Version', @SchemaVersion
+        UNION ALL SELECT N'Installed', CASE WHEN @StatusIsInstalled = 1 THEN N'1' ELSE N'0' END
+        UNION ALL SELECT N'EngineEdition', ISNULL(CONVERT(nvarchar(10), @EngineEditionProbe), N'')
+        UNION ALL SELECT N'ProductMajorVersion', ISNULL(CONVERT(nvarchar(10), @ProductMajorProbe), N'')
+        UNION ALL SELECT N'ProductLevel', ISNULL(@ProductLevelProbe, N'')
+        UNION ALL SELECT N'Platform', @PlatformProbe
+        UNION ALL SELECT N'IsAzureSqlDb', CONVERT(nvarchar(1), @IsAzureSqlDb)
+        UNION ALL SELECT N'IsAzureManagedInstance', CONVERT(nvarchar(1), @IsAzureManagedInst)
+        UNION ALL SELECT N'HasMsdb', CONVERT(nvarchar(1), @HasMsdb)
+        UNION ALL SELECT N'HasAgent', CONVERT(nvarchar(1), @HasAgent)
+        UNION ALL SELECT N'IsHadrEnabled', ISNULL(CONVERT(nvarchar(1), @IsHadrEnabledProbe), N'0');
 
         RETURN;
     END;
@@ -1920,11 +2035,11 @@ END;
                     DECLARE @vsKb bigint, @uoKb bigint, @ioKb bigint, @unallocKb bigint, @mixedKb bigint;
 
                     SELECT
-                        @vsKb     = SUM(CASE WHEN is_version_store = 1 THEN allocated_extent_page_count END) * 8,
-                        @uoKb     = SUM(user_object_reserved_page_count) * 8,
-                        @ioKb     = SUM(internal_object_reserved_page_count) * 8,
-                        @unallocKb= SUM(unallocated_extent_page_count) * 8,
-                        @mixedKb  = SUM(mixed_extent_page_count) * 8
+                        @vsKb     = SUM(CONVERT(bigint, version_store_reserved_page_count))  * 8,
+                        @uoKb     = SUM(CONVERT(bigint, user_object_reserved_page_count))    * 8,
+                        @ioKb     = SUM(CONVERT(bigint, internal_object_reserved_page_count))* 8,
+                        @unallocKb= SUM(CONVERT(bigint, unallocated_extent_page_count))      * 8,
+                        @mixedKb  = SUM(CONVERT(bigint, mixed_extent_page_count))            * 8
                     FROM tempdb.sys.dm_db_file_space_usage;
 
                     INSERT INTO dbo.FR_Tempdb
@@ -2369,6 +2484,44 @@ END;
             RETURN;
         END;
 
+        DECLARE @PurgeLockResult int;
+        DECLARE @PurgeRunId bigint = NULL;
+
+        -- Concurrency control: Purge takes the same session applock as Collect (D-011).
+        -- Only acquired for a real run; @WhatIf is read-only and remains lock-free.
+        IF @WhatIf = 0
+        BEGIN
+            EXEC @PurgeLockResult = sys.sp_getapplock
+                  @Resource = N'SQLFlightRecorder/Collect'
+                , @LockMode = N'Exclusive'
+                , @LockOwner = N'Session'
+                , @LockTimeout = 1000;
+
+            IF @PurgeLockResult < 0
+            BEGIN
+                IF OBJECT_ID(N'dbo.FR_RunLog', N'U') IS NOT NULL
+                    INSERT INTO dbo.FR_RunLog
+                    (StartUtc, EndUtc, Mode, Status, Reason, LoginName, HostName)
+                    VALUES
+                    (SYSUTCDATETIME(), SYSUTCDATETIME(), N'Purge', N'Skipped',
+                     N'Collect or Purge already running; applock not granted.',
+                     SUSER_SNAME(), HOST_NAME());
+
+                SELECT N'Skipped' AS Status, N'Collect or Purge already running.' AS Message;
+                RETURN;
+            END;
+
+            IF OBJECT_ID(N'dbo.FR_RunLog', N'U') IS NOT NULL
+            BEGIN
+                INSERT INTO dbo.FR_RunLog
+                (StartUtc, EndUtc, Mode, Status, Reason, LoginName, HostName)
+                VALUES
+                (SYSUTCDATETIME(), NULL, N'Purge', N'InProgress', N'Purge started.',
+                 SUSER_SNAME(), HOST_NAME());
+                SET @PurgeRunId = SCOPE_IDENTITY();
+            END;
+        END;
+
         DECLARE @PurgeSnapshotRetentionDays int = 7;
         DECLARE @PurgeRunLogRetentionDays int = 28;
         DECLARE @PurgeSnapshotCutoffUtc datetime2(3);
@@ -2402,10 +2555,26 @@ END;
             WHERE OBJECT_ID(N'dbo.FR_Snapshot', N'U') IS NOT NULL
               AND SnapshotUtc < @PurgeSnapshotCutoffUtc
             UNION ALL
-            SELECT N'FR_QueryPlan', COUNT(1)
-            FROM dbo.FR_QueryPlan
-            WHERE OBJECT_ID(N'dbo.FR_QueryPlan', N'U') IS NOT NULL
-              AND SnapshotUtc < @PurgeSnapshotCutoffUtc
+            SELECT N'FR_Tempdb', COUNT(1) FROM dbo.FR_Tempdb
+            WHERE OBJECT_ID(N'dbo.FR_Tempdb', N'U') IS NOT NULL AND SnapshotUtc < @PurgeSnapshotCutoffUtc
+            UNION ALL
+            SELECT N'FR_Memory', COUNT(1) FROM dbo.FR_Memory
+            WHERE OBJECT_ID(N'dbo.FR_Memory', N'U') IS NOT NULL AND SnapshotUtc < @PurgeSnapshotCutoffUtc
+            UNION ALL
+            SELECT N'FR_AgentJob', COUNT(1) FROM dbo.FR_AgentJob
+            WHERE OBJECT_ID(N'dbo.FR_AgentJob', N'U') IS NOT NULL AND SnapshotUtc < @PurgeSnapshotCutoffUtc
+            UNION ALL
+            SELECT N'FR_BackupHistory', COUNT(1) FROM dbo.FR_BackupHistory
+            WHERE OBJECT_ID(N'dbo.FR_BackupHistory', N'U') IS NOT NULL AND SnapshotUtc < @PurgeSnapshotCutoffUtc
+            UNION ALL
+            SELECT N'FR_AlwaysOnState', COUNT(1) FROM dbo.FR_AlwaysOnState
+            WHERE OBJECT_ID(N'dbo.FR_AlwaysOnState', N'U') IS NOT NULL AND SnapshotUtc < @PurgeSnapshotCutoffUtc
+            UNION ALL
+            SELECT N'FR_Deadlock', COUNT(1) FROM dbo.FR_Deadlock
+            WHERE OBJECT_ID(N'dbo.FR_Deadlock', N'U') IS NOT NULL AND SnapshotUtc < @PurgeSnapshotCutoffUtc
+            UNION ALL
+            SELECT N'FR_QueryPlan', COUNT(1) FROM dbo.FR_QueryPlan
+            WHERE OBJECT_ID(N'dbo.FR_QueryPlan', N'U') IS NOT NULL AND SnapshotUtc < @PurgeSnapshotCutoffUtc
             UNION ALL
             SELECT N'FR_RunLog', COUNT(1)
             FROM dbo.FR_RunLog
@@ -2469,7 +2638,70 @@ END;
             WAITFOR DELAY '00:00:00.250';
         END;
 
+        WHILE OBJECT_ID(N'dbo.FR_Tempdb', N'U') IS NOT NULL
+        BEGIN
+            DELETE TOP (5000) FROM dbo.FR_Tempdb WHERE SnapshotUtc < @PurgeSnapshotCutoffUtc;
+            SET @PurgeRows = @@ROWCOUNT;
+            SET @PurgeTotalRows = @PurgeTotalRows + @PurgeRows;
+            IF @PurgeRows = 0 BREAK;
+            WAITFOR DELAY '00:00:00.250';
+        END;
+
+        WHILE OBJECT_ID(N'dbo.FR_Memory', N'U') IS NOT NULL
+        BEGIN
+            DELETE TOP (5000) FROM dbo.FR_Memory WHERE SnapshotUtc < @PurgeSnapshotCutoffUtc;
+            SET @PurgeRows = @@ROWCOUNT;
+            SET @PurgeTotalRows = @PurgeTotalRows + @PurgeRows;
+            IF @PurgeRows = 0 BREAK;
+            WAITFOR DELAY '00:00:00.250';
+        END;
+
+        WHILE OBJECT_ID(N'dbo.FR_AgentJob', N'U') IS NOT NULL
+        BEGIN
+            DELETE TOP (5000) FROM dbo.FR_AgentJob WHERE SnapshotUtc < @PurgeSnapshotCutoffUtc;
+            SET @PurgeRows = @@ROWCOUNT;
+            SET @PurgeTotalRows = @PurgeTotalRows + @PurgeRows;
+            IF @PurgeRows = 0 BREAK;
+            WAITFOR DELAY '00:00:00.250';
+        END;
+
+        WHILE OBJECT_ID(N'dbo.FR_BackupHistory', N'U') IS NOT NULL
+        BEGIN
+            DELETE TOP (5000) FROM dbo.FR_BackupHistory WHERE SnapshotUtc < @PurgeSnapshotCutoffUtc;
+            SET @PurgeRows = @@ROWCOUNT;
+            SET @PurgeTotalRows = @PurgeTotalRows + @PurgeRows;
+            IF @PurgeRows = 0 BREAK;
+            WAITFOR DELAY '00:00:00.250';
+        END;
+
+        WHILE OBJECT_ID(N'dbo.FR_AlwaysOnState', N'U') IS NOT NULL
+        BEGIN
+            DELETE TOP (5000) FROM dbo.FR_AlwaysOnState WHERE SnapshotUtc < @PurgeSnapshotCutoffUtc;
+            SET @PurgeRows = @@ROWCOUNT;
+            SET @PurgeTotalRows = @PurgeTotalRows + @PurgeRows;
+            IF @PurgeRows = 0 BREAK;
+            WAITFOR DELAY '00:00:00.250';
+        END;
+
+        WHILE OBJECT_ID(N'dbo.FR_Deadlock', N'U') IS NOT NULL
+        BEGIN
+            DELETE TOP (5000) FROM dbo.FR_Deadlock WHERE SnapshotUtc < @PurgeSnapshotCutoffUtc;
+            SET @PurgeRows = @@ROWCOUNT;
+            SET @PurgeTotalRows = @PurgeTotalRows + @PurgeRows;
+            IF @PurgeRows = 0 BREAK;
+            WAITFOR DELAY '00:00:00.250';
+        END;
+
         WHILE OBJECT_ID(N'dbo.FR_QueryPlan', N'U') IS NOT NULL
+        BEGIN
+            DELETE TOP (5000) FROM dbo.FR_QueryPlan WHERE SnapshotUtc < @PurgeSnapshotCutoffUtc;
+            SET @PurgeRows = @@ROWCOUNT;
+            SET @PurgeTotalRows = @PurgeTotalRows + @PurgeRows;
+            IF @PurgeRows = 0 BREAK;
+            WAITFOR DELAY '00:00:00.250';
+        END;
+
+        WHILE OBJECT_ID(N'dbo.FR_Snapshot', N'U') IS NOT NULL
         BEGIN
             DELETE TOP (5000) FROM dbo.FR_QueryPlan WHERE SnapshotUtc < @PurgeSnapshotCutoffUtc;
             SET @PurgeRows = @@ROWCOUNT;
@@ -2511,6 +2743,18 @@ END;
             WAITFOR DELAY '00:00:00.250';
         END;
 
+        IF @PurgeRunId IS NOT NULL
+            UPDATE dbo.FR_RunLog
+            SET EndUtc = SYSUTCDATETIME(),
+                Status = N'Success',
+                Reason = CONCAT(N'Purge deleted ', @PurgeTotalRows, N' rows.')
+            WHERE RunId = @PurgeRunId;
+
+        IF @WhatIf = 0
+            EXEC sys.sp_releaseapplock
+                  @Resource = N'SQLFlightRecorder/Collect'
+                , @LockOwner = N'Session';
+
         SELECT
               N'Success' AS Status
             , @PurgeTotalRows AS RowsDeleted
@@ -2523,8 +2767,9 @@ END;
     -- =========================================================================
     -- Mode: REPORT
     -- =========================================================================
-    IF UPPER(@ModeNormalized) = N'REPORT'
+   IF UPPER(@ModeNormalized) = N'REPORT'
     BEGIN
+        -- @DatabaseName scope validation (safe metadata lookup; no dynamic SQL).
         IF @DatabaseName IS NOT NULL AND DB_ID(@DatabaseName) IS NULL
         BEGIN
             SELECT N'Error' AS Status, N'InvalidDatabaseName' AS ErrorCode,
@@ -2857,6 +3102,441 @@ END;
             END;
         END;
 
+        -- =====================================================================
+        -- Opt-in query-plan shredding (D-188). @IncludeQueryPlans = 1 ONLY.
+        -- Bounded by @TopN; evidence-only; never fails the Report.
+        -- =====================================================================
+        IF @IncludeQueryPlans = 1 AND OBJECT_ID(N'dbo.FR_QueryPlan', N'U') IS NOT NULL
+        BEGIN
+            BEGIN TRY
+                ;WITH XMLNAMESPACES (DEFAULT N'http://schemas.microsoft.com/sqlserver/2004/07/showplan'),
+                BoundedPlans AS
+                (
+                    SELECT TOP (@TopN)
+                          qp.QueryPlanId, qp.SnapshotUtc, qp.DatabaseId, qp.SessionId, qp.PlanXml
+                    FROM dbo.FR_QueryPlan AS qp
+                    WHERE qp.SnapshotUtc >= @ReportStartUtc
+                      AND qp.SnapshotUtc <= @ReportEndUtc
+                      AND qp.PlanXml IS NOT NULL
+                    ORDER BY qp.SnapshotUtc DESC, qp.QueryPlanId DESC
+                ),
+                Signals AS
+                (
+                    SELECT bp.QueryPlanId, bp.SnapshotUtc, bp.DatabaseId, bp.SessionId,
+                           s.RuleId, s.Severity, s.Confidence, s.Title, s.Summary, s.Recommendation
+                    FROM BoundedPlans AS bp
+                    CROSS APPLY (VALUES
+                        (N'FR_R0030_PlanMissingIndex', N'Medium', N'Medium',
+                         N'Plan shows evidence consistent with a missing index',
+                         N'Captured plan contains missing-index information.',
+                         N'Consider reviewing the workload and validating whether an index change is justified only after testing impact; do not create indexes blindly.',
+                         CASE WHEN bp.PlanXml.exist('//MissingIndexes') = 1 THEN 1 ELSE 0 END),
+                        (N'FR_R0031_PlanImplicitConversion', N'Low', N'Medium',
+                         N'Plan shows evidence consistent with an implicit conversion',
+                         N'Captured plan contains a plan-affecting convert.',
+                         N'Consider reviewing whether predicate and column data types match only after validating this query is relevant.',
+                         CASE WHEN bp.PlanXml.exist('//Warnings/PlanAffectingConvert') = 1 THEN 1 ELSE 0 END),
+                        (N'FR_R0032_PlanSpillToTempDb', N'Medium', N'Medium',
+                         N'Plan shows evidence consistent with a tempdb spill',
+                         N'Captured plan contains a spill-to-tempdb warning.',
+                         N'Consider reviewing cardinality estimates and memory grants only after validating the spill is material.',
+                         CASE WHEN bp.PlanXml.exist('//Warnings/SpillToTempDb') = 1 THEN 1 ELSE 0 END),
+                        (N'FR_R0033_PlanWarnings', N'Low', N'Medium',
+                         N'Plan contains optimizer warnings',
+                         N'Captured plan contains one or more optimizer warnings.',
+                         N'Consider reviewing the plan warnings to understand potential estimation or execution issues.',
+                         CASE WHEN bp.PlanXml.exist('//Warnings') = 1 THEN 1 ELSE 0 END),
+                        (N'FR_R0034_PlanParallelism', N'Low', N'Low',
+                         N'Plan uses parallelism',
+                         N'Captured plan contains parallel operators.',
+                         N'Consider validating whether parallelism is appropriate (review cost threshold / MAXDOP) only after confirming relevance.',
+                         CASE WHEN bp.PlanXml.exist('//RelOp[@Parallel="1"]') = 1 THEN 1 ELSE 0 END)
+                    ) AS s(RuleId, Severity, Confidence, Title, Summary, Recommendation, Present)
+                    WHERE s.Present = 1
+                )
+                INSERT INTO #fr_findings
+                (
+                    Severity, Confidence, EvidenceType, Category, RuleId,
+                    Title, Summary, Evidence, Recommendation,
+                    DatabaseName, SessionId, StartTimeUtc, EndTimeUtc, MoreInfo
+                )
+                SELECT
+                      Severity, Confidence, N'Inferred', N'QueryPlan', RuleId,
+                      Title, Summary,
+                      CONCAT(N'PlanId=', QueryPlanId, N'; SessionId=', SessionId),
+                      Recommendation,
+                      DB_NAME(DatabaseId), SessionId, SnapshotUtc, SnapshotUtc,
+                      N'Evidence shredded from captured plan XML (D-188). Evidence consistent with the pattern; not a confirmed root cause.'
+                FROM Signals;
+            END TRY
+            BEGIN CATCH
+                INSERT INTO #fr_findings
+                (
+                    Severity, Confidence, EvidenceType, Category, RuleId,
+                    Title, Summary, Evidence, Recommendation,
+                    StartTimeUtc, EndTimeUtc, MoreInfo
+                )
+                VALUES
+                (
+                    N'Informational', N'High', N'Observed', N'Coverage',
+                    N'FR_R0026_CoverageAndCapabilitySummary',
+                    N'Query plan shredding encountered an error',
+                    N'Plan parsing failed; other findings are unaffected.',
+                    LEFT(ERROR_MESSAGE(), 1900),
+                    N'Re-run Report; if it persists, plan XML may be malformed or unsupported on this version.',
+                    @ReportStartUtc, @ReportEndUtc,
+                    N'Plan shredding is best-effort and isolated (D-188); it never fails the whole Report.'
+                );
+            END CATCH;
+
+            IF NOT EXISTS (
+                SELECT 1 FROM dbo.FR_QueryPlan
+                WHERE SnapshotUtc >= @ReportStartUtc AND SnapshotUtc <= @ReportEndUtc
+            )
+                INSERT INTO #fr_findings
+                (
+                    Severity, Confidence, EvidenceType, Category, RuleId,
+                    Title, Summary, Evidence, Recommendation,
+                    StartTimeUtc, EndTimeUtc, MoreInfo
+                )
+                VALUES
+                (
+                    N'Informational', N'High', N'Observed', N'Coverage',
+                    N'FR_R0026_CoverageAndCapabilitySummary',
+                    N'Query plans requested but none captured',
+                    N'@IncludeQueryPlans = 1 but no plan XML was captured in the report window.',
+                    N'Plans are captured only for active requests at Collect time; none were active or retrievable.',
+                    N'Run Collect with @IncludeQueryPlans = 1 while the workload is active.',
+                    @ReportStartUtc, @ReportEndUtc,
+                    N'No FR_QueryPlan rows for the selected window.'
+                );
+        END;
+
+        -- =====================================================================
+        -- v0.2 rule evaluation (FR_R0007–FR_R0014). Bounded to the report window.
+        -- Each rule is gated by table existence and honors DisabledRules (D-099).
+        -- =====================================================================
+        DECLARE @DisabledRules nvarchar(4000) = N'';
+        SELECT @DisabledRules = ISNULL(ConfigValue, N'')
+        FROM dbo.FR_Config WHERE ConfigKey = N'DisabledRules';
+        SET @DisabledRules = N';' + @DisabledRules + N';';
+
+        DECLARE @BlockingStormThreshold int = 5;
+        SELECT @BlockingStormThreshold = TRY_CONVERT(int, ConfigValue)
+        FROM dbo.FR_Config WHERE ConfigKey = N'BlockingStormSessionThreshold';
+        IF @BlockingStormThreshold IS NULL OR @BlockingStormThreshold < 1 SET @BlockingStormThreshold = 5;
+
+        DECLARE @TempdbVsWarnKb bigint = 5242880;
+        SELECT @TempdbVsWarnKb = TRY_CONVERT(bigint, ConfigValue)
+        FROM dbo.FR_Config WHERE ConfigKey = N'TempdbVersionStoreWarnKb';
+        IF @TempdbVsWarnKb IS NULL OR @TempdbVsWarnKb < 1 SET @TempdbVsWarnKb = 5242880;
+
+        -- FR_R0007 BlockingStorm (Blocking / Critical / High / Observed)
+        IF OBJECT_ID(N'dbo.FR_Request', N'U') IS NOT NULL
+           AND CHARINDEX(N';FR_R0007_BlockingStorm;', @DisabledRules) = 0
+        BEGIN
+            ;WITH StormPerSnapshot AS
+            (
+                SELECT r.SnapshotId, r.SnapshotUtc,
+                       COUNT(DISTINCT r.SessionId) AS BlockedSessions
+                FROM dbo.FR_Request AS r
+                WHERE r.SnapshotUtc >= @ReportStartUtc
+                  AND r.SnapshotUtc <= @ReportEndUtc
+                  AND r.BlockingSessionId IS NOT NULL
+                  AND r.BlockingSessionId <> 0
+                GROUP BY r.SnapshotId, r.SnapshotUtc
+            )
+            INSERT INTO #fr_findings
+            (
+                Severity, Confidence, EvidenceType, Category, RuleId,
+                Title, Summary, Evidence, Recommendation,
+                StartTimeUtc, EndTimeUtc, MoreInfo
+            )
+            SELECT TOP (1)
+                N'Critical', N'High', N'Observed', N'Blocking',
+                N'FR_R0007_BlockingStorm',
+                N'Blocking storm observed',
+                N'Multiple sessions were blocked within a single snapshot in the window.',
+                CONCAT(N'Peak blocked sessions in one snapshot: ', MAX(BlockedSessions),
+                       N'; threshold: ', @BlockingStormThreshold),
+                N'Consider reviewing the lead blocker and the involved transactions only after validating which session is at the head of the chain.',
+                MIN(SnapshotUtc), MAX(SnapshotUtc),
+                N'Computed from FR_Request.BlockingSessionId per snapshot. Folds the same anchor as FR_R0001/FR_R0002.'
+            FROM StormPerSnapshot
+            HAVING MAX(BlockedSessions) >= @BlockingStormThreshold;
+        END;
+
+        -- FR_R0008 TempdbVersionStoreGrowth (Tempdb / Medium→High / High / Observed)
+        IF OBJECT_ID(N'dbo.FR_Tempdb', N'U') IS NOT NULL
+           AND CHARINDEX(N';FR_R0008_TempdbVersionStoreGrowth;', @DisabledRules) = 0
+        BEGIN
+            INSERT INTO #fr_findings
+            (
+                Severity, Confidence, EvidenceType, Category, RuleId,
+                Title, Summary, Evidence, Recommendation,
+                StartTimeUtc, EndTimeUtc, MoreInfo
+            )
+            SELECT TOP (1)
+                CASE WHEN MAX(VersionStoreKb) >= @TempdbVsWarnKb THEN N'High' ELSE N'Medium' END,
+                N'High', N'Observed', N'Tempdb',
+                N'FR_R0008_TempdbVersionStoreGrowth',
+                N'Tempdb version store growth observed',
+                N'The tempdb version store grew during the report window.',
+                CONCAT(N'Min version store: ', MIN(VersionStoreKb), N' KB; max: ', MAX(VersionStoreKb),
+                       N' KB; escalation threshold: ', @TempdbVsWarnKb, N' KB'),
+                N'Consider reviewing long-running or open transactions and snapshot-isolation usage only after validating which workload holds versions.',
+                MIN(SnapshotUtc), MAX(SnapshotUtc),
+                N'Computed from FR_Tempdb.VersionStoreKb across the window.'
+            FROM dbo.FR_Tempdb
+            WHERE SnapshotUtc >= @ReportStartUtc AND SnapshotUtc <= @ReportEndUtc
+            HAVING MAX(VersionStoreKb) > MIN(VersionStoreKb)
+               AND MAX(VersionStoreKb) > 0;
+        END;
+
+        -- FR_R0009 TempdbFileImbalanceOrPressure (Tempdb / Medium / Medium / Inferred)
+        IF OBJECT_ID(N'dbo.FR_Tempdb', N'U') IS NOT NULL
+           AND CHARINDEX(N';FR_R0009_TempdbFileImbalanceOrPressure;', @DisabledRules) = 0
+        BEGIN
+            INSERT INTO #fr_findings
+            (
+                Severity, Confidence, EvidenceType, Category, RuleId,
+                Title, Summary, Evidence, Recommendation,
+                StartTimeUtc, EndTimeUtc, MoreInfo
+            )
+            SELECT TOP (1)
+                N'Medium', N'Medium', N'Inferred', N'Tempdb',
+                N'FR_R0009_TempdbFileImbalanceOrPressure',
+                N'Tempdb data file imbalance observed',
+                N'Tempdb data files differ substantially in size during the window.',
+                CONCAT(N'Data files: ', MAX(DataFileCount),
+                       N'; min file: ', MIN(MinDataFileSizeKb), N' KB; max file: ', MAX(MaxDataFileSizeKb), N' KB'),
+                N'Consider reviewing whether tempdb data files are equally sized only after validating allocation contention is relevant to this workload.',
+                MIN(SnapshotUtc), MAX(SnapshotUtc),
+                N'Computed from FR_Tempdb file size columns. Inferred signal; not a confirmed root cause.'
+            FROM dbo.FR_Tempdb
+            WHERE SnapshotUtc >= @ReportStartUtc AND SnapshotUtc <= @ReportEndUtc
+            HAVING MAX(DataFileCount) > 1
+               AND MAX(MaxDataFileSizeKb) > MIN(MinDataFileSizeKb) * 2
+               AND MIN(MinDataFileSizeKb) > 0;
+        END;
+
+        -- FR_R0010 FailedSqlAgentJobNearIncident (Maintenance / High / High / Observed)
+        -- Window = 15 minutes before @ReportStartUtc through @ReportEndUtc (D-095).
+        IF OBJECT_ID(N'dbo.FR_AgentJob', N'U') IS NOT NULL
+           AND CHARINDEX(N';FR_R0010_FailedSqlAgentJobNearIncident;', @DisabledRules) = 0
+        BEGIN
+            INSERT INTO #fr_findings
+            (
+                Severity, Confidence, EvidenceType, Category, RuleId,
+                Title, Summary, Evidence, Recommendation,
+                DatabaseName, StartTimeUtc, EndTimeUtc, MoreInfo
+            )
+            SELECT TOP (@MaxFindings)
+                N'High', N'High', N'Observed', N'Maintenance',
+                N'FR_R0010_FailedSqlAgentJobNearIncident',
+                N'Failed SQL Agent job near the incident window',
+                CONCAT(N'Job ''', j.JobName, N''' reported a failed outcome near the window.'),
+                CONCAT(N'RunStartUtc=', CONVERT(nvarchar(30), j.RunStartUtc, 126),
+                       N'; Outcome=', j.RunOutcome, N'; Msg=', LEFT(ISNULL(j.MessageText, N''), 200)),
+                N'Consider reviewing this job''s history and step output only after validating whether it correlates with the incident.',
+                NULL,
+                j.RunStartUtc, j.RunStartUtc,
+                N'From FR_AgentJob delta read. Correlation by time, not confirmed causation.'
+            FROM dbo.FR_AgentJob AS j
+            WHERE j.RunOutcome = N'Failed'
+              AND j.RunStartUtc >= DATEADD(minute, -15, @ReportStartUtc)
+              AND j.RunStartUtc <= @ReportEndUtc
+            ORDER BY j.RunStartUtc DESC;
+        END;
+
+        -- FR_R0011 MaintenanceJobOverlap (Maintenance / Medium / Medium / Inferred)
+        IF OBJECT_ID(N'dbo.FR_AgentJob', N'U') IS NOT NULL
+           AND CHARINDEX(N';FR_R0011_MaintenanceJobOverlap;', @DisabledRules) = 0
+        BEGIN
+            DECLARE @MaintPatterns nvarchar(4000) = N'';
+            SELECT @MaintPatterns = ISNULL(ConfigValue, N'')
+            FROM dbo.FR_Config WHERE ConfigKey = N'MaintenanceJobNamePatterns';
+
+            ;WITH MaintJobs AS
+            (
+                SELECT DISTINCT j.JobName, j.RunStartUtc,
+                       DATEADD(second, ISNULL(j.RunDurationSec, 0), j.RunStartUtc) AS RunEndUtc
+                FROM dbo.FR_AgentJob AS j
+                CROSS APPLY
+                (
+                    SELECT TRY_CONVERT(xml, N'<p>' + REPLACE(@MaintPatterns, N';', N'</p><p>') + N'</p>') AS x
+                ) AS px
+                WHERE j.RunStartUtc IS NOT NULL
+                  AND EXISTS
+                  (
+                      SELECT 1
+                      FROM px.x.nodes('/p') AS n(c)
+                      WHERE LTRIM(RTRIM(n.c.value('.', 'nvarchar(200)'))) <> N''
+                        AND j.JobName LIKE n.c.value('.', 'nvarchar(200)')
+                  )
+            )
+            INSERT INTO #fr_findings
+            (
+                Severity, Confidence, EvidenceType, Category, RuleId,
+                Title, Summary, Evidence, Recommendation,
+                StartTimeUtc, EndTimeUtc, MoreInfo
+            )
+            SELECT TOP (@MaxFindings)
+                N'Medium', N'Medium', N'Inferred', N'Maintenance',
+                N'FR_R0011_MaintenanceJobOverlap',
+                N'Maintenance job overlapped the incident window',
+                CONCAT(N'Maintenance job ''', JobName, N''' ran during or across the window.'),
+                CONCAT(N'RunStartUtc=', CONVERT(nvarchar(30), RunStartUtc, 126),
+                       N'; RunEndUtc=', CONVERT(nvarchar(30), RunEndUtc, 126)),
+                N'Consider reviewing whether this maintenance activity coincided with the symptoms only after validating overlap is meaningful.',
+                RunStartUtc, RunEndUtc,
+                N'Job name matched MaintenanceJobNamePatterns (D-094). Inferred overlap.'
+            FROM MaintJobs
+            WHERE RunStartUtc <= @ReportEndUtc
+              AND RunEndUtc   >= @ReportStartUtc
+            ORDER BY RunStartUtc DESC;
+        END;
+
+        -- FR_R0012 BackupOverlapWithIncident (Maintenance / Medium / High / Observed)
+        -- Log backups excluded (D-096).
+        IF OBJECT_ID(N'dbo.FR_BackupHistory', N'U') IS NOT NULL
+           AND CHARINDEX(N';FR_R0012_BackupOverlapWithIncident;', @DisabledRules) = 0
+        BEGIN
+            INSERT INTO #fr_findings
+            (
+                Severity, Confidence, EvidenceType, Category, RuleId,
+                Title, Summary, Evidence, Recommendation,
+                DatabaseName, StartTimeUtc, EndTimeUtc, MoreInfo
+            )
+            SELECT TOP (@MaxFindings)
+                N'Medium', N'High', N'Observed', N'Maintenance',
+                N'FR_R0012_BackupOverlapWithIncident',
+                N'Backup overlapped the incident window',
+                CONCAT(N'A ', b.BackupType, N' backup of [', b.DatabaseName, N'] overlapped the window.'),
+                CONCAT(N'Start=', CONVERT(nvarchar(30), b.BackupStartUtc, 126),
+                       N'; Finish=', CONVERT(nvarchar(30), b.BackupFinishUtc, 126),
+                       N'; SizeBytes=', ISNULL(CONVERT(nvarchar(30), b.BackupSizeBytes), N'')),
+                N'Consider reviewing whether backup I/O coincided with the symptoms only after validating the overlap is relevant.',
+                b.DatabaseName,
+                b.BackupStartUtc, b.BackupFinishUtc,
+                N'From FR_BackupHistory. Log backups are excluded by design (D-096).'
+            FROM dbo.FR_BackupHistory AS b
+            WHERE b.BackupType <> N'Log'
+              AND b.BackupStartUtc IS NOT NULL
+              AND b.BackupStartUtc  <= @ReportEndUtc
+              AND ISNULL(b.BackupFinishUtc, b.BackupStartUtc) >= @ReportStartUtc
+            ORDER BY b.BackupStartUtc DESC;
+        END;
+
+        -- FR_R0013 DeadlocksObserved (Blocking / High / High / Observed)
+        IF OBJECT_ID(N'dbo.FR_Deadlock', N'U') IS NOT NULL
+           AND CHARINDEX(N';FR_R0013_DeadlocksObserved;', @DisabledRules) = 0
+        BEGIN
+            INSERT INTO #fr_findings
+            (
+                Severity, Confidence, EvidenceType, Category, RuleId,
+                Title, Summary, Evidence, Recommendation,
+                StartTimeUtc, EndTimeUtc, MoreInfo
+            )
+            SELECT TOP (1)
+                N'High', N'High', N'Observed', N'Blocking',
+                N'FR_R0013_DeadlocksObserved',
+                N'Deadlocks observed in the window',
+                N'One or more unique deadlock graphs were captured during the window.',
+                CONCAT(N'Distinct deadlock graphs: ', COUNT(DISTINCT GraphHash),
+                       N'; total captured: ', COUNT(1)),
+                N'Consider reviewing the deadlock graphs and the participating queries only after validating the victims and resources.',
+                MIN(ISNULL(DeadlockTimeUtc, SnapshotUtc)),
+                MAX(ISNULL(DeadlockTimeUtc, SnapshotUtc)),
+                N'From FR_Deadlock (deduped by graph hash, D-053). Graph XML stored for review.'
+            FROM dbo.FR_Deadlock
+            WHERE ISNULL(DeadlockTimeUtc, SnapshotUtc) >= @ReportStartUtc
+              AND ISNULL(DeadlockTimeUtc, SnapshotUtc) <= @ReportEndUtc
+            HAVING COUNT(1) > 0;
+        END;
+
+        -- FR_R0014 AlwaysOnRoleOrStateChange (HA / Critical / High / Observed)
+        IF OBJECT_ID(N'dbo.FR_AlwaysOnState', N'U') IS NOT NULL
+           AND CHARINDEX(N';FR_R0014_AlwaysOnRoleOrStateChange;', @DisabledRules) = 0
+        BEGIN
+            ;WITH AoWindow AS
+            (
+                SELECT AgName, ReplicaServer,
+                       COUNT(DISTINCT Role) AS DistinctRoles,
+                       COUNT(DISTINCT SynchronizationHealth) AS DistinctHealth
+                FROM dbo.FR_AlwaysOnState
+                WHERE SnapshotUtc >= @ReportStartUtc AND SnapshotUtc <= @ReportEndUtc
+                GROUP BY AgName, ReplicaServer
+            )
+            INSERT INTO #fr_findings
+            (
+                Severity, Confidence, EvidenceType, Category, RuleId,
+                Title, Summary, Evidence, Recommendation,
+                StartTimeUtc, EndTimeUtc, MoreInfo
+            )
+            SELECT TOP (@MaxFindings)
+                N'Critical', N'High', N'Observed', N'HA',
+                N'FR_R0014_AlwaysOnRoleOrStateChange',
+                N'Always On role or synchronization state changed',
+                CONCAT(N'Replica [', ReplicaServer, N'] in AG [', AgName, N'] changed role or health during the window.'),
+                CONCAT(N'DistinctRoles=', DistinctRoles, N'; DistinctHealthStates=', DistinctHealth),
+                N'Consider reviewing the AG dashboard and cluster log for the timeframe only after validating the change correlates with the incident.',
+                @ReportStartUtc, @ReportEndUtc,
+                N'Computed from FR_AlwaysOnState across the window.'
+            FROM AoWindow
+            WHERE DistinctRoles > 1 OR DistinctHealth > 1;
+        END;
+
+        -- =====================================================================
+        -- v0.2 timeline events (chronological; D-071/D-073 closed-set EventType).
+        -- =====================================================================
+        IF OBJECT_ID(N'dbo.FR_Deadlock', N'U') IS NOT NULL
+            INSERT INTO #fr_timeline
+            (
+                EventUtc, EventType, Category, Severity, Summary,
+                RunId, SnapshotId, MoreInfo
+            )
+            SELECT
+                ISNULL(DeadlockTimeUtc, SnapshotUtc), N'DeadlockObserved', N'Blocking',
+                N'High', N'Deadlock graph captured.',
+                NULL, SnapshotId,
+                CONCAT(N'ProcessCount=', ISNULL(CONVERT(nvarchar(10), ProcessCount), N''))
+            FROM dbo.FR_Deadlock
+            WHERE ISNULL(DeadlockTimeUtc, SnapshotUtc) >= @ReportStartUtc
+              AND ISNULL(DeadlockTimeUtc, SnapshotUtc) <= @ReportEndUtc;
+
+        IF OBJECT_ID(N'dbo.FR_AgentJob', N'U') IS NOT NULL
+            INSERT INTO #fr_timeline
+            (
+                EventUtc, EventType, Category, Severity, Summary,
+                RunId, SnapshotId, MoreInfo
+            )
+            SELECT
+                RunStartUtc, N'AgentJobFailed', N'Maintenance', N'High',
+                CONCAT(N'Agent job failed: ', JobName),
+                NULL, SnapshotId, LEFT(ISNULL(MessageText, N''), 400)
+            FROM dbo.FR_AgentJob
+            WHERE RunOutcome = N'Failed'
+              AND RunStartUtc >= DATEADD(minute, -15, @ReportStartUtc)
+              AND RunStartUtc <= @ReportEndUtc;
+
+        IF OBJECT_ID(N'dbo.FR_BackupHistory', N'U') IS NOT NULL
+            INSERT INTO #fr_timeline
+            (
+                EventUtc, EventType, Category, Severity, Summary,
+                DatabaseName, RunId, SnapshotId, MoreInfo
+            )
+            SELECT
+                BackupStartUtc, N'BackupStarted', N'Maintenance', N'Informational',
+                CONCAT(BackupType, N' backup: ', DatabaseName),
+                DatabaseName, NULL, SnapshotId,
+                CONCAT(N'Finish=', CONVERT(nvarchar(30), BackupFinishUtc, 126))
+            FROM dbo.FR_BackupHistory
+            WHERE BackupType <> N'Log'
+              AND BackupStartUtc IS NOT NULL
+              AND BackupStartUtc <= @ReportEndUtc
+              AND ISNULL(BackupFinishUtc, BackupStartUtc) >= @ReportStartUtc;
+
         IF NOT EXISTS (SELECT 1 FROM #fr_findings)
         BEGIN
             INSERT INTO #fr_findings
@@ -2940,6 +3620,30 @@ END;
                   WHEN N'CRITICAL'      THEN 5
                   ELSE 2
               END;
+
+        -- @DatabaseName scope: drop DB-bound rows for other databases; keep
+        -- instance-level/coverage rows (DatabaseName IS NULL).
+        IF @DatabaseName IS NOT NULL
+        BEGIN
+            DELETE FROM #fr_findings
+            WHERE DatabaseName IS NOT NULL AND DatabaseName <> @DatabaseName;
+            DELETE FROM #fr_timeline
+            WHERE DatabaseName IS NOT NULL AND DatabaseName <> @DatabaseName;
+        END;
+
+        -- @MinSeverity post-evaluation filter (D-070). Critical and Coverage are
+        -- never hidden (D-083). Findings only; Timeline stays chronological.
+        DELETE FROM #fr_findings
+        WHERE Severity <> N'Critical'
+          AND Category <> N'Coverage'
+          AND CASE Severity
+                  WHEN N'Informational' THEN 1 WHEN N'Low' THEN 2
+                  WHEN N'Medium' THEN 3 WHEN N'High' THEN 4
+                  WHEN N'Critical' THEN 5 ELSE 1 END
+            < CASE UPPER(@MinSeverity)
+                  WHEN N'INFORMATIONAL' THEN 1 WHEN N'LOW' THEN 2
+                  WHEN N'MEDIUM' THEN 3 WHEN N'HIGH' THEN 4
+                  WHEN N'CRITICAL' THEN 5 ELSE 2 END;
 
         IF UPPER(@OutputFormat) = N'MARKDOWN'
         BEGIN
