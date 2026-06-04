@@ -82,12 +82,55 @@ BEGIN
     -- =========================================================================
     -- Constants and version info
     -- =========================================================================
-    DECLARE @ToolVersion             nvarchar(30)  = N'0.1.0-alpha.3';
+    DECLARE @ToolVersion             nvarchar(30)  = N'0.2.0';
     DECLARE @BuildDateUtc            datetime2(3)  = CONVERT(datetime2(3), '2026-06-03T00:00:00');
-    DECLARE @SchemaVersion            nvarchar(20) = N'0.1.0-alpha.3';
+    DECLARE @SchemaVersion            nvarchar(20) = N'0.2.0';
     DECLARE @SupportedSqlServerRange nvarchar(50)  = N'SQL Server 2012–2025';
-    DECLARE @PartNumber              int           = 3;
-    DECLARE @PartTotal               int           = 3;
+    DECLARE @PartNumber              int           = 1;
+    DECLARE @PartTotal               int           = 1;
+
+    -- =========================================================================
+    -- Capability probe (D-008, D-111, D-115, D-127) — closed key set
+    -- =========================================================================
+    DECLARE @EngineEditionProbe   int          = TRY_CONVERT(int, SERVERPROPERTY(N'EngineEdition'));
+    DECLARE @ProductMajorProbe    int          = TRY_CONVERT(int, SERVERPROPERTY(N'ProductMajorVersion'));
+    DECLARE @ProductLevelProbe    nvarchar(20) = CONVERT(nvarchar(20), SERVERPROPERTY(N'ProductLevel'));
+    DECLARE @IsAzureSqlDb         bit          = CASE WHEN TRY_CONVERT(int, SERVERPROPERTY(N'EngineEdition')) = 5 THEN 1 ELSE 0 END;
+    DECLARE @IsAzureManagedInst   bit          = CASE WHEN TRY_CONVERT(int, SERVERPROPERTY(N'EngineEdition')) = 8 THEN 1 ELSE 0 END;
+    DECLARE @HasMsdb              bit          = CASE WHEN DB_ID(N'msdb') IS NOT NULL THEN 1 ELSE 0 END;
+    DECLARE @HasAgent             bit          = CASE WHEN DB_ID(N'msdb') IS NOT NULL AND OBJECT_ID(N'msdb.dbo.sysjobhistory', N'U') IS NOT NULL THEN 1 ELSE 0 END;
+    DECLARE @IsHadrEnabledProbe   bit          = TRY_CONVERT(bit, SERVERPROPERTY(N'IsHadrEnabled'));
+    DECLARE @PlatformProbe        nvarchar(20) = N'Windows';
+    DECLARE @CapabilitySnapshot   nvarchar(max);
+
+    -- Platform detection without @@VERSION parsing: host_platform is available
+    -- on SQL 2017+ (sys.dm_os_host_info). Older engines are Windows-only.
+    IF OBJECT_ID(N'sys.dm_os_host_info', N'V') IS NOT NULL
+       OR EXISTS (SELECT 1 FROM sys.all_objects WHERE name = N'dm_os_host_info')
+    BEGIN
+        BEGIN TRY
+            DECLARE @hostPlat nvarchar(256);
+            EXEC sys.sp_executesql
+                 N'SELECT @p = host_platform FROM sys.dm_os_host_info;',
+                 N'@p nvarchar(256) OUTPUT', @p = @hostPlat OUTPUT;
+            IF @hostPlat IS NOT NULL SET @PlatformProbe = CONVERT(nvarchar(20), @hostPlat);
+        END TRY
+        BEGIN CATCH
+            SET @PlatformProbe = N'Windows';
+        END CATCH;
+    END;
+
+    SET @CapabilitySnapshot = CONCAT(
+          N'EngineEdition=', ISNULL(CONVERT(nvarchar(10), @EngineEditionProbe), N''), N';',
+          N'ProductMajorVersion=', ISNULL(CONVERT(nvarchar(10), @ProductMajorProbe), N''), N';',
+          N'ProductLevel=', ISNULL(@ProductLevelProbe, N''), N';',
+          N'Platform=', @PlatformProbe, N';',
+          N'IsAzureSqlDb=', CONVERT(nvarchar(1), @IsAzureSqlDb), N';',
+          N'IsAzureManagedInstance=', CONVERT(nvarchar(1), @IsAzureManagedInst), N';',
+          N'HasMsdb=', CONVERT(nvarchar(1), @HasMsdb), N';',
+          N'HasAgent=', CONVERT(nvarchar(1), @HasAgent), N';',
+          N'IsHadrEnabled=', ISNULL(CONVERT(nvarchar(1), @IsHadrEnabledProbe), N'0'), N';',
+          N'SchemaVersion=', @SchemaVersion);
 
     -- =========================================================================
     -- Input normalization and validation
@@ -97,6 +140,11 @@ BEGIN
     -- Alias 'Version' → 'About'
     IF UPPER(@ModeNormalized) = N'VERSION'
         SET @ModeNormalized = N'About';
+
+    -- @Debug routes Collect to safe CollectDebug (D-128): no collector rows,
+    -- a single FR_RunLog row written as Mode = 'CollectDebug'.
+    IF UPPER(@ModeNormalized) = N'COLLECT' AND @Debug = 1
+        SET @ModeNormalized = N'CollectDebug';
 
     IF UPPER(@ModeNormalized) = N'COLLECT' AND @Debug = 1
         SET @ModeNormalized = N'CollectDebug';
@@ -516,7 +564,157 @@ CREATE TABLE dbo.FR_QueryText (
                 EXEC sys.sp_executesql @CreateSql;
             END;
 
-            -- Create FR_QueryPlan (opt-in @IncludeQueryPlans storage; child of FR_Snapshot, purge-safe)
+            -- ===== v0.2 tables (Historical Correlation) =====================
+
+            -- FR_Tempdb (one row per snapshot; tempdb space + file shape)
+            IF OBJECT_ID(N'dbo.FR_Tempdb', N'U') IS NULL
+            BEGIN
+                SET @CreateSql = N'
+CREATE TABLE dbo.FR_Tempdb (
+    TempdbId             bigint        IDENTITY(1,1) NOT NULL PRIMARY KEY NONCLUSTERED,
+    SnapshotId           bigint        NOT NULL FOREIGN KEY REFERENCES dbo.FR_Snapshot (SnapshotId),
+    SnapshotUtc          datetime2(3)  NOT NULL,
+    VersionStoreKb       bigint        NULL,
+    UserObjectKb         bigint        NULL,
+    InternalObjectKb     bigint        NULL,
+    UnallocatedExtentKb  bigint        NULL,
+    MixedExtentKb        bigint        NULL,
+    DataFileCount        int           NULL,
+    MinDataFileSizeKb    bigint        NULL,
+    MaxDataFileSizeKb    bigint        NULL
+)' + @TableCompressionClause;
+                EXEC sys.sp_executesql @CreateSql;
+                SET @CreateSql = N'CREATE CLUSTERED INDEX CIX_FR_Tempdb_SnapshotUtc_TempdbId ON dbo.FR_Tempdb (SnapshotUtc, TempdbId)' + @IndexCompressionClause;
+                EXEC sys.sp_executesql @CreateSql;
+            END;
+
+            -- FR_Memory (one row per snapshot; memory pressure summary)
+            IF OBJECT_ID(N'dbo.FR_Memory', N'U') IS NULL
+            BEGIN
+                SET @CreateSql = N'
+CREATE TABLE dbo.FR_Memory (
+    MemoryId                 bigint        IDENTITY(1,1) NOT NULL PRIMARY KEY NONCLUSTERED,
+    SnapshotId               bigint        NOT NULL FOREIGN KEY REFERENCES dbo.FR_Snapshot (SnapshotId),
+    SnapshotUtc              datetime2(3)  NOT NULL,
+    TotalServerMemoryKb      bigint        NULL,
+    TargetServerMemoryKb     bigint        NULL,
+    StolenServerMemoryKb     bigint        NULL,
+    MemoryGrantsPending      bigint        NULL,
+    MemoryGrantsOutstanding  bigint        NULL,
+    PageLifeExpectancy       bigint        NULL
+)' + @TableCompressionClause;
+                EXEC sys.sp_executesql @CreateSql;
+                SET @CreateSql = N'CREATE CLUSTERED INDEX CIX_FR_Memory_SnapshotUtc_MemoryId ON dbo.FR_Memory (SnapshotUtc, MemoryId)' + @IndexCompressionClause;
+                EXEC sys.sp_executesql @CreateSql;
+            END;
+
+            -- FR_AgentJob (delta-read msdb job history; high-water in FR_Config)
+            IF OBJECT_ID(N'dbo.FR_AgentJob', N'U') IS NULL
+            BEGIN
+                SET @CreateSql = N'
+CREATE TABLE dbo.FR_AgentJob (
+    AgentJobRowId    bigint        IDENTITY(1,1) NOT NULL PRIMARY KEY NONCLUSTERED,
+    SnapshotId       bigint        NOT NULL FOREIGN KEY REFERENCES dbo.FR_Snapshot (SnapshotId),
+    SnapshotUtc      datetime2(3)  NOT NULL,
+    MsdbInstanceId   int           NOT NULL,
+    JobName          sysname       NULL,
+    StepId           int           NULL,
+    StepName         nvarchar(200) NULL,
+    RunStatus        int           NULL,
+    RunOutcome       nvarchar(20)  NULL,
+    RunStartUtc      datetime2(3)  NULL,
+    RunDurationSec   int           NULL,
+    MessageText      nvarchar(400) NULL
+)' + @TableCompressionClause;
+                EXEC sys.sp_executesql @CreateSql;
+                SET @CreateSql = N'CREATE CLUSTERED INDEX CIX_FR_AgentJob_SnapshotUtc_AgentJobRowId ON dbo.FR_AgentJob (SnapshotUtc, AgentJobRowId)' + @IndexCompressionClause;
+                EXEC sys.sp_executesql @CreateSql;
+            END;
+
+            -- FR_BackupHistory (delta-read msdb backupset; high-water in FR_Config)
+            IF OBJECT_ID(N'dbo.FR_BackupHistory', N'U') IS NULL
+            BEGIN
+                SET @CreateSql = N'
+CREATE TABLE dbo.FR_BackupHistory (
+    BackupHistoryId  bigint        IDENTITY(1,1) NOT NULL PRIMARY KEY NONCLUSTERED,
+    SnapshotId       bigint        NOT NULL FOREIGN KEY REFERENCES dbo.FR_Snapshot (SnapshotId),
+    SnapshotUtc      datetime2(3)  NOT NULL,
+    MsdbBackupSetId  int           NOT NULL,
+    DatabaseName     sysname       NULL,
+    BackupType       nvarchar(20)  NULL,
+    BackupStartUtc   datetime2(3)  NULL,
+    BackupFinishUtc  datetime2(3)  NULL,
+    BackupSizeBytes  bigint        NULL,
+    IsCopyOnly       bit           NULL
+)' + @TableCompressionClause;
+                EXEC sys.sp_executesql @CreateSql;
+                SET @CreateSql = N'CREATE CLUSTERED INDEX CIX_FR_BackupHistory_SnapshotUtc_BackupHistoryId ON dbo.FR_BackupHistory (SnapshotUtc, BackupHistoryId)' + @IndexCompressionClause;
+                EXEC sys.sp_executesql @CreateSql;
+            END;
+
+            -- FR_AlwaysOnState (one row per replica/db per snapshot)
+            IF OBJECT_ID(N'dbo.FR_AlwaysOnState', N'U') IS NULL
+            BEGIN
+                SET @CreateSql = N'
+CREATE TABLE dbo.FR_AlwaysOnState (
+    AlwaysOnStateId       bigint        IDENTITY(1,1) NOT NULL PRIMARY KEY NONCLUSTERED,
+    SnapshotId            bigint        NOT NULL FOREIGN KEY REFERENCES dbo.FR_Snapshot (SnapshotId),
+    SnapshotUtc           datetime2(3)  NOT NULL,
+    AgName                sysname       NULL,
+    ReplicaServer         sysname       NULL,
+    Role                  nvarchar(30)  NULL,
+    OperationalState      nvarchar(30)  NULL,
+    ConnectedState        nvarchar(30)  NULL,
+    SynchronizationHealth nvarchar(30)  NULL,
+    DatabaseName          sysname       NULL,
+    SynchronizationState  nvarchar(30)  NULL
+)' + @TableCompressionClause;
+                EXEC sys.sp_executesql @CreateSql;
+                SET @CreateSql = N'CREATE CLUSTERED INDEX CIX_FR_AlwaysOnState_SnapshotUtc_AlwaysOnStateId ON dbo.FR_AlwaysOnState (SnapshotUtc, AlwaysOnStateId)' + @IndexCompressionClause;
+                EXEC sys.sp_executesql @CreateSql;
+            END;
+
+            -- FR_Deadlock (dedup by graph hash; bounded read of system_health)
+            IF OBJECT_ID(N'dbo.FR_Deadlock', N'U') IS NULL
+            BEGIN
+                SET @CreateSql = N'
+CREATE TABLE dbo.FR_Deadlock (
+    DeadlockId      bigint        IDENTITY(1,1) NOT NULL PRIMARY KEY NONCLUSTERED,
+    SnapshotId      bigint        NOT NULL FOREIGN KEY REFERENCES dbo.FR_Snapshot (SnapshotId),
+    SnapshotUtc     datetime2(3)  NOT NULL,
+    GraphHash       varbinary(32) NOT NULL,
+    DeadlockTimeUtc datetime2(3)  NULL,
+    ProcessCount    int           NULL,
+    DeadlockGraph   nvarchar(max) NULL
+)' + @TableCompressionClause;
+                EXEC sys.sp_executesql @CreateSql;
+                SET @CreateSql = N'CREATE CLUSTERED INDEX CIX_FR_Deadlock_SnapshotUtc_DeadlockId ON dbo.FR_Deadlock (SnapshotUtc, DeadlockId)' + @IndexCompressionClause;
+                EXEC sys.sp_executesql @CreateSql;
+                SET @CreateSql = N'CREATE NONCLUSTERED INDEX IX_FR_Deadlock_GraphHash ON dbo.FR_Deadlock (GraphHash)' + @IndexCompressionClause;
+                EXEC sys.sp_executesql @CreateSql;
+            END;
+
+            -- FR_QueryPlan (opt-in @IncludeQueryPlans storage; child of FR_Snapshot)
+            IF OBJECT_ID(N'dbo.FR_QueryPlan', N'U') IS NULL
+            BEGIN
+                SET @CreateSql = N'
+CREATE TABLE dbo.FR_QueryPlan (
+    QueryPlanId    bigint        IDENTITY(1,1) NOT NULL PRIMARY KEY NONCLUSTERED,
+    SnapshotId     bigint        NOT NULL FOREIGN KEY REFERENCES dbo.FR_Snapshot (SnapshotId),
+    SnapshotUtc    datetime2(3)  NOT NULL,
+    DatabaseId     int           NOT NULL,
+    SessionId      int           NULL,
+    QueryHash      binary(8)     NULL,
+    QueryPlanHash  binary(8)     NULL,
+    PlanXml        xml           NULL,
+    PlanXmlHash    varbinary(32) NULL
+)' + @TableCompressionClause;
+                EXEC sys.sp_executesql @CreateSql;
+                SET @CreateSql = N'CREATE CLUSTERED INDEX CIX_FR_QueryPlan_SnapshotUtc_QueryPlanId ON dbo.FR_QueryPlan (SnapshotUtc, QueryPlanId)' + @IndexCompressionClause;
+                EXEC sys.sp_executesql @CreateSql;
+            END;
+
+            -- Create FR_Rules (D-029: metadata only; logic in code)
             IF OBJECT_ID(N'dbo.FR_QueryPlan', N'U') IS NULL
             BEGIN
                 SET @CreateSql = N'
@@ -578,6 +776,35 @@ CREATE TABLE dbo.FR_Rules (
             IF NOT EXISTS (SELECT 1 FROM dbo.FR_Config WHERE ConfigKey = N'DisabledRules')
                 INSERT INTO dbo.FR_Config (ConfigKey, ConfigValue, Description)
                 VALUES (N'DisabledRules', N'', N'Semicolon-delimited disabled rule IDs (D-099).');
+
+            -- v0.2 config keys
+            IF NOT EXISTS (SELECT 1 FROM dbo.FR_Config WHERE ConfigKey = N'AgentJobHighWaterInstanceId')
+                INSERT INTO dbo.FR_Config (ConfigKey, ConfigValue, Description)
+                VALUES (N'AgentJobHighWaterInstanceId', N'0', N'Last msdb sysjobhistory instance_id captured (delta read, D-050).');
+
+            IF NOT EXISTS (SELECT 1 FROM dbo.FR_Config WHERE ConfigKey = N'BackupHighWaterBackupSetId')
+                INSERT INTO dbo.FR_Config (ConfigKey, ConfigValue, Description)
+                VALUES (N'BackupHighWaterBackupSetId', N'0', N'Last msdb backupset backup_set_id captured (delta read, D-050).');
+
+            IF NOT EXISTS (SELECT 1 FROM dbo.FR_Config WHERE ConfigKey = N'MaintenanceJobNamePatterns')
+                INSERT INTO dbo.FR_Config (ConfigKey, ConfigValue, Description)
+                VALUES (N'MaintenanceJobNamePatterns',
+                        N'%IndexOptimize%;%DatabaseBackup%;%DatabaseIntegrityCheck%;%Maintenance Plan%;%Reindex%;%Update Stats%;%CHECKDB%',
+                        N'Semicolon-delimited LIKE patterns for maintenance jobs (D-094).');
+
+            IF NOT EXISTS (SELECT 1 FROM dbo.FR_Config WHERE ConfigKey = N'BlockingStormSessionThreshold')
+                INSERT INTO dbo.FR_Config (ConfigKey, ConfigValue, Description)
+                VALUES (N'BlockingStormSessionThreshold', N'5', N'Distinct blocked sessions in one snapshot to flag FR_R0007 (tentative).');
+
+            IF NOT EXISTS (SELECT 1 FROM dbo.FR_Config WHERE ConfigKey = N'TempdbVersionStoreWarnKb')
+                INSERT INTO dbo.FR_Config (ConfigKey, ConfigValue, Description)
+                VALUES (N'TempdbVersionStoreWarnKb', N'5242880', N'Version store size (KB) that escalates FR_R0008 (default 5 GB, tentative).');
+
+            -- Forward-only migration marker maintenance: advance recorded SchemaVersion (D-038).
+            UPDATE dbo.FR_Config
+            SET ConfigValue = @SchemaVersion, ModifiedUtc = SYSUTCDATETIME()
+            WHERE ConfigKey = N'SchemaVersion'
+              AND ConfigValue <> @SchemaVersion;
             IF NOT EXISTS (SELECT 1 FROM dbo.FR_Config WHERE ConfigKey = N'WaitStatsIgnoreList')
                 INSERT INTO dbo.FR_Config (ConfigKey, ConfigValue, Description)
                 VALUES
@@ -614,6 +841,40 @@ CREATE TABLE dbo.FR_Rules (
 
             IF NOT EXISTS (SELECT 1 FROM dbo.FR_Rules WHERE RuleId = N'FR_R0006_ServerRestartDuringWindow')
                 INSERT INTO dbo.FR_Rules VALUES (N'FR_R0006_ServerRestartDuringWindow', N'Configuration', N'Critical', N'High', N'Observed', N'Active', N'SQL Server restart detected', N'0.1');
+
+            -- Coverage summary rule (always emits; previously emitted but unseeded) (D-098)
+            IF NOT EXISTS (SELECT 1 FROM dbo.FR_Rules WHERE RuleId = N'FR_R0026_CoverageAndCapabilitySummary')
+                INSERT INTO dbo.FR_Rules VALUES (N'FR_R0026_CoverageAndCapabilitySummary', N'Coverage', N'Informational', N'High', N'Observed', N'Active', N'Coverage and capability summary', N'0.1');
+
+            -- v0.2 rules (design §7.10)
+            IF NOT EXISTS (SELECT 1 FROM dbo.FR_Rules WHERE RuleId = N'FR_R0007_BlockingStorm')
+                INSERT INTO dbo.FR_Rules VALUES (N'FR_R0007_BlockingStorm', N'Blocking', N'Critical', N'High', N'Observed', N'Active', N'Blocking storm observed', N'0.2');
+            IF NOT EXISTS (SELECT 1 FROM dbo.FR_Rules WHERE RuleId = N'FR_R0008_TempdbVersionStoreGrowth')
+                INSERT INTO dbo.FR_Rules VALUES (N'FR_R0008_TempdbVersionStoreGrowth', N'Tempdb', N'Medium', N'High', N'Observed', N'Active', N'Tempdb version store growth', N'0.2');
+            IF NOT EXISTS (SELECT 1 FROM dbo.FR_Rules WHERE RuleId = N'FR_R0009_TempdbFileImbalanceOrPressure')
+                INSERT INTO dbo.FR_Rules VALUES (N'FR_R0009_TempdbFileImbalanceOrPressure', N'Tempdb', N'Medium', N'Medium', N'Inferred', N'Active', N'Tempdb file imbalance or pressure', N'0.2');
+            IF NOT EXISTS (SELECT 1 FROM dbo.FR_Rules WHERE RuleId = N'FR_R0010_FailedSqlAgentJobNearIncident')
+                INSERT INTO dbo.FR_Rules VALUES (N'FR_R0010_FailedSqlAgentJobNearIncident', N'Maintenance', N'High', N'High', N'Observed', N'Active', N'Failed SQL Agent job near incident', N'0.2');
+            IF NOT EXISTS (SELECT 1 FROM dbo.FR_Rules WHERE RuleId = N'FR_R0011_MaintenanceJobOverlap')
+                INSERT INTO dbo.FR_Rules VALUES (N'FR_R0011_MaintenanceJobOverlap', N'Maintenance', N'Medium', N'Medium', N'Inferred', N'Active', N'Maintenance job overlap with incident', N'0.2');
+            IF NOT EXISTS (SELECT 1 FROM dbo.FR_Rules WHERE RuleId = N'FR_R0012_BackupOverlapWithIncident')
+                INSERT INTO dbo.FR_Rules VALUES (N'FR_R0012_BackupOverlapWithIncident', N'Maintenance', N'Medium', N'High', N'Observed', N'Active', N'Backup overlap with incident', N'0.2');
+            IF NOT EXISTS (SELECT 1 FROM dbo.FR_Rules WHERE RuleId = N'FR_R0013_DeadlocksObserved')
+                INSERT INTO dbo.FR_Rules VALUES (N'FR_R0013_DeadlocksObserved', N'Blocking', N'High', N'High', N'Observed', N'Active', N'Deadlocks observed in window', N'0.2');
+            IF NOT EXISTS (SELECT 1 FROM dbo.FR_Rules WHERE RuleId = N'FR_R0014_AlwaysOnRoleOrStateChange')
+                INSERT INTO dbo.FR_Rules VALUES (N'FR_R0014_AlwaysOnRoleOrStateChange', N'HA', N'Critical', N'High', N'Observed', N'Active', N'Always On role or state change', N'0.2');
+
+            -- Opt-in query-plan evidence rules (surfaced only when @IncludeQueryPlans = 1)
+            IF NOT EXISTS (SELECT 1 FROM dbo.FR_Rules WHERE RuleId = N'FR_R0030_PlanMissingIndex')
+                INSERT INTO dbo.FR_Rules VALUES (N'FR_R0030_PlanMissingIndex', N'QueryPlan', N'Medium', N'Medium', N'Inferred', N'Active', N'Plan shows missing-index evidence', N'0.2');
+            IF NOT EXISTS (SELECT 1 FROM dbo.FR_Rules WHERE RuleId = N'FR_R0031_PlanImplicitConversion')
+                INSERT INTO dbo.FR_Rules VALUES (N'FR_R0031_PlanImplicitConversion', N'QueryPlan', N'Low', N'Medium', N'Inferred', N'Active', N'Plan shows implicit conversion evidence', N'0.2');
+            IF NOT EXISTS (SELECT 1 FROM dbo.FR_Rules WHERE RuleId = N'FR_R0032_PlanSpillToTempDb')
+                INSERT INTO dbo.FR_Rules VALUES (N'FR_R0032_PlanSpillToTempDb', N'QueryPlan', N'Medium', N'Medium', N'Inferred', N'Active', N'Plan shows tempdb spill evidence', N'0.2');
+            IF NOT EXISTS (SELECT 1 FROM dbo.FR_Rules WHERE RuleId = N'FR_R0033_PlanWarnings')
+                INSERT INTO dbo.FR_Rules VALUES (N'FR_R0033_PlanWarnings', N'QueryPlan', N'Low', N'Medium', N'Inferred', N'Active', N'Plan contains optimizer warnings', N'0.2');
+            IF NOT EXISTS (SELECT 1 FROM dbo.FR_Rules WHERE RuleId = N'FR_R0034_PlanParallelism')
+                INSERT INTO dbo.FR_Rules VALUES (N'FR_R0034_PlanParallelism', N'QueryPlan', N'Low', N'Low', N'Inferred', N'Active', N'Plan uses parallelism', N'0.2');
 
             -- Opt-in query-plan rules (evidence-only; surfaced when @IncludeQueryPlans = 1)
             IF NOT EXISTS (SELECT 1 FROM dbo.FR_Rules WHERE RuleId = N'FR_R0030_PlanMissingIndex')
@@ -703,8 +964,8 @@ END;
                 N'Success' AS Status,
                 DB_NAME() AS DatabaseName,
                 @SchemaVersion AS SchemaVersion,
-                13 AS TableCount,
-                N'Installation complete. 13 core FR_* tables created.' AS Message;
+                19 AS TableCount,
+                N'Installation complete. 19 core FR_* tables created (12 v0.1 + 7 v0.2).' AS Message;
 
 				
 				
@@ -1235,12 +1496,14 @@ END;
         BEGIN TRY
             INSERT INTO dbo.FR_RunLog
             (
-                StartUtc, EndUtc, Mode, Status, Reason, LoginName, HostName
+                StartUtc, EndUtc, Mode, Status, Reason,
+                InstanceFingerprint, CapabilitySnapshot, LoginName, HostName
             )
             VALUES
             (
                 @CollectSnapshotUtc, NULL, N'Collect', N'InProgress',
                 N'Collect started.',
+                CONVERT(nvarchar(200), SERVERPROPERTY(N'ServerName')), @CapabilitySnapshot,
                 SUSER_SNAME(), HOST_NAME()
             );
 
@@ -1282,7 +1545,7 @@ END;
                         CONVERT(nvarchar(50), SERVERPROPERTY(N'ProductVersion')),
                         CONVERT(nvarchar(20), SERVERPROPERTY(N'ProductLevel')),
                         TRY_CONVERT(bit, SERVERPROPERTY(N'IsHadrEnabled')),
-                        NULL,
+                        @PlatformProbe,
                         cpu_count,
                         physical_memory_kb,
                         sqlserver_start_time
@@ -1372,16 +1635,76 @@ END;
                         r.status,
                         r.command,
                         r.open_transaction_count,
-                        NULL,
-                        NULL,
-                        NULL,
-                        NULL,
-                        NULL
+                        r.query_hash,
+                        r.query_plan_hash,
+                        mg.requested_memory_kb,
+                        mg.granted_memory_kb,
+                        mg.grant_time
                     FROM sys.dm_exec_requests AS r
+                    LEFT JOIN sys.dm_exec_query_memory_grants AS mg
+                        ON mg.session_id = r.session_id
+                       AND mg.request_id = r.request_id
                     WHERE r.session_id <> @@SPID
                     ORDER BY r.cpu_time DESC, r.logical_reads DESC, r.session_id ASC;
 
                     SET @CollectRows = @@ROWCOUNT;
+
+                    UPDATE dbo.FR_RunLogStep
+                    SET EndUtc = SYSUTCDATETIME(), Status = N'Success', RowsCollected = @CollectRows
+                    WHERE RunStepId = @CollectStepId;
+                END TRY
+                BEGIN CATCH
+                    SET @CollectStatus = N'PartialSuccess';
+                    SET @CollectError = ERROR_MESSAGE();
+
+                    UPDATE dbo.FR_RunLogStep
+                    SET EndUtc = SYSUTCDATETIME(), Status = N'Error', ErrorMessage = @CollectError
+                    WHERE RunStepId = @CollectStepId;
+                END CATCH;
+            END;
+
+            -- Query text collector (bounded; dedup on QueryHash + SHA2_256(text), D-027)
+            IF OBJECT_ID(N'dbo.FR_QueryText', N'U') IS NOT NULL
+            BEGIN
+                INSERT INTO dbo.FR_RunLogStep (RunId, StepName, StartUtc, Status)
+                VALUES (@CollectRunId, N'QueryText', SYSUTCDATETIME(), N'InProgress');
+
+                SET @CollectStepId = SCOPE_IDENTITY();
+
+                BEGIN TRY
+                    ;WITH CapturedText AS
+                    (
+                        SELECT TOP (@CollectMaxRows)
+                               r.query_hash AS QueryHash,
+                               st.text      AS SqlText
+                        FROM sys.dm_exec_requests AS r
+                        OUTER APPLY sys.dm_exec_sql_text(r.sql_handle) AS st
+                        WHERE r.session_id <> @@SPID
+                          AND r.query_hash IS NOT NULL
+                          AND st.text IS NOT NULL
+                        ORDER BY r.cpu_time DESC, r.logical_reads DESC, r.session_id ASC
+                    ),
+                    Deduped AS
+                    (
+                        SELECT DISTINCT
+                               QueryHash,
+                               HASHBYTES('SHA2_256', CONVERT(nvarchar(max), SqlText)) AS TextHash,
+                               SqlText
+                        FROM CapturedText
+                    )
+                    INSERT INTO dbo.FR_QueryText (QueryHash, TextHash, SqlText)
+                    SELECT d.QueryHash, d.TextHash, d.SqlText
+                    FROM Deduped AS d
+                    WHERE NOT EXISTS (
+                        SELECT 1 FROM dbo.FR_QueryText AS q
+                        WHERE q.QueryHash = d.QueryHash AND q.TextHash = d.TextHash
+                    );
+
+                    SET @CollectRows = @@ROWCOUNT;
+
+                    UPDATE dbo.FR_QueryText
+                    SET LastSeenUtc = SYSUTCDATETIME()
+                    WHERE QueryHash IN (SELECT QueryHash FROM sys.dm_exec_requests WHERE session_id <> @@SPID AND query_hash IS NOT NULL);
 
                     UPDATE dbo.FR_RunLogStep
                     SET EndUtc = SYSUTCDATETIME(), Status = N'Success', RowsCollected = @CollectRows
@@ -1579,6 +1902,409 @@ END;
                     SET @CollectStatus = N'PartialSuccess';
                     SET @CollectError = ERROR_MESSAGE();
 
+                    UPDATE dbo.FR_RunLogStep
+                    SET EndUtc = SYSUTCDATETIME(), Status = N'Error', ErrorMessage = @CollectError
+                    WHERE RunStepId = @CollectStepId;
+                END CATCH;
+            END;
+
+            -- ============================================================
+            -- v0.2 collector: Tempdb
+            -- ============================================================
+            IF OBJECT_ID(N'dbo.FR_Tempdb', N'U') IS NOT NULL
+            BEGIN
+                INSERT INTO dbo.FR_RunLogStep (RunId, StepName, StartUtc, Status)
+                VALUES (@CollectRunId, N'Tempdb', SYSUTCDATETIME(), N'InProgress');
+                SET @CollectStepId = SCOPE_IDENTITY();
+                BEGIN TRY
+                    DECLARE @vsKb bigint, @uoKb bigint, @ioKb bigint, @unallocKb bigint, @mixedKb bigint;
+
+                    SELECT
+                        @vsKb     = SUM(CASE WHEN is_version_store = 1 THEN allocated_extent_page_count END) * 8,
+                        @uoKb     = SUM(user_object_reserved_page_count) * 8,
+                        @ioKb     = SUM(internal_object_reserved_page_count) * 8,
+                        @unallocKb= SUM(unallocated_extent_page_count) * 8,
+                        @mixedKb  = SUM(mixed_extent_page_count) * 8
+                    FROM tempdb.sys.dm_db_file_space_usage;
+
+                    INSERT INTO dbo.FR_Tempdb
+                    (
+                        SnapshotId, SnapshotUtc, VersionStoreKb, UserObjectKb,
+                        InternalObjectKb, UnallocatedExtentKb, MixedExtentKb,
+                        DataFileCount, MinDataFileSizeKb, MaxDataFileSizeKb
+                    )
+                    SELECT
+                        @CollectSnapshotId, @CollectSnapshotUtc, @vsKb, @uoKb,
+                        @ioKb, @unallocKb, @mixedKb,
+                        COUNT(1),
+                        MIN(CONVERT(bigint, size) * 8),
+                        MAX(CONVERT(bigint, size) * 8)
+                    FROM tempdb.sys.database_files
+                    WHERE type_desc = N'ROWS';
+
+                    SET @CollectRows = @@ROWCOUNT;
+                    UPDATE dbo.FR_RunLogStep
+                    SET EndUtc = SYSUTCDATETIME(), Status = N'Success', RowsCollected = @CollectRows
+                    WHERE RunStepId = @CollectStepId;
+                END TRY
+                BEGIN CATCH
+                    SET @CollectStatus = N'PartialSuccess';
+                    SET @CollectError = ERROR_MESSAGE();
+                    UPDATE dbo.FR_RunLogStep
+                    SET EndUtc = SYSUTCDATETIME(), Status = N'Error', ErrorMessage = @CollectError
+                    WHERE RunStepId = @CollectStepId;
+                END CATCH;
+            END;
+
+            -- ============================================================
+            -- v0.2 collector: Memory
+            -- ============================================================
+            IF OBJECT_ID(N'dbo.FR_Memory', N'U') IS NOT NULL
+            BEGIN
+                INSERT INTO dbo.FR_RunLogStep (RunId, StepName, StartUtc, Status)
+                VALUES (@CollectRunId, N'Memory', SYSUTCDATETIME(), N'InProgress');
+                SET @CollectStepId = SCOPE_IDENTITY();
+                BEGIN TRY
+                    DECLARE @totKb bigint, @tgtKb bigint, @stolenKb bigint,
+                            @grPending bigint, @grOutstanding bigint, @ple bigint;
+
+                    SELECT @totKb    = MAX(CASE WHEN counter_name LIKE N'Total Server Memory (KB)%' THEN cntr_value END),
+                           @tgtKb    = MAX(CASE WHEN counter_name LIKE N'Target Server Memory (KB)%' THEN cntr_value END),
+                           @stolenKb = MAX(CASE WHEN counter_name LIKE N'Stolen Server Memory (KB)%' THEN cntr_value END),
+                           @grPending= MAX(CASE WHEN counter_name LIKE N'Memory Grants Pending%' THEN cntr_value END),
+                           @grOutstanding = MAX(CASE WHEN counter_name LIKE N'Memory Grants Outstanding%' THEN cntr_value END),
+                           @ple      = MAX(CASE WHEN counter_name LIKE N'Page life expectancy%' THEN cntr_value END)
+                    FROM sys.dm_os_performance_counters
+                    WHERE counter_name LIKE N'Total Server Memory (KB)%'
+                       OR counter_name LIKE N'Target Server Memory (KB)%'
+                       OR counter_name LIKE N'Stolen Server Memory (KB)%'
+                       OR counter_name LIKE N'Memory Grants Pending%'
+                       OR counter_name LIKE N'Memory Grants Outstanding%'
+                       OR counter_name LIKE N'Page life expectancy%';
+
+                    INSERT INTO dbo.FR_Memory
+                    (
+                        SnapshotId, SnapshotUtc, TotalServerMemoryKb, TargetServerMemoryKb,
+                        StolenServerMemoryKb, MemoryGrantsPending, MemoryGrantsOutstanding, PageLifeExpectancy
+                    )
+                    VALUES
+                    (
+                        @CollectSnapshotId, @CollectSnapshotUtc, @totKb, @tgtKb,
+                        @stolenKb, @grPending, @grOutstanding, @ple
+                    );
+
+                    SET @CollectRows = @@ROWCOUNT;
+                    UPDATE dbo.FR_RunLogStep
+                    SET EndUtc = SYSUTCDATETIME(), Status = N'Success', RowsCollected = @CollectRows
+                    WHERE RunStepId = @CollectStepId;
+                END TRY
+                BEGIN CATCH
+                    SET @CollectStatus = N'PartialSuccess';
+                    SET @CollectError = ERROR_MESSAGE();
+                    UPDATE dbo.FR_RunLogStep
+                    SET EndUtc = SYSUTCDATETIME(), Status = N'Error', ErrorMessage = @CollectError
+                    WHERE RunStepId = @CollectStepId;
+                END CATCH;
+            END;
+
+            -- ============================================================
+            -- v0.2 collector: SQL Agent jobs/history (delta read, D-050)
+            -- Capability-gated: requires msdb + Agent history.
+            -- ============================================================
+            IF OBJECT_ID(N'dbo.FR_AgentJob', N'U') IS NOT NULL
+            BEGIN
+                INSERT INTO dbo.FR_RunLogStep (RunId, StepName, StartUtc, Status)
+                VALUES (@CollectRunId, N'AgentJobs', SYSUTCDATETIME(), N'InProgress');
+                SET @CollectStepId = SCOPE_IDENTITY();
+                BEGIN TRY
+                    IF @HasAgent = 0
+                    BEGIN
+                        UPDATE dbo.FR_RunLogStep
+                        SET EndUtc = SYSUTCDATETIME(), Status = N'Skipped',
+                            Reason = N'msdb/Agent history unavailable on this edition (capability-gated).'
+                        WHERE RunStepId = @CollectStepId;
+                    END
+                    ELSE
+                    BEGIN
+                        DECLARE @AgentHighWater int = 0;
+                        SELECT @AgentHighWater = TRY_CONVERT(int, ConfigValue)
+                        FROM dbo.FR_Config WHERE ConfigKey = N'AgentJobHighWaterInstanceId';
+                        SET @AgentHighWater = ISNULL(@AgentHighWater, 0);
+
+                        DECLARE @AgentSqlCollect nvarchar(max) = N'
+                        INSERT INTO dbo.FR_AgentJob
+                        (
+                            SnapshotId, SnapshotUtc, MsdbInstanceId, JobName, StepId, StepName,
+                            RunStatus, RunOutcome, RunStartUtc, RunDurationSec, MessageText
+                        )
+                        SELECT TOP (@maxRows)
+                            @sid, @sutc, h.instance_id, j.name, h.step_id, h.step_name,
+                            h.run_status,
+                            CASE h.run_status WHEN 0 THEN N''Failed'' WHEN 1 THEN N''Succeeded''
+                                 WHEN 2 THEN N''Retry'' WHEN 3 THEN N''Canceled'' ELSE N''InProgress'' END,
+                            msdb.dbo.agent_datetime(h.run_date, h.run_time),
+                            (h.run_duration/10000)*3600 + ((h.run_duration%10000)/100)*60 + (h.run_duration%100),
+                            LEFT(h.message, 400)
+                        FROM msdb.dbo.sysjobhistory AS h
+                        INNER JOIN msdb.dbo.sysjobs AS j ON j.job_id = h.job_id
+                        WHERE h.instance_id > @hw
+                        ORDER BY h.instance_id ASC;';
+
+                        EXEC sys.sp_executesql @AgentSqlCollect,
+                             N'@sid bigint, @sutc datetime2(3), @maxRows int, @hw int',
+                             @sid = @CollectSnapshotId, @sutc = @CollectSnapshotUtc,
+                             @maxRows = @CollectMaxRows, @hw = @AgentHighWater;
+
+                        SET @CollectRows = @@ROWCOUNT;
+
+                        -- Advance high-water mark to the max instance_id we just stored.
+                        DECLARE @newHW int;
+                        SELECT @newHW = MAX(MsdbInstanceId) FROM dbo.FR_AgentJob WHERE SnapshotId = @CollectSnapshotId;
+                        IF @newHW IS NOT NULL AND @newHW > @AgentHighWater
+                            UPDATE dbo.FR_Config
+                            SET ConfigValue = CONVERT(nvarchar(20), @newHW), ModifiedUtc = SYSUTCDATETIME()
+                            WHERE ConfigKey = N'AgentJobHighWaterInstanceId';
+
+                        UPDATE dbo.FR_RunLogStep
+                        SET EndUtc = SYSUTCDATETIME(), Status = N'Success', RowsCollected = @CollectRows
+                        WHERE RunStepId = @CollectStepId;
+                    END
+                END TRY
+                BEGIN CATCH
+                    SET @CollectStatus = N'PartialSuccess';
+                    SET @CollectError = ERROR_MESSAGE();
+                    UPDATE dbo.FR_RunLogStep
+                    SET EndUtc = SYSUTCDATETIME(), Status = N'Error', ErrorMessage = @CollectError
+                    WHERE RunStepId = @CollectStepId;
+                END CATCH;
+            END;
+
+            -- ============================================================
+            -- v0.2 collector: Backup history (delta read, D-050)
+            -- ============================================================
+            IF OBJECT_ID(N'dbo.FR_BackupHistory', N'U') IS NOT NULL
+            BEGIN
+                INSERT INTO dbo.FR_RunLogStep (RunId, StepName, StartUtc, Status)
+                VALUES (@CollectRunId, N'BackupHistory', SYSUTCDATETIME(), N'InProgress');
+                SET @CollectStepId = SCOPE_IDENTITY();
+                BEGIN TRY
+                    IF @HasMsdb = 0
+                    BEGIN
+                        UPDATE dbo.FR_RunLogStep
+                        SET EndUtc = SYSUTCDATETIME(), Status = N'Skipped',
+                            Reason = N'msdb unavailable on this edition (capability-gated).'
+                        WHERE RunStepId = @CollectStepId;
+                    END
+                    ELSE
+                    BEGIN
+                        DECLARE @BackupHighWater int = 0;
+                        SELECT @BackupHighWater = TRY_CONVERT(int, ConfigValue)
+                        FROM dbo.FR_Config WHERE ConfigKey = N'BackupHighWaterBackupSetId';
+                        SET @BackupHighWater = ISNULL(@BackupHighWater, 0);
+
+                        DECLARE @BackupSqlCollect nvarchar(max) = N'
+                        INSERT INTO dbo.FR_BackupHistory
+                        (
+                            SnapshotId, SnapshotUtc, MsdbBackupSetId, DatabaseName, BackupType,
+                            BackupStartUtc, BackupFinishUtc, BackupSizeBytes, IsCopyOnly
+                        )
+                        SELECT TOP (@maxRows)
+                            @sid, @sutc, bs.backup_set_id, bs.database_name,
+                            CASE bs.type WHEN N''D'' THEN N''Full'' WHEN N''I'' THEN N''Differential''
+                                 WHEN N''L'' THEN N''Log'' WHEN N''F'' THEN N''FileOrFilegroup''
+                                 WHEN N''G'' THEN N''DiffFile'' WHEN N''P'' THEN N''Partial''
+                                 WHEN N''Q'' THEN N''DiffPartial'' ELSE bs.type END,
+                            bs.backup_start_date, bs.backup_finish_date, bs.backup_size, bs.is_copy_only
+                        FROM msdb.dbo.backupset AS bs
+                        WHERE bs.backup_set_id > @hw
+                        ORDER BY bs.backup_set_id ASC;';
+
+                        EXEC sys.sp_executesql @BackupSqlCollect,
+                             N'@sid bigint, @sutc datetime2(3), @maxRows int, @hw int',
+                             @sid = @CollectSnapshotId, @sutc = @CollectSnapshotUtc,
+                             @maxRows = @CollectMaxRows, @hw = @BackupHighWater;
+
+                        SET @CollectRows = @@ROWCOUNT;
+
+                        DECLARE @newBHW int;
+                        SELECT @newBHW = MAX(MsdbBackupSetId) FROM dbo.FR_BackupHistory WHERE SnapshotId = @CollectSnapshotId;
+                        IF @newBHW IS NOT NULL AND @newBHW > @BackupHighWater
+                            UPDATE dbo.FR_Config
+                            SET ConfigValue = CONVERT(nvarchar(20), @newBHW), ModifiedUtc = SYSUTCDATETIME()
+                            WHERE ConfigKey = N'BackupHighWaterBackupSetId';
+
+                        UPDATE dbo.FR_RunLogStep
+                        SET EndUtc = SYSUTCDATETIME(), Status = N'Success', RowsCollected = @CollectRows
+                        WHERE RunStepId = @CollectStepId;
+                    END
+                END TRY
+                BEGIN CATCH
+                    SET @CollectStatus = N'PartialSuccess';
+                    SET @CollectError = ERROR_MESSAGE();
+                    UPDATE dbo.FR_RunLogStep
+                    SET EndUtc = SYSUTCDATETIME(), Status = N'Error', ErrorMessage = @CollectError
+                    WHERE RunStepId = @CollectStepId;
+                END CATCH;
+            END;
+
+            -- ============================================================
+            -- v0.2 collector: Always On state
+            -- Capability-gated on IsHadrEnabled.
+            -- ============================================================
+            IF OBJECT_ID(N'dbo.FR_AlwaysOnState', N'U') IS NOT NULL
+            BEGIN
+                INSERT INTO dbo.FR_RunLogStep (RunId, StepName, StartUtc, Status)
+                VALUES (@CollectRunId, N'AlwaysOnState', SYSUTCDATETIME(), N'InProgress');
+                SET @CollectStepId = SCOPE_IDENTITY();
+                BEGIN TRY
+                    IF ISNULL(@IsHadrEnabledProbe, 0) = 0
+                    BEGIN
+                        UPDATE dbo.FR_RunLogStep
+                        SET EndUtc = SYSUTCDATETIME(), Status = N'Skipped',
+                            Reason = N'Always On not enabled (capability-gated).'
+                        WHERE RunStepId = @CollectStepId;
+                    END
+                    ELSE
+                    BEGIN
+                        DECLARE @AoSql nvarchar(max) = N'
+                        INSERT INTO dbo.FR_AlwaysOnState
+                        (
+                            SnapshotId, SnapshotUtc, AgName, ReplicaServer, Role,
+                            OperationalState, ConnectedState, SynchronizationHealth,
+                            DatabaseName, SynchronizationState
+                        )
+                        SELECT TOP (@maxRows)
+                            @sid, @sutc, ag.name, ar.replica_server_name,
+                            ars.role_desc, ars.operational_state_desc, ars.connected_state_desc,
+                            ars.synchronization_health_desc, DB_NAME(drs.database_id), drs.synchronization_state_desc
+                        FROM sys.availability_groups AS ag
+                        INNER JOIN sys.availability_replicas AS ar ON ar.group_id = ag.group_id
+                        INNER JOIN sys.dm_hadr_availability_replica_states AS ars ON ars.replica_id = ar.replica_id
+                        LEFT JOIN sys.dm_hadr_database_replica_states AS drs ON drs.replica_id = ar.replica_id
+                        ORDER BY ag.name, ar.replica_server_name;';
+
+                        EXEC sys.sp_executesql @AoSql,
+                             N'@sid bigint, @sutc datetime2(3), @maxRows int',
+                             @sid = @CollectSnapshotId, @sutc = @CollectSnapshotUtc, @maxRows = @CollectMaxRows;
+
+                        SET @CollectRows = @@ROWCOUNT;
+                        UPDATE dbo.FR_RunLogStep
+                        SET EndUtc = SYSUTCDATETIME(), Status = N'Success', RowsCollected = @CollectRows
+                        WHERE RunStepId = @CollectStepId;
+                    END
+                END TRY
+                BEGIN CATCH
+                    SET @CollectStatus = N'PartialSuccess';
+                    SET @CollectError = ERROR_MESSAGE();
+                    UPDATE dbo.FR_RunLogStep
+                    SET EndUtc = SYSUTCDATETIME(), Status = N'Error', ErrorMessage = @CollectError
+                    WHERE RunStepId = @CollectStepId;
+                END CATCH;
+            END;
+
+            -- ============================================================
+            -- v0.2 collector: Deadlocks (system_health XE; dedup by graph hash, D-053)
+            -- ============================================================
+            IF OBJECT_ID(N'dbo.FR_Deadlock', N'U') IS NOT NULL
+            BEGIN
+                INSERT INTO dbo.FR_RunLogStep (RunId, StepName, StartUtc, Status)
+                VALUES (@CollectRunId, N'Deadlocks', SYSUTCDATETIME(), N'InProgress');
+                SET @CollectStepId = SCOPE_IDENTITY();
+                BEGIN TRY
+                    IF @IsAzureSqlDb = 1
+                    BEGIN
+                        UPDATE dbo.FR_RunLogStep
+                        SET EndUtc = SYSUTCDATETIME(), Status = N'Skipped',
+                            Reason = N'system_health ring buffer not available on Azure SQL DB (capability-gated).'
+                        WHERE RunStepId = @CollectStepId;
+                    END
+                    ELSE
+                    BEGIN
+
+                        ;WITH xe AS
+                        (
+                            SELECT CONVERT(xml, t.target_data) AS TargetData
+                            FROM sys.dm_xe_session_targets AS t
+                            INNER JOIN sys.dm_xe_sessions AS s ON s.address = t.event_session_address
+                            WHERE s.name = N'system_health'
+                              AND t.target_name = N'ring_buffer'
+                        ),
+                        graphs AS
+                        (
+                            SELECT TOP (@CollectMaxRows)
+                                   n.value('(@timestamp)[1]', 'datetime2(3)') AS DeadlockTimeUtc,
+                                   n.query('(data[@name="xml_report"]/value/deadlock)[1]') AS GraphXml
+                            FROM xe
+                            CROSS APPLY xe.TargetData.nodes('//RingBufferTarget/event[@name="xml_deadlock_report"]') AS q(n)
+                            ORDER BY n.value('(@timestamp)[1]', 'datetime2(3)') DESC
+                        )
+                        INSERT INTO dbo.FR_Deadlock
+                        (
+                            SnapshotId, SnapshotUtc, GraphHash, DeadlockTimeUtc, ProcessCount, DeadlockGraph
+                        )
+                        SELECT
+                            @CollectSnapshotId, @CollectSnapshotUtc,
+                            HASHBYTES('SHA2_256', CONVERT(nvarchar(max), g.GraphXml)),
+                            g.DeadlockTimeUtc,
+                            g.GraphXml.value('count(//process)', 'int'),
+                            CONVERT(nvarchar(max), g.GraphXml)
+                        FROM graphs AS g
+                        WHERE NOT EXISTS (
+                            SELECT 1 FROM dbo.FR_Deadlock AS d
+                            WHERE d.GraphHash = HASHBYTES('SHA2_256', CONVERT(nvarchar(max), g.GraphXml))
+                        );
+
+                        SET @CollectRows = @@ROWCOUNT;
+                        UPDATE dbo.FR_RunLogStep
+                        SET EndUtc = SYSUTCDATETIME(), Status = N'Success', RowsCollected = @CollectRows
+                        WHERE RunStepId = @CollectStepId;
+                    END
+                END TRY
+                BEGIN CATCH
+                    SET @CollectStatus = N'PartialSuccess';
+                    SET @CollectError = ERROR_MESSAGE();
+                    UPDATE dbo.FR_RunLogStep
+                    SET EndUtc = SYSUTCDATETIME(), Status = N'Error', ErrorMessage = @CollectError
+                    WHERE RunStepId = @CollectStepId;
+                END CATCH;
+            END;
+
+            -- ============================================================
+            -- Opt-in collector: Query plans (D-188) — @IncludeQueryPlans = 1 ONLY.
+            -- Active-request plan handles only; never the whole plan cache.
+            -- ============================================================
+            IF @IncludeQueryPlans = 1 AND OBJECT_ID(N'dbo.FR_QueryPlan', N'U') IS NOT NULL
+            BEGIN
+                INSERT INTO dbo.FR_RunLogStep (RunId, StepName, StartUtc, Status)
+                VALUES (@CollectRunId, N'QueryPlans', SYSUTCDATETIME(), N'InProgress');
+                SET @CollectStepId = SCOPE_IDENTITY();
+                BEGIN TRY
+                    INSERT INTO dbo.FR_QueryPlan
+                    (
+                        SnapshotId, SnapshotUtc, DatabaseId, SessionId,
+                        QueryHash, QueryPlanHash, PlanXml, PlanXmlHash
+                    )
+                    SELECT TOP (@CollectMaxRows)
+                        @CollectSnapshotId, @CollectSnapshotUtc,
+                        ISNULL(r.database_id, 0), r.session_id,
+                        r.query_hash, r.query_plan_hash,
+                        qp.query_plan,
+                        HASHBYTES('SHA2_256', CONVERT(nvarchar(max), qp.query_plan))
+                    FROM sys.dm_exec_requests AS r
+                    OUTER APPLY sys.dm_exec_query_plan(r.plan_handle) AS qp
+                    WHERE r.session_id <> @@SPID
+                      AND r.plan_handle IS NOT NULL
+                      AND qp.query_plan IS NOT NULL
+                    ORDER BY r.cpu_time DESC, r.logical_reads DESC, r.session_id ASC;
+
+                    SET @CollectRows = @@ROWCOUNT;
+                    UPDATE dbo.FR_RunLogStep
+                    SET EndUtc = SYSUTCDATETIME(), Status = N'Success', RowsCollected = @CollectRows
+                    WHERE RunStepId = @CollectStepId;
+                END TRY
+                BEGIN CATCH
+                    SET @CollectStatus = N'PartialSuccess';
+                    SET @CollectError = ERROR_MESSAGE();
                     UPDATE dbo.FR_RunLogStep
                     SET EndUtc = SYSUTCDATETIME(), Status = N'Error', ErrorMessage = @CollectError
                     WHERE RunStepId = @CollectStepId;
