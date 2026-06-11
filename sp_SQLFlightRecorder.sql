@@ -245,6 +245,8 @@ BEGIN
         PRINT N'  Report            Read FR_* tables and return Findings + Timeline.';
         PRINT N'  Configure         Read or update known FR_Config keys.';
         PRINT N'  Purge             Batched retention cleanup. Applock-gated; logged. Supports @WhatIf.';
+        PRINT N'  CollectAndReport  Bounded Collect then Report in one call (D-024; non-recommended).';
+        PRINT N'  InstallDemoData   Insert synthetic demo rows so Report shows sample findings.';
         PRINT N'';
         PRINT N'v0.2 COLLECTORS (run automatically by Collect; capability-gated)';
         PRINT N'-----------------------------------------------------------------';
@@ -257,6 +259,17 @@ BEGIN
         PRINT N'  FR_R0009 TempdbFileImbalanceOrPressure, FR_R0010 FailedSqlAgentJobNearIncident,';
         PRINT N'  FR_R0011 MaintenanceJobOverlap, FR_R0012 BackupOverlapWithIncident,';
         PRINT N'  FR_R0013 DeadlocksObserved, FR_R0014 AlwaysOnRoleOrStateChange.';
+        PRINT N'';
+        PRINT N'v0.3 COLLECTORS (capability-gated; bounded)';
+        PRINT N'-------------------------------------------';
+        PRINT N'  QueryStore (latest closed interval/DB), PlanCacheSummary, SchemaActivity.';
+        PRINT N'  ErrorLog is OPT-IN (FR_Config.CollectErrorLog = 1); OFF by default.';
+        PRINT N'';
+        PRINT N'v0.3 RULES';
+        PRINT N'----------';
+        PRINT N'  FR_R0015 QueryPlanRegression, FR_R0016 TopCpuConsumerInWindow,';
+        PRINT N'  FR_R0017 QueryStoreDisabledOnUserDbs, FR_R0018 FailedPlanForcing,';
+        PRINT N'  FR_R0019 QueryStoreNearingCapacity, FR_R0020 HighCompilationRate.';
         PRINT N'';
         PRINT N'PARAMETERS';
         PRINT N'----------';
@@ -1264,6 +1277,10 @@ SELECT
                 UNION ALL SELECT N'TABLE', N'FR_AlwaysOnState'
                 UNION ALL SELECT N'TABLE', N'FR_Deadlock'
                 UNION ALL SELECT N'TABLE', N'FR_QueryPlan'
+                UNION ALL SELECT N'TABLE', N'FR_QueryStoreTopN'
+                UNION ALL SELECT N'TABLE', N'FR_ErrorLog'
+                UNION ALL SELECT N'TABLE', N'FR_SchemaActivity'
+                UNION ALL SELECT N'TABLE', N'FR_PlanCacheSummary'
                 UNION ALL SELECT N'TABLE', N'FR_QueryText'
                 UNION ALL SELECT N'TABLE', N'FR_Snapshot'
                 UNION ALL SELECT N'TABLE', N'FR_RunLogStep'
@@ -1349,6 +1366,10 @@ END;
             IF OBJECT_ID(N'dbo.FR_AlwaysOnState', N'U') IS NOT NULL DROP TABLE dbo.FR_AlwaysOnState;
             IF OBJECT_ID(N'dbo.FR_Deadlock', N'U') IS NOT NULL DROP TABLE dbo.FR_Deadlock;
             IF OBJECT_ID(N'dbo.FR_QueryPlan', N'U') IS NOT NULL DROP TABLE dbo.FR_QueryPlan;
+            IF OBJECT_ID(N'dbo.FR_QueryStoreTopN', N'U') IS NOT NULL DROP TABLE dbo.FR_QueryStoreTopN;
+            IF OBJECT_ID(N'dbo.FR_ErrorLog', N'U') IS NOT NULL DROP TABLE dbo.FR_ErrorLog;
+            IF OBJECT_ID(N'dbo.FR_SchemaActivity', N'U') IS NOT NULL DROP TABLE dbo.FR_SchemaActivity;
+            IF OBJECT_ID(N'dbo.FR_PlanCacheSummary', N'U') IS NOT NULL DROP TABLE dbo.FR_PlanCacheSummary;
 
             -- Independent / parent tables.
             IF OBJECT_ID(N'dbo.FR_QueryText', N'U') IS NOT NULL DROP TABLE dbo.FR_QueryText;
@@ -1542,7 +1563,12 @@ END;
         UNION ALL SELECT N'IsAzureManagedInstance', CONVERT(nvarchar(1), @IsAzureManagedInst)
         UNION ALL SELECT N'HasMsdb', CONVERT(nvarchar(1), @HasMsdb)
         UNION ALL SELECT N'HasAgent', CONVERT(nvarchar(1), @HasAgent)
-        UNION ALL SELECT N'IsHadrEnabled', ISNULL(CONVERT(nvarchar(1), @IsHadrEnabledProbe), N'0');
+        UNION ALL SELECT N'IsHadrEnabled', ISNULL(CONVERT(nvarchar(1), @IsHadrEnabledProbe), N'0')
+        UNION ALL SELECT N'HasQueryStoreSupport', CONVERT(nvarchar(1), @HasQueryStoreSupport)
+        UNION ALL SELECT N'CollectQueryStore', ISNULL((SELECT ConfigValue FROM dbo.FR_Config WHERE ConfigKey = N'CollectQueryStore'), N'')
+        UNION ALL SELECT N'CollectErrorLog', ISNULL((SELECT ConfigValue FROM dbo.FR_Config WHERE ConfigKey = N'CollectErrorLog'), N'')
+        UNION ALL SELECT N'CollectSchemaActivity', ISNULL((SELECT ConfigValue FROM dbo.FR_Config WHERE ConfigKey = N'CollectSchemaActivity'), N'')
+        UNION ALL SELECT N'CollectPlanCacheSummary', ISNULL((SELECT ConfigValue FROM dbo.FR_Config WHERE ConfigKey = N'CollectPlanCacheSummary'), N'');
 
         RETURN;
     END;
@@ -1699,6 +1725,185 @@ END;
         UNION ALL SELECT N'FR_PerfCounter', CASE WHEN OBJECT_ID(N'dbo.FR_PerfCounter', N'U') IS NULL THEN N'Missing' ELSE N'Present' END;
 
         RETURN;
+    END;
+
+    -- =========================================================================
+    -- Mode: COLLECTANDREPORT (D-024: documented, non-recommended convenience)
+    -- Runs a bounded Collect, then a Report, in the same session by re-invoking
+    -- the procedure. Respects @DatabaseName, @MinSeverity, @MaxFindings, @TopN,
+    -- @OutputFormat, @IncludeQueryPlans, @Debug. @Debug routes the inner Collect
+    -- to CollectDebug (D-128); it is not forwarded to Report.
+    -- =========================================================================
+    IF UPPER(@ModeNormalized) = N'COLLECTANDREPORT'
+    BEGIN
+        IF OBJECT_ID(N'dbo.FR_Config', N'U') IS NULL
+           OR OBJECT_ID(N'dbo.FR_Snapshot', N'U') IS NULL
+        BEGIN
+            SELECT N'Error' AS Status, N'NotInstalled' AS ErrorCode,
+                N'CollectAndReport requires Install to be run first.' AS Message,
+                @ToolVersion AS ToolVersion;
+            RETURN;
+        END;
+
+        EXEC dbo.sp_SQLFlightRecorder
+              @Mode = N'Collect'
+            , @TopN = @TopN
+            , @IncludeQueryPlans = @IncludeQueryPlans
+            , @Debug = @Debug;
+
+        EXEC dbo.sp_SQLFlightRecorder
+              @Mode = N'Report'
+            , @DatabaseName = @DatabaseName
+            , @StartTime = @StartTime
+            , @EndTime = @EndTime
+            , @MinSeverity = @MinSeverity
+            , @MaxFindings = @MaxFindings
+            , @TopN = @TopN
+            , @OutputFormat = @OutputFormat
+            , @IncludeQueryPlans = @IncludeQueryPlans;
+
+        RETURN;
+    END;
+
+    -- =========================================================================
+    -- Mode: INSTALLDEMODATA (D-182, refined by D-192)
+    -- Clearly-synthetic, idempotent demo rows in dbo.FR_* so Report shows sample
+    -- findings. NO production DMVs. Refuses if real (non-demo) snapshots exist.
+    -- =========================================================================
+    IF UPPER(@ModeNormalized) = N'INSTALLDEMODATA'
+    BEGIN
+        IF OBJECT_ID(N'dbo.FR_Snapshot', N'U') IS NULL
+           OR OBJECT_ID(N'dbo.FR_Config', N'U') IS NULL
+        BEGIN
+            SELECT N'Error' AS Status, N'NotInstalled' AS ErrorCode,
+                N'InstallDemoData requires Install to be run first.' AS Message,
+                @ToolVersion AS ToolVersion;
+            RETURN;
+        END;
+
+        DECLARE @DemoFingerprint nvarchar(200) = N'SQLFlightRecorder-DEMO';
+
+        -- Safe-by-default refusal (D-192): never mix demo and real data. No force
+        -- flag exists in the public surface, so refuse cleanly if real data exists.
+        IF EXISTS (SELECT 1 FROM dbo.FR_Snapshot
+                   WHERE ISNULL(InstanceFingerprint, N'') <> @DemoFingerprint)
+        BEGIN
+            SELECT N'Refused' AS Status, N'RealDataPresent' AS ErrorCode,
+                N'Real captured snapshots exist. InstallDemoData will not mix demo and real data. Use a dedicated sandbox database.' AS Message,
+                @ToolVersion AS ToolVersion;
+            RETURN;
+        END;
+
+        BEGIN TRY
+            DECLARE @demoRunId bigint;
+            DECLARE @demoEnd datetime2(3) = SYSUTCDATETIME();
+            DECLARE @dt1 datetime2(3) = DATEADD(minute, -3, @demoEnd);
+            DECLARE @dt2 datetime2(3) = DATEADD(minute, -2, @demoEnd);
+            DECLARE @dt3 datetime2(3) = DATEADD(minute, -1, @demoEnd);
+            DECLARE @s1 bigint, @s2 bigint, @s3 bigint;
+            DECLARE @demoDbId int = DB_ID();
+            DECLARE @demoDbName sysname = DB_NAME();
+
+            BEGIN TRAN;
+
+            -- Idempotent cleanup of any prior demo rows (children → snapshot → runlog).
+            IF OBJECT_ID(N'dbo.FR_QueryStoreTopN', N'U') IS NOT NULL
+                DELETE c FROM dbo.FR_QueryStoreTopN c
+                    INNER JOIN dbo.FR_Snapshot s ON s.SnapshotId = c.SnapshotId
+                    WHERE s.InstanceFingerprint = @DemoFingerprint;
+            IF OBJECT_ID(N'dbo.FR_Deadlock', N'U') IS NOT NULL
+                DELETE c FROM dbo.FR_Deadlock c
+                    INNER JOIN dbo.FR_Snapshot s ON s.SnapshotId = c.SnapshotId
+                    WHERE s.InstanceFingerprint = @DemoFingerprint;
+            IF OBJECT_ID(N'dbo.FR_PlanCacheSummary', N'U') IS NOT NULL
+                DELETE c FROM dbo.FR_PlanCacheSummary c
+                    INNER JOIN dbo.FR_Snapshot s ON s.SnapshotId = c.SnapshotId
+                    WHERE s.InstanceFingerprint = @DemoFingerprint;
+
+            DELETE FROM dbo.FR_Snapshot WHERE InstanceFingerprint = @DemoFingerprint;
+
+            IF OBJECT_ID(N'dbo.FR_RunLogStep', N'U') IS NOT NULL
+                DELETE st FROM dbo.FR_RunLogStep st
+                    INNER JOIN dbo.FR_RunLog r ON r.RunId = st.RunId
+                    WHERE r.Mode = N'InstallDemoData';
+            DELETE FROM dbo.FR_RunLog WHERE Mode = N'InstallDemoData';
+
+            -- Demo run-log row.
+            INSERT INTO dbo.FR_RunLog
+                (StartUtc, EndUtc, Mode, Status, Reason, InstanceFingerprint, LoginName, HostName)
+            VALUES
+                (@dt1, @demoEnd, N'InstallDemoData', N'Success', N'Synthetic demo data.',
+                 @DemoFingerprint, SUSER_SNAME(), HOST_NAME());
+            SET @demoRunId = SCOPE_IDENTITY();
+
+            -- Three demo snapshots (1-minute cadence, in the default report window).
+            INSERT INTO dbo.FR_Snapshot (SnapshotUtc, InstanceFingerprint, RunId)
+                VALUES (@dt1, @DemoFingerprint, @demoRunId);
+            SET @s1 = SCOPE_IDENTITY();
+            INSERT INTO dbo.FR_Snapshot (SnapshotUtc, InstanceFingerprint, RunId)
+                VALUES (@dt2, @DemoFingerprint, @demoRunId);
+            SET @s2 = SCOPE_IDENTITY();
+            INSERT INTO dbo.FR_Snapshot (SnapshotUtc, InstanceFingerprint, RunId)
+                VALUES (@dt3, @DemoFingerprint, @demoRunId);
+            SET @s3 = SCOPE_IDENTITY();
+
+            -- Query Store demo rows → FR_R0015 (regression), FR_R0016 (top CPU),
+            -- FR_R0018 (forced-plan failure).
+            IF OBJECT_ID(N'dbo.FR_QueryStoreTopN', N'U') IS NOT NULL
+                INSERT INTO dbo.FR_QueryStoreTopN
+                (
+                    SnapshotId, SnapshotUtc, DatabaseId, DatabaseName,
+                    QsQueryId, QsPlanId, IsForcedPlan, ForceFailureCount, LastForceFailureReason,
+                    ExecutionCount, TotalDurationUs, AvgDurationUs, TotalCpuUs, AvgCpuUs,
+                    AvgLogicalReads, AvgPhysicalReads, AvgWrites, IntervalStartUtc, IntervalEndUtc
+                )
+                VALUES
+                -- Query 1001: plan 1 baseline (s1, s2), plan 2 regressed (s3).
+                (@s1, @dt1, @demoDbId, @demoDbName, 1001, 1, 0, 0, NULL, 100, 100000, 1000, 2000000, 20000, 5000, 50, 10, @dt1, @dt1),
+                (@s2, @dt2, @demoDbId, @demoDbName, 1001, 1, 0, 0, NULL, 100, 100000, 1000, 2000000, 20000, 5000, 50, 10, @dt2, @dt2),
+                (@s3, @dt3, @demoDbId, @demoDbName, 1001, 2, 0, 0, NULL, 100, 900000, 9000, 3000000, 30000, 9000, 90, 20, @dt3, @dt3),
+                -- Query 1002: high cumulative CPU (top consumer).
+                (@s3, @dt3, @demoDbId, @demoDbName, 1002, 10, 0, 0, NULL, 50, 250000, 5000, 5000000, 100000, 12000, 120, 5, @dt3, @dt3),
+                -- Query 1003: forced plan with failures.
+                (@s3, @dt3, @demoDbId, @demoDbName, 1003, 20, 1, 3, N'GENERAL_FAILURE', 10, 50000, 5000, 100000, 10000, 800, 8, 2, @dt3, @dt3);
+
+            -- Deadlock demo row → FR_R0013.
+            IF OBJECT_ID(N'dbo.FR_Deadlock', N'U') IS NOT NULL
+                INSERT INTO dbo.FR_Deadlock
+                    (SnapshotId, SnapshotUtc, GraphHash, DeadlockTimeUtc, ProcessCount, DeadlockGraph)
+                VALUES
+                    (@s2, @dt2, CONVERT(varbinary(32), HASHBYTES('SHA2_256', N'demo-deadlock-1')),
+                     @dt2, 2, N'<deadlock>Synthetic demo deadlock graph (not a real event).</deadlock>');
+
+            -- Plan-cache summary demo rows → FR_R0020 (compilation pressure).
+            -- Raw cumulative counters rise across the window (D-007 delta math).
+            IF OBJECT_ID(N'dbo.FR_PlanCacheSummary', N'U') IS NOT NULL
+                INSERT INTO dbo.FR_PlanCacheSummary
+                (
+                    SnapshotId, SnapshotUtc, CachedPlanCount, CachedPlanSizeKb,
+                    AdHocSingleUsePlanCount, AdHocSingleUsePlanSizeKb,
+                    CompilationsPerSec, ReCompilationsPerSec, BatchRequestsPerSec
+                )
+                VALUES
+                    (@s1, @dt1, 20000, 512000, 12000, 96000, 1000000, 50000, 5000000),
+                    (@s3, @dt3, 20500, 520000, 13000, 104000, 1060000, 53000, 5200000);
+
+            COMMIT TRAN;
+
+            SELECT
+                  N'Success' AS Status
+                , N'Synthetic demo data installed. Run @Mode = N''Report'' to see sample findings.' AS Message
+                , 3 AS SnapshotsCreated
+                , @DemoFingerprint AS DemoMarker
+                , @ToolVersion AS ToolVersion;
+            RETURN;
+        END TRY
+        BEGIN CATCH
+            IF @@TRANCOUNT > 0 ROLLBACK TRAN;
+            SELECT N'Error' AS Status, N'InstallDemoDataFailed' AS ErrorCode,
+                ERROR_MESSAGE() AS Message, @ToolVersion AS ToolVersion;
+            RETURN;
+        END CATCH;
     END;
 
     -- =========================================================================
@@ -3207,6 +3412,90 @@ ORDER BY act.ModifyDateUtc DESC;';
                 END CATCH;
             END;
 
+            -- ============================================================
+            -- v0.3 collector: Query Store capacity probe (bounded; feeds FR_R0019)
+            -- Per-DB dynamic read of sys.database_query_store_options (2016+).
+            -- NO new table: max used percent is stored in FR_RunLogStep.RowsCollected
+            -- (documented reuse), offending DB(s) in Reason. FR_R0019 reads this step.
+            -- ============================================================
+            IF @CollectQS = 1 AND @HasQueryStoreSupport = 1
+               AND OBJECT_ID(N'dbo.FR_RunLogStep', N'U') IS NOT NULL
+            BEGIN
+                INSERT INTO dbo.FR_RunLogStep (RunId, StepName, StartUtc, Status)
+                VALUES (@CollectRunId, N'QueryStoreCapacity', SYSUTCDATETIME(), N'InProgress');
+                SET @CollectStepId = SCOPE_IDENTITY();
+                BEGIN TRY
+                    DECLARE @capSql    nvarchar(max);
+                    DECLARE @capDbId   int = 0;
+                    DECLARE @capDbName sysname;
+                    DECLARE @capCur    float;
+                    DECLARE @capMax    float;
+                    DECLARE @capPct    int;
+                    DECLARE @capMaxPct int = 0;
+                    DECLARE @capDetail nvarchar(400) = N'';
+
+                    IF OBJECT_ID(N'tempdb..#fr_qscap_db') IS NOT NULL DROP TABLE #fr_qscap_db;
+                    CREATE TABLE #fr_qscap_db (DatabaseId int NOT NULL PRIMARY KEY, DatabaseName sysname NOT NULL);
+
+                    SET @capSql = N'
+SELECT TOP (@maxDb) database_id, name
+FROM sys.databases
+WHERE state_desc = N''ONLINE'' AND database_id > 4 AND is_read_only = 0
+  AND is_query_store_on = 1
+ORDER BY database_id ASC;';
+                    INSERT INTO #fr_qscap_db (DatabaseId, DatabaseName)
+                    EXEC sys.sp_executesql @capSql, N'@maxDb int', @maxDb = @QsMaxDb;
+
+                    WHILE 1 = 1
+                    BEGIN
+                        SELECT TOP (1) @capDbId = DatabaseId, @capDbName = DatabaseName
+                        FROM #fr_qscap_db WHERE DatabaseId > @capDbId ORDER BY DatabaseId ASC;
+                        IF @@ROWCOUNT = 0 BREAK;
+
+                        SET @capCur = NULL; SET @capMax = NULL;
+                        BEGIN TRY
+                            SET @capSql = N'SELECT @cur = CONVERT(float, current_storage_size_mb),
+                                                   @max = CONVERT(float, max_storage_size_mb)
+                                            FROM ' + QUOTENAME(@capDbName) + N'.sys.database_query_store_options
+                                            WHERE actual_state IN (1, 2);';
+                            EXEC sys.sp_executesql @capSql,
+                                 N'@cur float OUTPUT, @max float OUTPUT',
+                                 @cur = @capCur OUTPUT, @max = @capMax OUTPUT;
+
+                            IF @capMax IS NOT NULL AND @capMax > 0 AND @capCur IS NOT NULL
+                            BEGIN
+                                SET @capPct = CONVERT(int, (@capCur * 100.0) / @capMax);
+                                IF @capPct > @capMaxPct SET @capMaxPct = @capPct;
+                                IF @capPct >= 80
+                                    SET @capDetail = LEFT(@capDetail
+                                        + CASE WHEN @capDetail = N'' THEN N'' ELSE N'; ' END
+                                        + N'db=[' + @capDbName + N'] usedPct=' + CONVERT(nvarchar(10), @capPct), 400);
+                            END;
+                        END TRY
+                        BEGIN CATCH
+                            SET @capCur = NULL;   -- ignore a single DB capacity read failure
+                        END CATCH;
+                    END;
+
+                    UPDATE dbo.FR_RunLogStep
+                    SET EndUtc = SYSUTCDATETIME(),
+                        Status = N'Success',
+                        RowsCollected = @capMaxPct,
+                        Reason = CASE WHEN @capDetail = N'' THEN N'No QS database at/over 80% used.' ELSE @capDetail END
+                    WHERE RunStepId = @CollectStepId;
+
+                    IF OBJECT_ID(N'tempdb..#fr_qscap_db') IS NOT NULL DROP TABLE #fr_qscap_db;
+                END TRY
+                BEGIN CATCH
+                    SET @CollectStatus = N'PartialSuccess';
+                    SET @CollectError = ERROR_MESSAGE();
+                    UPDATE dbo.FR_RunLogStep
+                    SET EndUtc = SYSUTCDATETIME(), Status = N'Error', ErrorMessage = @CollectError
+                    WHERE RunStepId = @CollectStepId;
+                    IF OBJECT_ID(N'tempdb..#fr_qscap_db') IS NOT NULL DROP TABLE #fr_qscap_db;
+                END CATCH;
+            END;
+
             IF @CollectStatus = N'PartialSuccess'
                 SET @CollectReason = N'Collect completed with one or more collector failures. See FR_RunLogStep.';
             UPDATE dbo.FR_RunLog
@@ -3357,6 +3646,18 @@ ORDER BY act.ModifyDateUtc DESC;';
             SELECT N'FR_QueryPlan', COUNT(1) FROM dbo.FR_QueryPlan
             WHERE OBJECT_ID(N'dbo.FR_QueryPlan', N'U') IS NOT NULL AND SnapshotUtc < @PurgeSnapshotCutoffUtc
             UNION ALL
+            SELECT N'FR_QueryStoreTopN', COUNT(1) FROM dbo.FR_QueryStoreTopN
+            WHERE OBJECT_ID(N'dbo.FR_QueryStoreTopN', N'U') IS NOT NULL AND SnapshotUtc < @PurgeSnapshotCutoffUtc
+            UNION ALL
+            SELECT N'FR_ErrorLog', COUNT(1) FROM dbo.FR_ErrorLog
+            WHERE OBJECT_ID(N'dbo.FR_ErrorLog', N'U') IS NOT NULL AND SnapshotUtc < @PurgeSnapshotCutoffUtc
+            UNION ALL
+            SELECT N'FR_SchemaActivity', COUNT(1) FROM dbo.FR_SchemaActivity
+            WHERE OBJECT_ID(N'dbo.FR_SchemaActivity', N'U') IS NOT NULL AND SnapshotUtc < @PurgeSnapshotCutoffUtc
+            UNION ALL
+            SELECT N'FR_PlanCacheSummary', COUNT(1) FROM dbo.FR_PlanCacheSummary
+            WHERE OBJECT_ID(N'dbo.FR_PlanCacheSummary', N'U') IS NOT NULL AND SnapshotUtc < @PurgeSnapshotCutoffUtc
+            UNION ALL
             SELECT N'FR_RunLog', COUNT(1)
             FROM dbo.FR_RunLog
             WHERE OBJECT_ID(N'dbo.FR_RunLog', N'U') IS NOT NULL
@@ -3476,6 +3777,42 @@ ORDER BY act.ModifyDateUtc DESC;';
         WHILE OBJECT_ID(N'dbo.FR_QueryPlan', N'U') IS NOT NULL
         BEGIN
             DELETE TOP (5000) FROM dbo.FR_QueryPlan WHERE SnapshotUtc < @PurgeSnapshotCutoffUtc;
+            SET @PurgeRows = @@ROWCOUNT;
+            SET @PurgeTotalRows = @PurgeTotalRows + @PurgeRows;
+            IF @PurgeRows = 0 BREAK;
+            WAITFOR DELAY '00:00:00.250';
+        END;
+
+        WHILE OBJECT_ID(N'dbo.FR_QueryStoreTopN', N'U') IS NOT NULL
+        BEGIN
+            DELETE TOP (5000) FROM dbo.FR_QueryStoreTopN WHERE SnapshotUtc < @PurgeSnapshotCutoffUtc;
+            SET @PurgeRows = @@ROWCOUNT;
+            SET @PurgeTotalRows = @PurgeTotalRows + @PurgeRows;
+            IF @PurgeRows = 0 BREAK;
+            WAITFOR DELAY '00:00:00.250';
+        END;
+
+        WHILE OBJECT_ID(N'dbo.FR_ErrorLog', N'U') IS NOT NULL
+        BEGIN
+            DELETE TOP (5000) FROM dbo.FR_ErrorLog WHERE SnapshotUtc < @PurgeSnapshotCutoffUtc;
+            SET @PurgeRows = @@ROWCOUNT;
+            SET @PurgeTotalRows = @PurgeTotalRows + @PurgeRows;
+            IF @PurgeRows = 0 BREAK;
+            WAITFOR DELAY '00:00:00.250';
+        END;
+
+        WHILE OBJECT_ID(N'dbo.FR_SchemaActivity', N'U') IS NOT NULL
+        BEGIN
+            DELETE TOP (5000) FROM dbo.FR_SchemaActivity WHERE SnapshotUtc < @PurgeSnapshotCutoffUtc;
+            SET @PurgeRows = @@ROWCOUNT;
+            SET @PurgeTotalRows = @PurgeTotalRows + @PurgeRows;
+            IF @PurgeRows = 0 BREAK;
+            WAITFOR DELAY '00:00:00.250';
+        END;
+
+        WHILE OBJECT_ID(N'dbo.FR_PlanCacheSummary', N'U') IS NOT NULL
+        BEGIN
+            DELETE TOP (5000) FROM dbo.FR_PlanCacheSummary WHERE SnapshotUtc < @PurgeSnapshotCutoffUtc;
             SET @PurgeRows = @@ROWCOUNT;
             SET @PurgeTotalRows = @PurgeTotalRows + @PurgeRows;
             IF @PurgeRows = 0 BREAK;
@@ -4269,6 +4606,355 @@ ORDER BY act.ModifyDateUtc DESC;';
         END;
 
         -- =====================================================================
+        -- v0.3 rule evaluation (FR_R0015–FR_R0020, design §7.11). Bounded to the
+        -- report window. Repository-only reads (D-014/D-081). Honors DisabledRules.
+        -- FR_R0019 (QS capacity) ships in v0.3 chunk 3B with its collect-time
+        -- capture; it is intentionally not emitted here (D-113: no dynamic SQL in
+        -- rules), so it is not evaluated in this block.
+        -- =====================================================================
+        DECLARE @QsRegressionFactor decimal(5,2) = 2.0;
+        SELECT @QsRegressionFactor = TRY_CONVERT(decimal(5,2), ConfigValue)
+        FROM dbo.FR_Config WHERE ConfigKey = N'QueryStoreRegressionFactor';
+        IF @QsRegressionFactor IS NULL OR @QsRegressionFactor < 1 SET @QsRegressionFactor = 2.0;
+
+        DECLARE @CompilationsWarn bigint = 100;
+        SELECT @CompilationsWarn = TRY_CONVERT(bigint, ConfigValue)
+        FROM dbo.FR_Config WHERE ConfigKey = N'CompilationsPerSecWarn';
+        IF @CompilationsWarn IS NULL OR @CompilationsWarn < 1 SET @CompilationsWarn = 100;
+
+        -- FR_R0015 QueryPlanRegression (QueryStore / High / Medium[Low on 2016] / Inferred)
+        -- Latest captured plan for a query vs its best prior plan (D-107: 2016 = runtime stats only,
+        -- Confidence forced down one level).
+        IF OBJECT_ID(N'dbo.FR_QueryStoreTopN', N'U') IS NOT NULL
+           AND CHARINDEX(N';FR_R0015_QueryPlanRegression;', @DisabledRules) = 0
+        BEGIN
+            ;WITH QsWin AS
+            (
+                SELECT DatabaseName, QsQueryId, QsPlanId,
+                       MAX(AvgDurationUs) AS AvgDurationUs,
+                       MAX(SnapshotUtc)   AS LastSeenUtc
+                FROM dbo.FR_QueryStoreTopN
+                WHERE SnapshotUtc >= @ReportStartUtc AND SnapshotUtc <= @ReportEndUtc
+                  AND AvgDurationUs IS NOT NULL
+                GROUP BY DatabaseName, QsQueryId, QsPlanId
+            ),
+            Ranked AS
+            (
+                SELECT DatabaseName, QsQueryId, QsPlanId, AvgDurationUs, LastSeenUtc,
+                       ROW_NUMBER() OVER (PARTITION BY DatabaseName, QsQueryId
+                                          ORDER BY LastSeenUtc DESC, QsPlanId DESC) AS rnLatest,
+                       COUNT(*)           OVER (PARTITION BY DatabaseName, QsQueryId) AS PlanCount,
+                       MIN(AvgDurationUs) OVER (PARTITION BY DatabaseName, QsQueryId) AS BestAvgUs
+                FROM QsWin
+            )
+            INSERT INTO #fr_findings
+            (
+                Severity, Confidence, EvidenceType, Category, RuleId,
+                Title, Summary, Evidence, Recommendation,
+                DatabaseName, StartTimeUtc, EndTimeUtc, MoreInfo
+            )
+            SELECT TOP (@MaxFindings)
+                N'High',
+                CASE WHEN @ProductMajorProbe = 13 THEN N'Low' ELSE N'Medium' END,
+                N'Inferred', N'QueryStore',
+                N'FR_R0015_QueryPlanRegression',
+                N'Query Store shows evidence consistent with a plan regression',
+                N'A query has a recent plan whose average duration is materially higher than a prior plan.',
+                LEFT(CONCAT(N'QsQueryId=', QsQueryId, N'; latestPlanId=', QsPlanId,
+                            N'; latestAvgUs=', AvgDurationUs, N'; bestPriorAvgUs=', BestAvgUs,
+                            N'; factor>=', @QsRegressionFactor), 1900),
+                N'Consider reviewing this query in Query Store only after validating the regression is real and sustained. Do not force a plan automatically.',
+                DatabaseName, @ReportStartUtc, @ReportEndUtc,
+                CASE WHEN @ProductMajorProbe = 13
+                     THEN N'SQL 2016: runtime-stats-only comparison; Confidence intentionally reduced (D-107).'
+                     ELSE N'Compared latest captured plan vs best prior plan for the same query (Query Store).' END
+            FROM Ranked
+            WHERE rnLatest = 1
+              AND PlanCount > 1
+              AND BestAvgUs > 0
+              AND AvgDurationUs >= BestAvgUs * @QsRegressionFactor
+            ORDER BY AvgDurationUs DESC;
+        END;
+
+        -- FR_R0016 TopCpuConsumerInWindow (QueryStore / Medium / High / Observed)
+        -- Top-5 by total CPU; duration/reads carried as supplementary evidence (D-191).
+        IF OBJECT_ID(N'dbo.FR_QueryStoreTopN', N'U') IS NOT NULL
+           AND CHARINDEX(N';FR_R0016_TopCpuConsumerInWindow;', @DisabledRules) = 0
+        BEGIN
+            ;WITH QsAgg AS
+            (
+                SELECT DatabaseName, QsQueryId,
+                       SUM(ISNULL(TotalCpuUs, 0))      AS TotalCpuUs,
+                       SUM(ISNULL(TotalDurationUs, 0)) AS TotalDurationUs,
+                       SUM(ISNULL(ExecutionCount, 0))  AS ExecutionCount,
+                       MAX(ISNULL(AvgLogicalReads, 0)) AS AvgLogicalReads
+                FROM dbo.FR_QueryStoreTopN
+                WHERE SnapshotUtc >= @ReportStartUtc AND SnapshotUtc <= @ReportEndUtc
+                GROUP BY DatabaseName, QsQueryId
+            ),
+            Ranked AS
+            (
+                SELECT DatabaseName, QsQueryId, TotalCpuUs, TotalDurationUs, ExecutionCount, AvgLogicalReads,
+                       ROW_NUMBER() OVER (ORDER BY TotalCpuUs DESC, DatabaseName, QsQueryId) AS rn
+                FROM QsAgg
+            )
+            INSERT INTO #fr_findings
+            (
+                Severity, Confidence, EvidenceType, Category, RuleId,
+                Title, Summary, Evidence, Recommendation,
+                DatabaseName, StartTimeUtc, EndTimeUtc, MoreInfo
+            )
+            SELECT TOP (5)
+                N'Medium', N'High', N'Observed', N'QueryStore',
+                N'FR_R0016_TopCpuConsumerInWindow',
+                N'Top CPU consumer in the window (Query Store)',
+                N'This query accumulated the most CPU in Query Store during the window.',
+                LEFT(CONCAT(N'QsQueryId=', QsQueryId, N'; totalCpuUs=', TotalCpuUs,
+                            N'; totalDurationUs=', TotalDurationUs, N'; execCount=', ExecutionCount,
+                            N'; avgLogicalReads=', AvgLogicalReads), 1900),
+                N'Consider reviewing this query for tuning opportunities only after validating it is representative of the incident.',
+                DatabaseName, @ReportStartUtc, @ReportEndUtc,
+                N'Aggregated from FR_QueryStoreTopN across the window (CPU-ranked).'
+            FROM Ranked
+            WHERE rn <= 5 AND TotalCpuUs > 0
+            ORDER BY TotalCpuUs DESC;
+        END;
+
+        -- FR_R0017 QueryStoreDisabledOnUserDbs (Coverage / Informational / High / Observed)
+        -- Repository-only: QueryStore collector step reported Skipped (no QS-enabled DB).
+        IF OBJECT_ID(N'dbo.FR_RunLogStep', N'U') IS NOT NULL
+           AND CHARINDEX(N';FR_R0017_QueryStoreDisabledOnUserDbs;', @DisabledRules) = 0
+        BEGIN
+            INSERT INTO #fr_findings
+            (
+                Severity, Confidence, EvidenceType, Category, RuleId,
+                Title, Summary, Evidence, Recommendation,
+                StartTimeUtc, EndTimeUtc, MoreInfo
+            )
+            SELECT TOP (1)
+                N'Informational', N'High', N'Observed', N'Coverage',
+                N'FR_R0017_QueryStoreDisabledOnUserDbs',
+                N'Query Store not enabled on eligible user databases',
+                N'The Query Store collector ran but found no Query Store-enabled user database.',
+                N'Most recent QueryStore collector step reported Skipped in the window.',
+                N'Consider validating whether Query Store should be enabled on key databases to improve future plan-level evidence.',
+                @ReportStartUtc, @ReportEndUtc,
+                N'Repository-only signal: based on FR_RunLogStep StepName=QueryStore, Status=Skipped.'
+            FROM dbo.FR_RunLogStep AS st
+            WHERE st.StepName = N'QueryStore'
+              AND st.Status = N'Skipped'
+              AND st.StartUtc >= @ReportStartUtc AND st.StartUtc <= @ReportEndUtc;
+        END;
+
+        -- FR_R0018 FailedPlanForcing (QueryStore / Medium / High / Observed)
+        -- Deduped by (db, query, plan) per D-074 intra-category anchor.
+        IF OBJECT_ID(N'dbo.FR_QueryStoreTopN', N'U') IS NOT NULL
+           AND CHARINDEX(N';FR_R0018_FailedPlanForcing;', @DisabledRules) = 0
+        BEGIN
+            ;WITH Forced AS
+            (
+                SELECT DatabaseName, QsQueryId, QsPlanId,
+                       MAX(ISNULL(ForceFailureCount, 0)) AS ForceFailureCount,
+                       MAX(LastForceFailureReason)       AS LastForceFailureReason
+                FROM dbo.FR_QueryStoreTopN
+                WHERE SnapshotUtc >= @ReportStartUtc AND SnapshotUtc <= @ReportEndUtc
+                  AND ISNULL(ForceFailureCount, 0) > 0
+                GROUP BY DatabaseName, QsQueryId, QsPlanId
+            )
+            INSERT INTO #fr_findings
+            (
+                Severity, Confidence, EvidenceType, Category, RuleId,
+                Title, Summary, Evidence, Recommendation,
+                DatabaseName, StartTimeUtc, EndTimeUtc, MoreInfo
+            )
+            SELECT TOP (@MaxFindings)
+                N'Medium', N'High', N'Observed', N'QueryStore',
+                N'FR_R0018_FailedPlanForcing',
+                N'Query Store shows evidence consistent with a forced-plan failure',
+                N'A forced plan reported one or more force failures in the window.',
+                LEFT(CONCAT(N'QsQueryId=', QsQueryId, N'; PlanId=', QsPlanId,
+                            N'; ForceFailureCount=', ForceFailureCount,
+                            N'; Reason=', ISNULL(LastForceFailureReason, N'')), 1900),
+                N'Consider reviewing why the forced plan is failing only after validating the forcing is still intended. Do not force or unforce plans automatically.',
+                DatabaseName, @ReportStartUtc, @ReportEndUtc,
+                N'From FR_QueryStoreTopN forced-plan columns (deduped by db/query/plan).'
+            FROM Forced
+            ORDER BY ForceFailureCount DESC;
+        END;
+
+        -- FR_R0020 HighCompilationRate (PlanCache / Medium / Medium / Inferred)
+        -- Rate derived from raw cumulative counters via window delta (D-007).
+        -- Negative deltas (counter reset on restart) are excluded by the threshold test.
+        IF OBJECT_ID(N'dbo.FR_PlanCacheSummary', N'U') IS NOT NULL
+           AND CHARINDEX(N';FR_R0020_HighCompilationRate;', @DisabledRules) = 0
+        BEGIN
+            ;WITH FirstRow AS
+            (
+                SELECT TOP (1) SnapshotUtc, CompilationsPerSec
+                FROM dbo.FR_PlanCacheSummary
+                WHERE SnapshotUtc >= @ReportStartUtc AND SnapshotUtc <= @ReportEndUtc
+                  AND CompilationsPerSec IS NOT NULL
+                ORDER BY SnapshotUtc ASC
+            ),
+            LastRow AS
+            (
+                SELECT TOP (1) SnapshotUtc, CompilationsPerSec, AdHocSingleUsePlanCount, CachedPlanCount
+                FROM dbo.FR_PlanCacheSummary
+                WHERE SnapshotUtc >= @ReportStartUtc AND SnapshotUtc <= @ReportEndUtc
+                  AND CompilationsPerSec IS NOT NULL
+                ORDER BY SnapshotUtc DESC
+            )
+            INSERT INTO #fr_findings
+            (
+                Severity, Confidence, EvidenceType, Category, RuleId,
+                Title, Summary, Evidence, Recommendation,
+                StartTimeUtc, EndTimeUtc, MoreInfo
+            )
+            SELECT TOP (1)
+                N'Medium', N'Medium', N'Inferred', N'PlanCache',
+                N'FR_R0020_HighCompilationRate',
+                N'Plan cache shows evidence consistent with high compilation pressure',
+                N'Average SQL compilations per second across the window exceeded the configured threshold.',
+                LEFT(CONCAT(N'approxCompilationsPerSec=',
+                       CONVERT(bigint, (l.CompilationsPerSec - f.CompilationsPerSec)
+                                       / NULLIF(DATEDIFF(second, f.SnapshotUtc, l.SnapshotUtc), 0)),
+                       N'; threshold=', @CompilationsWarn,
+                       N'; singleUseAdhocPlans=', ISNULL(l.AdHocSingleUsePlanCount, 0),
+                       N'; cachedPlanCount=', ISNULL(l.CachedPlanCount, 0)), 1900),
+                N'Consider reviewing ad hoc workload and parameterization only after validating the compilation rate is sustained. Do not clear the plan cache reflexively.',
+                f.SnapshotUtc, l.SnapshotUtc,
+                N'Rate derived from raw cumulative SQL Compilations/sec counters across the window (D-007).'
+            FROM FirstRow AS f
+            CROSS JOIN LastRow AS l
+            WHERE DATEDIFF(second, f.SnapshotUtc, l.SnapshotUtc) > 0
+              AND (l.CompilationsPerSec - f.CompilationsPerSec)
+                  / DATEDIFF(second, f.SnapshotUtc, l.SnapshotUtc) >= @CompilationsWarn;
+        END;
+
+        -- FR_R0019 QueryStoreNearingCapacity (QueryStore / Medium / High / Observed)
+        -- Reads the collect-time QueryStoreCapacity step (static SQL; D-113).
+        IF OBJECT_ID(N'dbo.FR_RunLogStep', N'U') IS NOT NULL
+           AND CHARINDEX(N';FR_R0019_QueryStoreNearingCapacity;', @DisabledRules) = 0
+        BEGIN
+            DECLARE @QsCapWarn int = 90;
+            SELECT @QsCapWarn = TRY_CONVERT(int, ConfigValue)
+            FROM dbo.FR_Config WHERE ConfigKey = N'QueryStoreCapacityWarnPercent';
+            IF @QsCapWarn IS NULL OR @QsCapWarn < 1 SET @QsCapWarn = 90;
+
+            INSERT INTO #fr_findings
+            (
+                Severity, Confidence, EvidenceType, Category, RuleId,
+                Title, Summary, Evidence, Recommendation,
+                StartTimeUtc, EndTimeUtc, MoreInfo
+            )
+            SELECT TOP (1)
+                N'Medium', N'High', N'Observed', N'QueryStore',
+                N'FR_R0019_QueryStoreNearingCapacity',
+                N'Query Store shows evidence consistent with nearing storage capacity',
+                N'At least one database''s Query Store storage approached its configured maximum during the window.',
+                LEFT(CONCAT(N'maxUsedPct=', st.RowsCollected, N'; threshold=', @QsCapWarn,
+                            N'; detail=', ISNULL(st.Reason, N'')), 1900),
+                N'Consider reviewing Query Store retention and max size settings only after validating capacity pressure is sustained.',
+                @ReportStartUtc, @ReportEndUtc,
+                N'From FR_RunLogStep StepName=QueryStoreCapacity; RowsCollected carries the max used percent (v0.3 reuse).'
+            FROM dbo.FR_RunLogStep AS st
+            WHERE st.StepName = N'QueryStoreCapacity'
+              AND st.StartUtc >= @ReportStartUtc AND st.StartUtc <= @ReportEndUtc
+              AND st.RowsCollected IS NOT NULL
+              AND st.RowsCollected >= @QsCapWarn
+            ORDER BY st.RowsCollected DESC;
+        END;
+
+        -- FR_R0006 corroboration from the error log (D-191). Emitted only if the
+        -- v0.1 start-time logic did not already emit FR_R0006 (no intra-rule dup).
+        IF OBJECT_ID(N'dbo.FR_ErrorLog', N'U') IS NOT NULL
+           AND CHARINDEX(N';FR_R0006_ServerRestartDuringWindow;', @DisabledRules) = 0
+           AND NOT EXISTS (SELECT 1 FROM #fr_findings WHERE RuleId = N'FR_R0006_ServerRestartDuringWindow')
+        BEGIN
+            INSERT INTO #fr_findings
+            (
+                Severity, Confidence, EvidenceType, Category, RuleId,
+                Title, Summary, Evidence, Recommendation,
+                StartTimeUtc, EndTimeUtc, MoreInfo
+            )
+            SELECT TOP (1)
+                N'Critical', N'High', N'Observed', N'Configuration',
+                N'FR_R0006_ServerRestartDuringWindow',
+                N'SQL Server restart evidence in the error log',
+                N'The error log contains startup messages within the window, consistent with a restart.',
+                LEFT(N'Restart log line: ' + ISNULL(e.LogText, N''), 1900),
+                N'Consider correlating the restart time with the incident only after validating whether the restart was expected.',
+                e.LogDateUtc, e.LogDateUtc,
+                N'Corroborating evidence from FR_ErrorLog (Category=Restart); independent of snapshot start-time delta (D-191).'
+            FROM dbo.FR_ErrorLog AS e
+            WHERE e.Category = N'Restart'
+              AND e.LogDateUtc >= @ReportStartUtc AND e.LogDateUtc <= @ReportEndUtc
+            ORDER BY e.LogDateUtc ASC;
+        END;
+
+        -- =====================================================================
+        -- v0.3 timeline events (additive EventType/Category per D-073):
+        --   ErrorLogEvent  (from FR_ErrorLog; non-'Other' categories)
+        --   SchemaChange / StatsUpdate (from FR_SchemaActivity)
+        -- Output remains chronological; insertion order is irrelevant (D-071).
+        -- =====================================================================
+        IF OBJECT_ID(N'dbo.FR_ErrorLog', N'U') IS NOT NULL
+            INSERT INTO #fr_timeline
+            (
+                EventUtc, EventType, Category, Severity, Summary, SnapshotId, MoreInfo
+            )
+            SELECT TOP (@MaxFindings)
+                e.LogDateUtc,
+                N'ErrorLogEvent',
+                CASE e.Category
+                    WHEN N'IO'         THEN N'IO'
+                    WHEN N'Corruption' THEN N'IO'
+                    WHEN N'Failover'   THEN N'HA'
+                    WHEN N'Memory'     THEN N'Memory'
+                    ELSE N'Configuration'
+                END,
+                CASE e.Category
+                    WHEN N'Corruption'   THEN N'Critical'
+                    WHEN N'Failover'     THEN N'High'
+                    WHEN N'IO'           THEN N'High'
+                    WHEN N'Restart'      THEN N'High'
+                    WHEN N'HighSeverity' THEN N'High'
+                    WHEN N'Memory'       THEN N'Medium'
+                    ELSE N'Low'
+                END,
+                LEFT(N'[' + ISNULL(e.Category, N'Other') + N'] ' + ISNULL(e.LogText, N''), 400),
+                e.SnapshotId,
+                LEFT(N'ProcessInfo=' + ISNULL(e.ProcessInfo, N''), 1000)
+            FROM dbo.FR_ErrorLog AS e
+            WHERE e.LogDateUtc >= @ReportStartUtc AND e.LogDateUtc <= @ReportEndUtc
+              AND ISNULL(e.Category, N'Other') <> N'Other'
+            ORDER BY e.LogDateUtc ASC;
+
+        IF OBJECT_ID(N'dbo.FR_SchemaActivity', N'U') IS NOT NULL
+            INSERT INTO #fr_timeline
+            (
+                EventUtc, EventType, Category, Severity, Summary,
+                DatabaseName, ObjectName, SnapshotId, MoreInfo
+            )
+            SELECT TOP (@MaxFindings)
+                a.ModifyDateUtc,
+                CASE WHEN a.ActivityKind = N'StatsUpdate' THEN N'StatsUpdate' ELSE N'SchemaChange' END,
+                N'Schema',
+                N'Informational',
+                LEFT(CASE WHEN a.ActivityKind = N'StatsUpdate'
+                          THEN N'Statistics updated: ' + ISNULL(a.SchemaName, N'') + N'.' + ISNULL(a.ObjectName, N'')
+                               + N' (' + ISNULL(a.StatName, N'') + N')'
+                          ELSE N'Object changed: ' + ISNULL(a.SchemaName, N'') + N'.' + ISNULL(a.ObjectName, N'')
+                     END, 400),
+                a.DatabaseName,
+                LEFT(ISNULL(a.ObjectName, N''), 200),
+                a.SnapshotId,
+                LEFT(N'Kind=' + a.ActivityKind + N'; rowMod=' + ISNULL(CONVERT(nvarchar(20), a.RowModCount), N''), 1000)
+            FROM dbo.FR_SchemaActivity AS a
+            WHERE a.ModifyDateUtc >= @ReportStartUtc AND a.ModifyDateUtc <= @ReportEndUtc
+            ORDER BY a.ModifyDateUtc ASC;
+
+        -- =====================================================================
         -- v0.2 timeline events (chronological; D-071/D-073 closed-set EventType).
         -- =====================================================================
         IF OBJECT_ID(N'dbo.FR_Deadlock', N'U') IS NOT NULL
@@ -4344,63 +5030,10 @@ ORDER BY act.ModifyDateUtc DESC;';
         END;
 
 
-        IF @IncludeQueryPlans = 1
-        BEGIN
-            INSERT INTO #fr_findings
-            (
-                Severity, Confidence, EvidenceType, Category, RuleId,
-                Title, Summary, Evidence, Recommendation,
-                StartTimeUtc, EndTimeUtc, MoreInfo
-            )
-            VALUES
-            (
-                N'Informational',
-                N'High',
-                N'Observed',
-                N'Coverage',
-                N'FR_R0026_CoverageAndCapabilitySummary',
-                N'Query plan output requested but not available in this build',
-                N'@IncludeQueryPlans = 1 was supplied, but this repository build does not store query plan XML.',
-                N'FR_Request carries QueryHash and QueryPlanHash placeholder columns only (currently NULL); no plan XML is captured.',
-                N'Use QueryHash / QueryPlanHash for correlation. Plan XML capture is intentionally out of scope (no plan shredding by design).',
-                @ReportStartUtc,
-                @ReportEndUtc,
-                N'This build never captures or parses plan XML. The parameter is acknowledged, not honored.'
-            );
-        END;
+        -- (Removed in v0.3) Legacy @IncludeQueryPlans "not available in this build"
+        -- coverage finding deleted: it contradicted the bounded opt-in plan
+        -- shredding implemented per D-188 earlier in this Report block.
 
-
-        IF @DatabaseName IS NOT NULL
-        BEGIN
-            DELETE FROM #fr_findings
-            WHERE DatabaseName IS NOT NULL
-              AND DatabaseName <> @DatabaseName;
-
-            DELETE FROM #fr_timeline
-            WHERE DatabaseName IS NOT NULL
-              AND DatabaseName <> @DatabaseName;
-        END;
-
-
-        DELETE FROM #fr_findings
-        WHERE Severity <> N'Critical'
-          AND Category <> N'Coverage'
-          AND CASE Severity
-                  WHEN N'Informational' THEN 1
-                  WHEN N'Low'           THEN 2
-                  WHEN N'Medium'        THEN 3
-                  WHEN N'High'          THEN 4
-                  WHEN N'Critical'      THEN 5
-                  ELSE 1
-              END
-            < CASE UPPER(@MinSeverity)
-                  WHEN N'INFORMATIONAL' THEN 1
-                  WHEN N'LOW'           THEN 2
-                  WHEN N'MEDIUM'        THEN 3
-                  WHEN N'HIGH'          THEN 4
-                  WHEN N'CRITICAL'      THEN 5
-                  ELSE 2
-              END;
 
         -- @DatabaseName scope: drop DB-bound rows for other databases; keep
         -- instance-level/coverage rows (DatabaseName IS NULL).
