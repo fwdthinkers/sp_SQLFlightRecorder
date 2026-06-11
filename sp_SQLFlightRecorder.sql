@@ -3276,28 +3276,7 @@ ORDER BY act.ModifyDateUtc DESC;';
                 SET @CollectStepId = SCOPE_IDENTITY();
 
                 BEGIN TRY
-                    DECLARE @saSql       nvarchar(max);
-                    DECLARE @saDbId      int = 0;
-                    DECLARE @saDbName    sysname;
-                    DECLARE @saStartMs   datetime2(3) = SYSUTCDATETIME();
-                    DECLARE @saBudgetMs  int = 10000;   -- bounded; cheaper than QS
-                    DECLARE @saBudgetHit bit = 0;
-                    DECLARE @saDbErrors  int = 0;
-                    DECLARE @saDbDone    int = 0;
-                    DECLARE @saLookbackUtc datetime2(3) = DATEADD(day, -7, @CollectSnapshotUtc);
 
-                    IF OBJECT_ID(N'tempdb..#fr_sa_db') IS NOT NULL DROP TABLE #fr_sa_db;
-                    CREATE TABLE #fr_sa_db (DatabaseId int NOT NULL PRIMARY KEY, DatabaseName sysname NOT NULL);
-
-                    -- Candidate DBs: online, writable, user DBs (D-052).
-                    INSERT INTO #fr_sa_db (DatabaseId, DatabaseName)
-                    SELECT TOP (@SchemaActMaxDb) database_id, name
-                    FROM sys.databases
-                    WHERE state_desc = N'ONLINE'
-                      AND database_id > 4
-                      AND is_read_only = 0
-                      AND DATABASEPROPERTYEX(name, N'Updateability') = N'READ_WRITE'
-                    ORDER BY database_id ASC;
 
                     IF NOT EXISTS (SELECT 1 FROM #fr_sa_db)
                     BEGIN
