@@ -3262,7 +3262,134 @@ ORDER BY act.ModifyDateUtc DESC;';
                     IF OBJECT_ID(N'tempdb..#fr_sa_db') IS NOT NULL DROP TABLE #fr_sa_db;
                 END CATCH;
             END;
+            -- ============================================================
+            -- v0.3 collector: Query Store capacity probe (bounded; feeds FR_R0019)
+            -- Per-DB dynamic read of sys.database_query_store_options (2016+).
+            -- NO new table: max used percent is stored in FR_RunLogStep.RowsCollected
+            -- (documented reuse), offending DB(s) in Reason. FR_R0019 reads this step.
+            -- ============================================================
+            IF @CollectQS = 1 AND @HasQueryStoreSupport = 1
+               AND OBJECT_ID(N'dbo.FR_RunLogStep', N'U') IS NOT NULL
+            BEGIN
+                INSERT INTO dbo.FR_RunLogStep (RunId, StepName, StartUtc, Status)
+                VALUES (@CollectRunId, N'QueryStoreCapacity', SYSUTCDATETIME(), N'InProgress');
+                SET @CollectStepId = SCOPE_IDENTITY();
+                BEGIN TRY
+                    DECLARE @capSql    nvarchar(max);
+                    DECLARE @capDbId   int = 0;
+                    DECLARE @capDbName sysname;
+                    DECLARE @capCur    float;
+                    DECLARE @capMax    float;
+                    DECLARE @capPct    int;
+                    DECLARE @capMaxPct int = 0;
+                    DECLARE @capDetail nvarchar(400) = N'';
 
+                    IF OBJECT_ID(N'tempdb..#fr_qscap_db') IS NOT NULL DROP TABLE #fr_qscap_db;
+                    CREATE TABLE #fr_qscap_db (DatabaseId int NOT NULL PRIMARY KEY, DatabaseName sysname NOT NULL);
+
+                    SET @capSql = N'
+SELECT TOP (@maxDb) database_id, name
+FROM sys.databases
+WHERE state_desc = N''ONLINE'' AND database_id > 4 AND is_read_only = 0
+  AND is_query_store_on = 1
+ORDER BY database_id ASC;';
+                    INSERT INTO #fr_qscap_db (DatabaseId, DatabaseName)
+                    EXEC sys.sp_executesql @capSql, N'@maxDb int', @maxDb = @QsMaxDb;
+
+                    WHILE 1 = 1
+                    BEGIN
+                        SELECT TOP (1) @capDbId = DatabaseId, @capDbName = DatabaseName
+                        FROM #fr_qscap_db WHERE DatabaseId > @capDbId ORDER BY DatabaseId ASC;
+                        IF @@ROWCOUNT = 0 BREAK;
+
+                        SET @capCur = NULL; SET @capMax = NULL;
+                        BEGIN TRY
+                            SET @capSql = N'SELECT @cur = CONVERT(float, current_storage_size_mb),
+                                                   @max = CONVERT(float, max_storage_size_mb)
+                                            FROM ' + QUOTENAME(@capDbName) + N'.sys.database_query_store_options
+                                            WHERE actual_state IN (1, 2);';
+                            EXEC sys.sp_executesql @capSql,
+                                 N'@cur float OUTPUT, @max float OUTPUT',
+                                 @cur = @capCur OUTPUT, @max = @capMax OUTPUT;
+
+                            IF @capMax IS NOT NULL AND @capMax > 0 AND @capCur IS NOT NULL
+                            BEGIN
+                                SET @capPct = CONVERT(int, (@capCur * 100.0) / @capMax);
+                                IF @capPct > @capMaxPct SET @capMaxPct = @capPct;
+                                IF @capPct >= 80
+                                    SET @capDetail = LEFT(@capDetail
+                                        + CASE WHEN @capDetail = N'' THEN N'' ELSE N'; ' END
+                                        + N'db=[' + @capDbName + N'] usedPct=' + CONVERT(nvarchar(10), @capPct), 400);
+                            END;
+                        END TRY
+                        BEGIN CATCH
+                            SET @capCur = NULL;   -- ignore a single DB capacity read failure
+                        END CATCH;
+                    END;
+
+                    UPDATE dbo.FR_RunLogStep
+                    SET EndUtc = SYSUTCDATETIME(),
+                        Status = N'Success',
+                        RowsCollected = @capMaxPct,
+                        Reason = CASE WHEN @capDetail = N'' THEN N'No QS database at/over 80% used.' ELSE @capDetail END
+                    WHERE RunStepId = @CollectStepId;
+
+                    IF OBJECT_ID(N'tempdb..#fr_qscap_db') IS NOT NULL DROP TABLE #fr_qscap_db;
+                END TRY
+                BEGIN CATCH
+                    SET @CollectStatus = N'PartialSuccess';
+                    SET @CollectError = ERROR_MESSAGE();
+                    UPDATE dbo.FR_RunLogStep
+                    SET EndUtc = SYSUTCDATETIME(), Status = N'Error', ErrorMessage = @CollectError
+                    WHERE RunStepId = @CollectStepId;
+                    IF OBJECT_ID(N'tempdb..#fr_qscap_db') IS NOT NULL DROP TABLE #fr_qscap_db;
+                END CATCH;
+            END;
+
+            IF @CollectStatus = N'PartialSuccess'
+                SET @CollectReason = N'Collect completed with one or more collector failures. See FR_RunLogStep.';
+            UPDATE dbo.FR_RunLog
+            SET EndUtc = SYSUTCDATETIME(),
+                Status = @CollectStatus,
+                Reason = @CollectReason
+            WHERE RunId = @CollectRunId;
+
+            EXEC sys.sp_releaseapplock
+                  @Resource = N'SQLFlightRecorder/Collect'
+                , @LockOwner = N'Session';
+
+            SELECT
+                  @CollectStatus AS Status
+                , @CollectRunId AS RunId
+                , @CollectSnapshotId AS SnapshotId
+                , @CollectSnapshotUtc AS SnapshotUtc
+                , @CollectReason AS Message;
+
+            RETURN;
+        END TRY
+        BEGIN CATCH
+            SET @CollectError = ERROR_MESSAGE();
+
+            IF @CollectRunId IS NOT NULL
+            BEGIN
+                UPDATE dbo.FR_RunLog
+                SET EndUtc = SYSUTCDATETIME(),
+                    Status = N'Error',
+                    ErrorMessage = @CollectError,
+                    Reason = N'Collect failed.'
+                WHERE RunId = @CollectRunId;
+            END;
+
+            EXEC sys.sp_releaseapplock
+                  @Resource = N'SQLFlightRecorder/Collect'
+                , @LockOwner = N'Session';
+
+            SELECT N'Error' AS Status, N'CollectFailed' AS ErrorCode,
+                @CollectError AS Message, @ToolVersion AS ToolVersion;
+
+            RETURN;
+        END CATCH;
+    END;
     -- =========================================================================
     -- Mode: PURGE
     -- =========================================================================
