@@ -64,6 +64,7 @@ ALTER PROCEDURE dbo.sp_SQLFlightRecorder
   , @ConfigKey            sysname        = NULL
   , @ConfigValue          nvarchar(4000) = NULL
   , @CreateAgentJob       bit            = 0
+  , @TimeZone             sysname        = NULL
 AS
 BEGIN
     -- =========================================================================
@@ -328,7 +329,20 @@ BEGIN
         PRINT N'  * Compatible: SQL Server 2012–2025 (capability-driven branching, no string parsing).';
         PRINT N'  * Open source first: GitHub-native, DBA-friendly contribution model.';
         PRINT N'';
+        PRINT N'v0.4 COLLECTORS (capability-gated; bounded)';
+        PRINT N'-------------------------------------------';
+        PRINT N'  AdvancedHaState (AG queues/health; non-Azure-DB), BufferPool (opt-in; >256 GB skipped).';
+        PRINT N'';
+        PRINT N'v0.4 RULES';
+        PRINT N'----------';
+        PRINT N'  FR_R0021 ConfigurationChangeInWindow, FR_R0022 LogReuseWaitElevated,';
+        PRINT N'  FR_R0023 ThreadpoolWaitsObserved, FR_R0024 ResourceSemaphoreWaits,';
+        PRINT N'  FR_R0025 RecentCheckDbOrBackupAge, FR_R0026 CoverageAndCapabilitySummary.';
+        PRINT N'';
+        PRINT N'  @TimeZone         Report: display-only IANA/Windows time zone for Markdown/Status output.';
+        PRINT N'                    UTC remains the storage and sort key. Falls back to UTC pre-SQL 2016.';
         PRINT N'================================================================================';
+        
         RETURN;
     END;
 
@@ -1465,6 +1479,8 @@ SELECT
             IF OBJECT_ID(N'dbo.FR_v_CollectorHealth', N'V') IS NOT NULL DROP VIEW dbo.FR_v_CollectorHealth;
             IF OBJECT_ID(N'dbo.FR_v_RepositoryFootprint', N'V') IS NOT NULL DROP VIEW dbo.FR_v_RepositoryFootprint;
             IF OBJECT_ID(N'dbo.FR_v_StatusSupport', N'V') IS NOT NULL DROP VIEW dbo.FR_v_StatusSupport;
+            IF OBJECT_ID(N'dbo.FR_HaState', N'U')    IS NOT NULL DROP TABLE dbo.FR_HaState;
+            IF OBJECT_ID(N'dbo.FR_BufferPool', N'U') IS NOT NULL DROP TABLE dbo.FR_BufferPool;
 
             -- Remove SQL Agent job only if this procedure created it.
             IF OBJECT_ID(N'dbo.FR_Config', N'U') IS NOT NULL
@@ -1722,7 +1738,9 @@ END;
         UNION ALL SELECT N'EnableAdvancedHaCollector', ISNULL((SELECT ConfigValue FROM dbo.FR_Config WHERE ConfigKey = N'EnableAdvancedHaCollector'), N'')
         UNION ALL SELECT N'EnableBufferPoolCollector', ISNULL((SELECT ConfigValue FROM dbo.FR_Config WHERE ConfigKey = N'EnableBufferPoolCollector'), N'')
         UNION ALL SELECT N'BaselineLookbackHours', ISNULL((SELECT ConfigValue FROM dbo.FR_Config WHERE ConfigKey = N'BaselineLookbackHours'), N'')
-        UNION ALL SELECT N'TimeZoneMode', ISNULL((SELECT ConfigValue FROM dbo.FR_Config WHERE ConfigKey = N'TimeZoneMode'), N'');
+        UNION ALL SELECT N'TimeZoneMode', ISNULL((SELECT ConfigValue FROM dbo.FR_Config WHERE ConfigKey = N'TimeZoneMode'), N'')
+        UNION ALL SELECT N'FR_HaState'      AS TableName WHERE OBJECT_ID(N'dbo.FR_HaState', N'U')      IS NOT NULL
+        UNION ALL SELECT N'FR_BufferPool'   AS TableName WHERE OBJECT_ID(N'dbo.FR_BufferPool', N'U')   IS NOT NULL;
 
         RETURN;
     END;
@@ -1760,6 +1778,30 @@ END;
             , N'WaitStatsIgnoreList'
             , N'DisabledRules'
             , N'CriticalWaitTypes'
+            -- v0.2 tunables
+            , N'MaintenanceJobNamePatterns'
+            , N'BlockingStormSessionThreshold'
+            , N'TempdbVersionStoreWarnKb'
+            -- v0.3 tunables
+            , N'CollectQueryStore'
+            , N'QueryStoreMaxDatabases'
+            , N'QueryStoreCapacityWarnPercent'
+            , N'QueryStoreRegressionFactor'
+            , N'CollectErrorLog'
+            , N'CollectSchemaActivity'
+            , N'SchemaActivityMaxDatabases'
+            , N'CollectPlanCacheSummary'
+            , N'CompilationsPerSecWarn'
+            -- v0.4 tunables
+            , N'CollectAdvancedHa'
+            , N'CollectBufferPool'
+            , N'SecondaryLagWarnSeconds'
+            , N'RedoQueueWarnKb'
+            , N'BackupWarnDays'
+            , N'CheckDbWarnDays'
+            , N'TimeZoneMode'
+            , N'TimeZoneName'
+        )
         )
         BEGIN
             SELECT N'Error' AS Status, N'UnknownConfigKey' AS ErrorCode,
@@ -1776,7 +1818,14 @@ END;
             RETURN;
         END;
 
-        IF @ConfigureKey IN (N'SnapshotIntervalSeconds', N'SnapshotRetentionDays', N'RunLogRetentionDays', N'MaxRowsPerCollector')
+        IF @ConfigureKey IN (
+               N'SnapshotIntervalSeconds', N'SnapshotRetentionDays', N'RunLogRetentionDays', N'MaxRowsPerCollector',
+               N'BlockingStormSessionThreshold', N'TempdbVersionStoreWarnKb',
+               N'CollectQueryStore', N'QueryStoreMaxDatabases', N'QueryStoreCapacityWarnPercent', N'QueryStoreRegressionFactor',
+               N'CollectErrorLog', N'CollectSchemaActivity', N'SchemaActivityMaxDatabases', N'CollectPlanCacheSummary',
+               N'CompilationsPerSecWarn',
+               N'CollectAdvancedHa', N'CollectBufferPool', N'SecondaryLagWarnSeconds', N'RedoQueueWarnKb',
+               N'BackupWarnDays', N'CheckDbWarnDays')
            AND TRY_CONVERT(int, @ConfigValue) IS NULL
         BEGIN
             SELECT N'Error' AS Status, N'InvalidConfigValue' AS ErrorCode,
@@ -3837,6 +3886,12 @@ ORDER BY ag.name, ar.replica_server_name, drs.database_id;';
             SELECT N'FR_PlanCacheSummary', COUNT(1) FROM dbo.FR_PlanCacheSummary
             WHERE OBJECT_ID(N'dbo.FR_PlanCacheSummary', N'U') IS NOT NULL AND SnapshotUtc < @PurgeSnapshotCutoffUtc
             UNION ALL
+            SELECT N'FR_HaState', COUNT(1) FROM dbo.FR_HaState
+            WHERE OBJECT_ID(N'dbo.FR_HaState', N'U') IS NOT NULL AND SnapshotUtc < @PurgeSnapshotCutoffUtc
+            UNION ALL
+            SELECT N'FR_BufferPool', COUNT(1) FROM dbo.FR_BufferPool
+            WHERE OBJECT_ID(N'dbo.FR_BufferPool', N'U') IS NOT NULL AND SnapshotUtc < @PurgeSnapshotCutoffUtc
+            UNION ALL
             SELECT N'FR_RunLog', COUNT(1)
             FROM dbo.FR_RunLog
             WHERE OBJECT_ID(N'dbo.FR_RunLog', N'U') IS NOT NULL
@@ -3962,9 +4017,28 @@ ORDER BY ag.name, ar.replica_server_name, drs.database_id;';
             WAITFOR DELAY '00:00:00.250';
         END;
 
-        WHILE OBJECT_ID(N'dbo.FR_QueryStoreTopN', N'U') IS NOT NULL
+        -- v0.4 child tables (snapshot children; purge before FR_Snapshot, D-141).
+        WHILE OBJECT_ID(N'dbo.FR_HaState', N'U') IS NOT NULL
         BEGIN
-            DELETE TOP (5000) FROM dbo.FR_QueryStoreTopN WHERE SnapshotUtc < @PurgeSnapshotCutoffUtc;
+            DELETE TOP (5000) FROM dbo.FR_HaState WHERE SnapshotUtc < @PurgeSnapshotCutoffUtc;
+            SET @PurgeRows = @@ROWCOUNT;
+            SET @PurgeTotalRows = @PurgeTotalRows + @PurgeRows;
+            IF @PurgeRows = 0 BREAK;
+            WAITFOR DELAY '00:00:00.250';
+        END;
+
+        WHILE OBJECT_ID(N'dbo.FR_BufferPool', N'U') IS NOT NULL
+        BEGIN
+            DELETE TOP (5000) FROM dbo.FR_BufferPool WHERE SnapshotUtc < @PurgeSnapshotCutoffUtc;
+            SET @PurgeRows = @@ROWCOUNT;
+            SET @PurgeTotalRows = @PurgeTotalRows + @PurgeRows;
+            IF @PurgeRows = 0 BREAK;
+            WAITFOR DELAY '00:00:00.250';
+        END;
+
+        WHILE OBJECT_ID(N'dbo.FR_Snapshot', N'U') IS NOT NULL
+        BEGIN
+            DELETE TOP (5000) FROM dbo.FR_Snapshot WHERE SnapshotUtc < @PurgeSnapshotCutoffUtc;
             SET @PurgeRows = @@ROWCOUNT;
             SET @PurgeTotalRows = @PurgeTotalRows + @PurgeRows;
             IF @PurgeRows = 0 BREAK;
@@ -4128,6 +4202,25 @@ ORDER BY ag.name, ar.replica_server_name, drs.database_id;';
                 WHEN @StartTime IS NULL THEN DATEADD(hour, -1, @ReportEndUtc)
                 ELSE DATEADD(minute, DATEDIFF(minute, GETDATE(), SYSUTCDATETIME()), @StartTime)
             END;
+        -- v0.4 display-time resolution (D-180). Storage + sort stay UTC.
+        DECLARE @TzMode  nvarchar(10) = N'UTC';
+        DECLARE @TzName  sysname = NULL;
+        SELECT @TzMode = UPPER(ISNULL(NULLIF(LTRIM(RTRIM(ConfigValue)), N''), N'UTC'))
+        FROM dbo.FR_Config WHERE ConfigKey = N'TimeZoneMode';
+        SELECT @TzName = NULLIF(LTRIM(RTRIM(ConfigValue)), N'')
+        FROM dbo.FR_Config WHERE ConfigKey = N'TimeZoneName';
+
+        -- Parameter overrides config for this run (explicit beats stored).
+        IF @TimeZone IS NOT NULL
+        BEGIN
+            SET @TzMode = N'LOCAL';
+            SET @TzName = @TimeZone;
+        END;
+
+        -- AT TIME ZONE requires SQL 2016+/Azure; otherwise force UTC display (no error).
+        IF @TzMode = N'LOCAL' AND @HasTimeZoneSupport = 0
+            SET @TzMode = N'UTC';
+
         -- =====================================================================
         -- v0.4 baseline engine (D-092, D-103): materialize ONCE per report run.
         -- 24h (configurable) median/avg of prior snapshots, EXCLUDING the incident
@@ -5207,7 +5300,7 @@ ORDER BY ag.name, ar.replica_server_name, drs.database_id;';
                     LEFT(ERROR_MESSAGE(), 1900), NULL, NULL, NULL, NULL,
                     @ReportStartUtc, @ReportEndUtc, N'FR_R0025 error captured as coverage note.');
         END CATCH;
-        
+
         -- FR_R0018 FailedPlanForcing (QueryStore / Medium / High / Observed)
         -- Deduped by (db, query, plan) per D-074 intra-category anchor.
         IF OBJECT_ID(N'dbo.FR_QueryStoreTopN', N'U') IS NOT NULL
@@ -5491,10 +5584,153 @@ ORDER BY ag.name, ar.replica_server_name, drs.database_id;';
             );
         END;
 
+        -- =====================================================================
+        -- FR_R0026 Coverage & Capability summary (D-098: always emits; D-075: dedup-exempt).
+        -- Aggregates skipped collectors, suppressed rules, coverage, and v0.4 capability.
+        -- =====================================================================
+        BEGIN TRY
+            DECLARE @CovSkipped nvarchar(1000) = N'';
+            DECLARE @CovSuppressed nvarchar(1000) = ISNULL(
+                (SELECT ConfigValue FROM dbo.FR_Config WHERE ConfigKey = N'DisabledRules'), N'');
+            DECLARE @CovSnapCount int = 0;
+
+            SELECT @CovSnapCount = COUNT(1)
+            FROM dbo.FR_Snapshot
+            WHERE SnapshotUtc >= @ReportStartUtc AND SnapshotUtc <= @ReportEndUtc;
+
+            IF OBJECT_ID(N'dbo.FR_RunLogStep', N'U') IS NOT NULL
+            SELECT @CovSkipped = STUFF((
+                SELECT TOP (50) N'; ' + rs.StepName + N'(' + ISNULL(rs.Reason, N'skipped') + N')'
+                FROM dbo.FR_RunLogStep AS rs
+                INNER JOIN dbo.FR_RunLog AS rl ON rl.RunId = rs.RunId
+                WHERE rs.Status IN (N'Skipped', N'PartialSuccess', N'Error')
+                  AND rs.StartUtc >= DATEADD(hour, -24, @ReportEndUtc)
+                ORDER BY rs.StartUtc DESC
+                FOR XML PATH(N''), TYPE).value(N'.', N'nvarchar(max)'), 1, 2, N'');
+
+            INSERT INTO #fr_findings
+            (Severity, Confidence, EvidenceType, Category, RuleId, Title, Summary, Evidence, Recommendation, DatabaseName, ObjectName, SessionId, StartTimeUtc, EndTimeUtc, MoreInfo)
+            VALUES
+            (
+                N'Informational', N'High', N'Observed', N'Coverage',
+                N'FR_R0026_CoverageAndCapabilitySummary',
+                N'Coverage and capability summary',
+                CONCAT(N'Window had ', @CovSnapCount, N' snapshot(s). See Evidence for coverage gaps and capability.'),
+                LEFT(CONCAT(
+                    N'Snapshots=', @CovSnapCount,
+                    N'; SkippedOrPartial=', CASE WHEN @CovSkipped = N'' THEN N'(none in last 24h)' ELSE @CovSkipped END,
+                    N'; SuppressedRules=', CASE WHEN @CovSuppressed = N'' THEN N'(none)' ELSE @CovSuppressed END), 1900),
+                N'Coverage gaps reduce confidence; address skipped collectors before relying on absence of findings.',
+                NULL, NULL, NULL, @ReportStartUtc, @ReportEndUtc,
+                LEFT(CONCAT(
+                    N'Capability: QS=', CONVERT(nvarchar(1), @HasQueryStoreSupport),
+                    N'; AdvHA=', CONVERT(nvarchar(1), @HasAdvancedHaSupport),
+                    N'; BufferPool=', CONVERT(nvarchar(1), @HasBufferPoolSupport),
+                    N'; TimeDisplay=', CONVERT(nvarchar(1), @HasTimeZoneSupport),
+                    N'; PlanAnalysis=', CASE WHEN OBJECT_ID(N'dbo.FR_QueryPlan', N'U') IS NOT NULL THEN N'1' ELSE N'0' END,
+                    N'; ErrorLog=', ISNULL((SELECT ConfigValue FROM dbo.FR_Config WHERE ConfigKey = N'CollectErrorLog'), N'0')), 1000)
+            );
+        END TRY
+        BEGIN CATCH
+            -- FR_R0026 must always appear; emit a minimal row even on failure (D-098).
+            INSERT INTO #fr_findings
+            (Severity, Confidence, EvidenceType, Category, RuleId, Title, Summary, Evidence, Recommendation, DatabaseName, ObjectName, SessionId, StartTimeUtc, EndTimeUtc, MoreInfo)
+            VALUES (N'Informational', N'High', N'Observed', N'Coverage',
+                    N'FR_R0026_CoverageAndCapabilitySummary',
+                    N'Coverage and capability summary',
+                    N'Coverage summary emitted with reduced detail.',
+                    LEFT(ERROR_MESSAGE(), 1900), N'Address the error before relying on coverage completeness.',
+                    NULL, NULL, NULL, @ReportStartUtc, @ReportEndUtc, N'FR_R0026 degraded.');
+        END CATCH;
 
         -- (Removed in v0.3) Legacy @IncludeQueryPlans "not available in this build"
         -- coverage finding deleted: it contradicted the bounded opt-in plan
         -- shredding implemented per D-188 earlier in this Report block.
+
+
+        -- =====================================================================
+        -- v0.4 dedup + ranking (D-074 intra-category only; D-075 Coverage exempt;
+        -- D-069 severity is per-rule constant; D-068 sort order preserved).
+        -- Keep one row per (Category, RuleId, anchor); highest severity wins,
+        -- then earliest StartTimeUtc. Coverage rows are never deduped.
+        -- =====================================================================
+        ;WITH ranked AS
+        (
+            SELECT
+                f.FindingOrdinal,
+                ROW_NUMBER() OVER (
+                    PARTITION BY f.Category, f.RuleId,
+                                 ISNULL(f.DatabaseName, N''), ISNULL(f.ObjectName, N''), ISNULL(f.SessionId, -1)
+                    ORDER BY
+                        CASE f.Severity WHEN N'Critical' THEN 1 WHEN N'High' THEN 2
+                                        WHEN N'Medium' THEN 3 WHEN N'Low' THEN 4 ELSE 5 END,
+                        f.StartTimeUtc ASC, f.FindingOrdinal ASC
+                ) AS rn
+            FROM #fr_findings AS f
+            WHERE f.Category <> N'Coverage'      -- D-075
+        )
+        DELETE f
+        FROM #fr_findings AS f
+        INNER JOIN ranked AS r ON r.FindingOrdinal = f.FindingOrdinal
+        WHERE r.rn > 1;
+
+            -- v0.4 timeline events (additive; D-073). 12-col contract unchanged.
+        BEGIN TRY
+            -- ConfigurationChange
+            INSERT INTO #fr_timeline
+            (EventUtc, EventType, Category, Severity, Summary, DatabaseName, ObjectName, SessionId, RuleId, RunId, SnapshotId, MoreInfo)
+            SELECT TOP (200)
+                s.SnapshotUtc, N'ConfigurationChange', N'Configuration', N'Medium',
+                CONCAT(N'Setting "', c.Name, N'" changed to ', ISNULL(c.ValueText, N'(null)'), N'.'),
+                NULL, c.Name, NULL, N'FR_R0021_ConfigurationChangeInWindow', NULL, c.SnapshotId,
+                N'Source: FR_Configuration diff.'
+            FROM dbo.FR_Configuration AS c
+            INNER JOIN dbo.FR_Snapshot AS s ON s.SnapshotId = c.SnapshotId
+            WHERE s.SnapshotUtc >= @ReportStartUtc AND s.SnapshotUtc <= @ReportEndUtc
+              AND EXISTS (
+                    SELECT 1 FROM dbo.FR_Configuration AS c2
+                    INNER JOIN dbo.FR_Snapshot AS s2 ON s2.SnapshotId = c2.SnapshotId
+                    WHERE c2.ConfigurationKind = c.ConfigurationKind AND c2.Name = c.Name
+                      AND s2.SnapshotUtc < s.SnapshotUtc
+                      AND s2.SnapshotUtc >= @ReportStartUtc
+                      AND ISNULL(c2.ValueText, N'') <> ISNULL(c.ValueText, N''));
+
+            -- LogReuseWaitChanged (perf-counter-derived growth signal)
+            INSERT INTO #fr_timeline
+            (EventUtc, EventType, Category, Severity, Summary, DatabaseName, ObjectName, SessionId, RuleId, RunId, SnapshotId, MoreInfo)
+            SELECT TOP (200)
+                s.SnapshotUtc, N'LogReuseWaitChanged', N'IO', N'High',
+                N'Transaction log growth/usage signal changed.',
+                NULL, RTRIM(p.CounterName), NULL, N'FR_R0022_LogReuseWaitElevated', NULL, p.SnapshotId,
+                CONCAT(N'Counter=', RTRIM(p.CounterName), N'; Value=', CONVERT(nvarchar(40), p.CounterValue))
+            FROM dbo.FR_PerfCounter AS p
+            INNER JOIN dbo.FR_Snapshot AS s ON s.SnapshotId = p.SnapshotId
+            WHERE s.SnapshotUtc >= @ReportStartUtc AND s.SnapshotUtc <= @ReportEndUtc
+              AND RTRIM(p.CounterName) = N'Log Growths'
+              AND p.CounterValue > 0;
+
+            -- AvailabilityStateChanged (advanced HA)
+            IF OBJECT_ID(N'dbo.FR_HaState', N'U') IS NOT NULL
+            INSERT INTO #fr_timeline
+            (EventUtc, EventType, Category, Severity, Summary, DatabaseName, ObjectName, SessionId, RuleId, RunId, SnapshotId, MoreInfo)
+            SELECT TOP (200)
+                s.SnapshotUtc, N'AvailabilityStateChanged', N'HA',
+                CASE WHEN h.SynchronizationHealthDesc = N'NOT_HEALTHY' THEN N'Critical'
+                     WHEN h.SynchronizationHealthDesc = N'PARTIALLY_HEALTHY' THEN N'High'
+                     ELSE N'Informational' END,
+                CONCAT(N'AG "', ISNULL(h.AgName, N'?'), N'" replica ', ISNULL(h.ReplicaServer, N'?'),
+                       N' health=', ISNULL(h.SynchronizationHealthDesc, N'?'), N'.'),
+                h.DatabaseName, h.ReplicaServer, NULL, N'FR_R0014_AlwaysOnRoleOrStateChange', NULL, h.SnapshotId,
+                CONCAT(N'Role=', ISNULL(h.RoleDesc, N'?'), N'; RedoQueueKb=', ISNULL(CONVERT(nvarchar(20), h.RedoQueueKb), N'')))
+            FROM dbo.FR_HaState AS h
+            INNER JOIN dbo.FR_Snapshot AS s ON s.SnapshotId = h.SnapshotId
+            WHERE s.SnapshotUtc >= @ReportStartUtc AND s.SnapshotUtc <= @ReportEndUtc
+              AND h.SynchronizationHealthDesc IN (N'NOT_HEALTHY', N'PARTIALLY_HEALTHY');
+        END TRY
+        BEGIN CATCH
+            -- Timeline enrichment failure must not fail Report (empty timeline allowed, D-078).
+            SET @CollectError = NULL;  -- no-op; swallow
+        END CATCH;
 
 
         -- @DatabaseName scope: drop DB-bound rows for other databases; keep
@@ -5533,6 +5769,8 @@ ORDER BY ag.name, ar.replica_server_name, drs.database_id;';
                 CHAR(13) + CHAR(10) +
                 N'## Findings' + CHAR(13) + CHAR(10);
 
+
+
             SELECT @ReportMarkdown = @ReportMarkdown +
                 N'- **' + Severity + N'** [' + RuleId + N'] ' + Title + N': ' + Summary + CHAR(13) + CHAR(10)
             FROM #fr_findings
@@ -5544,6 +5782,61 @@ ORDER BY ag.name, ar.replica_server_name, drs.database_id;';
                 N'- ' + CONVERT(nvarchar(50), EventUtc, 126) + N'Z — ' + EventType + N': ' + Summary + CHAR(13) + CHAR(10)
             FROM #fr_timeline
             ORDER BY EventUtc, EventType, SnapshotId;
+
+            -- v0.4 Markdown enrichment (additive; D-085 14-key header above is unchanged).
+            DECLARE @MdSnapCount int = 0;
+            SELECT @MdSnapCount = COUNT(1)
+            FROM dbo.FR_Snapshot
+            WHERE SnapshotUtc >= @ReportStartUtc AND SnapshotUtc <= @ReportEndUtc;
+
+            DECLARE @MdWindowStart nvarchar(40);
+            DECLARE @MdWindowEnd   nvarchar(40);
+
+            IF @TzMode = N'LOCAL' AND @HasTimeZoneSupport = 1 AND @TzName IS NOT NULL
+            BEGIN
+                DECLARE @MdTzSql nvarchar(max) = N'
+                    SELECT @s = CONVERT(nvarchar(30), @su AT TIME ZONE N''UTC'' AT TIME ZONE @tz, 120),
+                           @e = CONVERT(nvarchar(30), @eu AT TIME ZONE N''UTC'' AT TIME ZONE @tz, 120);';
+                BEGIN TRY
+                    EXEC sys.sp_executesql @MdTzSql,
+                         N'@su datetime2(3), @eu datetime2(3), @tz sysname, @s nvarchar(40) OUTPUT, @e nvarchar(40) OUTPUT',
+                         @su = @ReportStartUtc, @eu = @ReportEndUtc, @tz = @TzName,
+                         @s = @MdWindowStart OUTPUT, @e = @MdWindowEnd OUTPUT;
+                END TRY
+                BEGIN CATCH
+                    SET @MdWindowStart = NULL; SET @MdWindowEnd = NULL;   -- fall back to UTC below
+                END CATCH;
+            END;
+
+            IF @MdWindowStart IS NULL SET @MdWindowStart = CONVERT(nvarchar(30), @ReportStartUtc, 126) + N'Z';
+            IF @MdWindowEnd   IS NULL SET @MdWindowEnd   = CONVERT(nvarchar(30), @ReportEndUtc, 126) + N'Z';
+
+            SET @ReportMarkdown = @ReportMarkdown + NCHAR(13) + NCHAR(10) +
+                N'## Report Context' + NCHAR(13) + NCHAR(10) +
+                N'- Tool / Schema: ' + @ToolVersion + N' / ' + @SchemaVersion + NCHAR(13) + NCHAR(10) +
+                N'- Window (' + CASE WHEN @TzMode = N'LOCAL' AND @HasTimeZoneSupport = 1
+                                     THEN N'local: ' + ISNULL(@TzName, N'server') ELSE N'UTC' END + N'): '
+                    + @MdWindowStart + N' → ' + @MdWindowEnd + NCHAR(13) + NCHAR(10) +
+                N'- Database filter: ' + ISNULL(@DatabaseName, N'(all databases)') + NCHAR(13) + NCHAR(10) +
+                N'- Snapshots in window: ' + CONVERT(nvarchar(10), @MdSnapCount) + NCHAR(13) + NCHAR(10) +
+                N'- Min severity: ' + @MinSeverity + N'  |  Max findings: ' + CONVERT(nvarchar(10), @MaxFindings) + NCHAR(13) + NCHAR(10) +
+                N'- Capability: QS=' + CONVERT(nvarchar(1), @HasQueryStoreSupport)
+                    + N' AdvHA=' + CONVERT(nvarchar(1), @HasAdvancedHaSupport)
+                    + N' BufferPool=' + CONVERT(nvarchar(1), @HasBufferPoolSupport)
+                    + N' TimeDisplay=' + CONVERT(nvarchar(1), @HasTimeZoneSupport) + NCHAR(13) + NCHAR(10);
+            -- v0.4 Markdown recommendation summary (counts by severity; honest, bounded).
+            SET @ReportMarkdown = @ReportMarkdown + NCHAR(13) + NCHAR(10) +
+                N'## Recommendation Summary' + NCHAR(13) + NCHAR(10) +
+                ISNULL((
+                    SELECT
+                        N'- Critical: ' + CONVERT(nvarchar(10), SUM(CASE WHEN Severity = N'Critical' THEN 1 ELSE 0 END)) + NCHAR(13) + NCHAR(10) +
+                        N'- High: '     + CONVERT(nvarchar(10), SUM(CASE WHEN Severity = N'High' THEN 1 ELSE 0 END)) + NCHAR(13) + NCHAR(10) +
+                        N'- Medium: '   + CONVERT(nvarchar(10), SUM(CASE WHEN Severity = N'Medium' THEN 1 ELSE 0 END)) + NCHAR(13) + NCHAR(10) +
+                        N'- Low/Info: ' + CONVERT(nvarchar(10), SUM(CASE WHEN Severity IN (N'Low', N'Informational') THEN 1 ELSE 0 END)) + NCHAR(13) + NCHAR(10)
+                    FROM #fr_findings
+                ), N'- (no findings)' + NCHAR(13) + NCHAR(10)) +
+                N'> Findings are evidence-based and do not constitute automated remediation. ' +
+                N'Validate against the incident window before acting.' + NCHAR(13) + NCHAR(10);
 
             SELECT @ReportMarkdown AS Report;
             RETURN;
