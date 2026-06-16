@@ -19,8 +19,8 @@
 --   * Collect / CollectDebug / Report / Configure / Purge:
 --       implemented as the procedure evolves through the v0.1 roadmap
 --
--- Tool-Version:   0.3.0
--- Build-Date-Utc: 2026-06-03
+-- Tool-Version:   0.4.0
+-- Build-Date-Utc: 2026-06-16
 -- Design:         docs/design.md
 -- Decisions:      docs/decisions.md
 --
@@ -82,9 +82,9 @@ BEGIN
     -- =========================================================================
     -- Constants and version info
     -- =========================================================================
-    DECLARE @ToolVersion             nvarchar(30)  = N'0.3.0';
-    DECLARE @BuildDateUtc            datetime2(3)  = CONVERT(datetime2(3), '2026-06-03T00:00:00');
-    DECLARE @SchemaVersion            nvarchar(20) = N'0.3.0';
+    DECLARE @ToolVersion             nvarchar(30)  = N'0.4.0';
+    DECLARE @BuildDateUtc            datetime2(3)  = CONVERT(datetime2(3), '2026-06-16T00:00:00');
+    DECLARE @SchemaVersion            nvarchar(20) = N'0.4.0';
     DECLARE @SupportedSqlServerRange nvarchar(50)  = N'SQL Server 2012–2025';
     DECLARE @PartNumber              int           = 1;
     DECLARE @PartTotal               int           = 1;
@@ -104,7 +104,29 @@ BEGIN
     DECLARE @HasQueryStoreSupport bit          = CASE WHEN ISNULL(@ProductMajorProbe, 0) >= 13
                                                         OR @EngineEditionProbe IN (5, 8)
                                                        THEN 1 ELSE 0 END;
+    -- v0.4 capability flags.
+    -- AT TIME ZONE is SQL 2016+ (ProductMajorVersion >= 13) and Azure (5/8). Display-only (D-180).
+    DECLARE @HasTimeZoneSupport   bit          = CASE WHEN ISNULL(@ProductMajorProbe, 0) >= 13
+                                                        OR @EngineEditionProbe IN (5, 8)
+                                                       THEN 1 ELSE 0 END;
+    -- Advanced HA DMVs exist on Box/MI; Azure SQL DB (edition 5) has no AG DMVs.
+    DECLARE @HasAdvancedHaSupport bit          = CASE WHEN @EngineEditionProbe = 5 THEN 0
+                                                       WHEN ISNULL(@IsHadrEnabledProbe, 0) = 1 THEN 1
+                                                       ELSE 0 END;
+    -- Target server memory in MB (used by the buffer pool D-051 gate). Best-effort; safe on all editions.
+    DECLARE @TargetServerMemoryMb bigint       = NULL;
+    -- Buffer pool descriptors DMV is unavailable on Azure SQL DB (edition 5).
+    DECLARE @HasBufferPoolSupport bit          = CASE WHEN @EngineEditionProbe = 5 THEN 0 ELSE 1 END;
     DECLARE @CapabilitySnapshot   nvarchar(max);
+
+    BEGIN TRY
+        SELECT @TargetServerMemoryMb = CONVERT(bigint, cntr_value) / 1024
+        FROM sys.dm_os_performance_counters
+        WHERE RTRIM(counter_name) = N'Target Server Memory (KB)';
+    END TRY
+    BEGIN CATCH
+        SET @TargetServerMemoryMb = NULL;   -- never fail the probe (D-008)
+    END CATCH;
 
     -- Platform detection without @@VERSION parsing: host_platform is available
     -- on SQL 2017+ (sys.dm_os_host_info). Older engines are Windows-only.
@@ -134,6 +156,10 @@ BEGIN
           N'HasAgent=', CONVERT(nvarchar(1), @HasAgent), N';',
           N'IsHadrEnabled=', ISNULL(CONVERT(nvarchar(1), @IsHadrEnabledProbe), N'0'), N';',
           N'HasQueryStoreSupport=', CONVERT(nvarchar(1), @HasQueryStoreSupport), N';',
+          N'HasAdvancedHaSupport=', CONVERT(nvarchar(1), @HasAdvancedHaSupport), N';',
+          N'HasBufferPoolSupport=', CONVERT(nvarchar(1), @HasBufferPoolSupport), N';',
+          N'HasTimeZoneSupport=', CONVERT(nvarchar(1), @HasTimeZoneSupport), N';',
+          N'TargetServerMemoryMb=', ISNULL(CONVERT(nvarchar(20), @TargetServerMemoryMb), N''), N';',
           N'SchemaVersion=', @SchemaVersion);
 
     -- =========================================================================
@@ -865,6 +891,63 @@ CREATE TABLE dbo.FR_PlanCacheSummary (
                 EXEC sys.sp_executesql @CreateSql;
             END;
 
+            -- ===== v0.4 tables (advanced HA + buffer pool; D-051/D-056) =======
+
+            -- FR_HaState (advanced AG context per replica/db per snapshot; queue + role-change signals)
+            IF OBJECT_ID(N'dbo.FR_HaState', N'U') IS NULL
+            BEGIN
+                SET @CreateSql = N'
+CREATE TABLE dbo.FR_HaState (
+    HaStateId               bigint        IDENTITY(1,1) NOT NULL PRIMARY KEY NONCLUSTERED,
+    SnapshotId              bigint        NOT NULL FOREIGN KEY REFERENCES dbo.FR_Snapshot (SnapshotId),
+    SnapshotUtc             datetime2(3)  NOT NULL,
+    AgName                  sysname       NULL,
+    ReplicaServer           sysname       NULL,
+    DatabaseName            sysname       NULL,
+    IsLocalReplica          bit           NULL,
+    IsPrimaryReplica        bit           NULL,
+    RoleDesc                nvarchar(60)  NULL,
+    OperationalStateDesc    nvarchar(60)  NULL,
+    ConnectedStateDesc      nvarchar(60)  NULL,
+    SynchronizationStateDesc nvarchar(60) NULL,
+    SynchronizationHealthDesc nvarchar(60) NULL,
+    AvailabilityModeDesc    nvarchar(60)  NULL,
+    FailoverModeDesc        nvarchar(60)  NULL,
+    LogSendQueueKb          bigint        NULL,
+    LogSendRateKbPerSec     bigint        NULL,
+    RedoQueueKb             bigint        NULL,
+    RedoRateKbPerSec        bigint        NULL,
+    LastCommitUtc           datetime2(3)  NULL,
+    SecondaryLagSeconds     int           NULL
+)' + @TableCompressionClause;
+                EXEC sys.sp_executesql @CreateSql;
+                SET @CreateSql = N'CREATE CLUSTERED INDEX CIX_FR_HaState_SnapshotUtc_Id ON dbo.FR_HaState (SnapshotUtc, HaStateId)' + @IndexCompressionClause;
+                EXEC sys.sp_executesql @CreateSql;
+            END;
+
+            -- FR_BufferPool (opt-in; bounded dm_os_buffer_descriptors summary; D-051; skipped >256 GB RAM)
+            -- One row per database in the buffer pool; NO per-page rows, NO user-table scans.
+            IF OBJECT_ID(N'dbo.FR_BufferPool', N'U') IS NULL
+            BEGIN
+                SET @CreateSql = N'
+CREATE TABLE dbo.FR_BufferPool (
+    BufferPoolId        bigint        IDENTITY(1,1) NOT NULL PRIMARY KEY NONCLUSTERED,
+    SnapshotId          bigint        NOT NULL FOREIGN KEY REFERENCES dbo.FR_Snapshot (SnapshotId),
+    SnapshotUtc         datetime2(3)  NOT NULL,
+    DatabaseId          int           NOT NULL,
+    DatabaseName        sysname       NULL,
+    CachedPageCount     bigint        NULL,
+    CachedSizeKb        bigint        NULL,
+    FreePageCount       bigint        NULL,
+    ModifiedPageCount   bigint        NULL,
+    TotalBufferPoolKb   bigint        NULL,
+    PercentOfPool       decimal(5,2)  NULL
+)' + @TableCompressionClause;
+                EXEC sys.sp_executesql @CreateSql;
+                SET @CreateSql = N'CREATE CLUSTERED INDEX CIX_FR_BufferPool_SnapshotUtc_Id ON dbo.FR_BufferPool (SnapshotUtc, BufferPoolId)' + @IndexCompressionClause;
+                EXEC sys.sp_executesql @CreateSql;
+            END;
+
             -- Create FR_Rules (D-029: metadata only; logic in code)
             IF OBJECT_ID(N'dbo.FR_Rules', N'U') IS NULL
             BEGIN
@@ -971,6 +1054,43 @@ CREATE TABLE dbo.FR_Rules (
                 INSERT INTO dbo.FR_Config (ConfigKey, ConfigValue, Description)
                 VALUES (N'CompilationsPerSecWarn', N'100', N'Compilations/sec that flags FR_R0020 (tentative).');
 
+            -- v0.4 config keys
+            IF NOT EXISTS (SELECT 1 FROM dbo.FR_Config WHERE ConfigKey = N'EnableBufferPoolCollector')
+                INSERT INTO dbo.FR_Config (ConfigKey, ConfigValue, Description)
+                VALUES (N'EnableBufferPoolCollector', N'0', N'OPT-IN. 1=collect bounded buffer pool summary (D-051). 0=off (default).');
+
+            IF NOT EXISTS (SELECT 1 FROM dbo.FR_Config WHERE ConfigKey = N'BufferPoolCollectionMaxRows')
+                INSERT INTO dbo.FR_Config (ConfigKey, ConfigValue, Description)
+                VALUES (N'BufferPoolCollectionMaxRows', N'100', N'Max database rows captured by buffer pool collector per snapshot.');
+
+            IF NOT EXISTS (SELECT 1 FROM dbo.FR_Config WHERE ConfigKey = N'BufferPoolMaxMemoryGB')
+                INSERT INTO dbo.FR_Config (ConfigKey, ConfigValue, Description)
+                VALUES (N'BufferPoolMaxMemoryGB', N'256', N'Buffer pool collector is skipped when target server memory exceeds this many GB (D-051).');
+
+            IF NOT EXISTS (SELECT 1 FROM dbo.FR_Config WHERE ConfigKey = N'EnableAdvancedHaCollector')
+                INSERT INTO dbo.FR_Config (ConfigKey, ConfigValue, Description)
+                VALUES (N'EnableAdvancedHaCollector', N'1', N'1=collect advanced HA/AG context into FR_HaState where HADR is enabled. 0=skip.');
+
+            IF NOT EXISTS (SELECT 1 FROM dbo.FR_Config WHERE ConfigKey = N'BaselineLookbackHours')
+                INSERT INTO dbo.FR_Config (ConfigKey, ConfigValue, Description)
+                VALUES (N'BaselineLookbackHours', N'24', N'Hours of prior snapshots used for baseline-relative rules (D-092). 1-168.');
+
+            IF NOT EXISTS (SELECT 1 FROM dbo.FR_Config WHERE ConfigKey = N'TimeZoneMode')
+                INSERT INTO dbo.FR_Config (ConfigKey, ConfigValue, Description)
+                VALUES (N'TimeZoneMode', N'UTC', N'Display-only time mode for Report Markdown/Status: UTC or LOCAL (D-180). Storage stays UTC.');
+
+            IF NOT EXISTS (SELECT 1 FROM dbo.FR_Config WHERE ConfigKey = N'TimeZoneName')
+                INSERT INTO dbo.FR_Config (ConfigKey, ConfigValue, Description)
+                VALUES (N'TimeZoneName', N'', N'Optional Windows time zone id for LOCAL display when AT TIME ZONE is supported (SQL 2016+). Empty = server offset.');
+
+            IF NOT EXISTS (SELECT 1 FROM dbo.FR_Config WHERE ConfigKey = N'BackupWarnDays')
+                INSERT INTO dbo.FR_Config (ConfigKey, ConfigValue, Description)
+                VALUES (N'BackupWarnDays', N'7', N'FULL backup age (days) that flags FR_R0025 Medium (D-097).');
+
+            IF NOT EXISTS (SELECT 1 FROM dbo.FR_Config WHERE ConfigKey = N'CheckDbWarnDays')
+                INSERT INTO dbo.FR_Config (ConfigKey, ConfigValue, Description)
+                VALUES (N'CheckDbWarnDays', N'14', N'CHECKDB age (days) that flags FR_R0025 High (D-097).');
+
             -- Forward-only migration marker maintenance: advance recorded SchemaVersion (D-038).
             UPDATE dbo.FR_Config
             SET ConfigValue = @SchemaVersion, ModifiedUtc = SYSUTCDATETIME()
@@ -1047,7 +1167,32 @@ CREATE TABLE dbo.FR_Rules (
             IF NOT EXISTS (SELECT 1 FROM dbo.FR_Rules WHERE RuleId = N'FR_R0019_QueryStoreNearingCapacity')
                 INSERT INTO dbo.FR_Rules VALUES (N'FR_R0019_QueryStoreNearingCapacity', N'QueryStore', N'Medium', N'High', N'Observed', N'Active', N'Query Store nearing capacity', N'0.3');
             IF NOT EXISTS (SELECT 1 FROM dbo.FR_Rules WHERE RuleId = N'FR_R0020_HighCompilationRate')
-                INSERT INTO dbo.FR_Rules VALUES (N'FR_R0020_HighCompilationRate', N'PlanCache', N'Medium', N'Medium', N'Inferred', N'Active', N'High compilation rate (plan cache pressure)', N'0.3');
+                INSERT INTO dbo.FR_Rules VALUES (N'FR_R0020_HighCompilationRate', N'PlanCache', N'Medium', N'Medium', N'Inferred', N'Active', N'High compilation/recompilation rate', N'0.3');
+
+            -- v0.4 rules (FR_R0021–FR_R0026; design §7.12). RuleId stable; logic in code (D-029).
+            IF NOT EXISTS (SELECT 1 FROM dbo.FR_Rules WHERE RuleId = N'FR_R0021_ConfigurationChangeInWindow')
+                INSERT INTO dbo.FR_Rules VALUES (N'FR_R0021_ConfigurationChangeInWindow', N'Configuration', N'Medium', N'High', N'Observed', N'Active', N'Server/database configuration changed during the window', N'0.4');
+
+            IF NOT EXISTS (SELECT 1 FROM dbo.FR_Rules WHERE RuleId = N'FR_R0022_LogReuseWaitElevated')
+                INSERT INTO dbo.FR_Rules VALUES (N'FR_R0022_LogReuseWaitElevated', N'IO', N'High', N'High', N'Observed', N'Active', N'Transaction log reuse wait elevated', N'0.4');
+
+            IF NOT EXISTS (SELECT 1 FROM dbo.FR_Rules WHERE RuleId = N'FR_R0023_ThreadpoolWaitsObserved')
+                INSERT INTO dbo.FR_Rules VALUES (N'FR_R0023_ThreadpoolWaitsObserved', N'Waits', N'Critical', N'High', N'Observed', N'Active', N'THREADPOOL waits observed (worker starvation)', N'0.4');
+
+            IF NOT EXISTS (SELECT 1 FROM dbo.FR_Rules WHERE RuleId = N'FR_R0024_ResourceSemaphoreWaits')
+                INSERT INTO dbo.FR_Rules VALUES (N'FR_R0024_ResourceSemaphoreWaits', N'Memory', N'High', N'High', N'Observed', N'Active', N'RESOURCE_SEMAPHORE waits (memory grant pressure)', N'0.4');
+
+            IF NOT EXISTS (SELECT 1 FROM dbo.FR_Rules WHERE RuleId = N'FR_R0025_RecentCheckDbOrBackupAge')
+                INSERT INTO dbo.FR_Rules VALUES (N'FR_R0025_RecentCheckDbOrBackupAge', N'Maintenance', N'Medium', N'High', N'Observed', N'Active', N'FULL backup or CHECKDB age exceeds threshold', N'0.4');
+
+            -- FR_R0026 upgraded from the v0.1 skeleton to the full Coverage & Capability summary (D-098: always emits).
+            IF NOT EXISTS (SELECT 1 FROM dbo.FR_Rules WHERE RuleId = N'FR_R0026_CoverageAndCapabilitySummary')
+                INSERT INTO dbo.FR_Rules VALUES (N'FR_R0026_CoverageAndCapabilitySummary', N'Coverage', N'Informational', N'High', N'Observed', N'Active', N'Coverage and capability summary (always emitted)', N'0.4');
+
+            UPDATE dbo.FR_Rules
+            SET Category = N'Coverage', Severity = N'Informational', Confidence = N'High', EvidenceType = N'Observed',
+                ShortDescription = N'Coverage and capability summary (always emitted)', IntroducedInVersion = N'0.4'
+            WHERE RuleId = N'FR_R0026_CoverageAndCapabilitySummary';
 
             -- Opt-in query-plan evidence rules (surfaced only when @IncludeQueryPlans = 1)
             IF NOT EXISTS (SELECT 1 FROM dbo.FR_Rules WHERE RuleId = N'FR_R0030_PlanMissingIndex')
@@ -1217,8 +1362,8 @@ SELECT
                 N'Success' AS Status,
                 DB_NAME() AS DatabaseName,
                 @SchemaVersion AS SchemaVersion,
-                23 AS TableCount,
-                N'Installation complete. 23 core FR_* tables + 5 FR_v_* views created (19 v0.1/v0.2 + 4 v0.3).' AS Message;
+                25 AS TableCount,
+                N'Installation complete. 25 core FR_* tables + 5 FR_v_* views created (19 v0.1/v0.2 + 4 v0.3 + 2 v0.4).' AS Message;
 
 				
 				
@@ -1568,7 +1713,16 @@ END;
         UNION ALL SELECT N'CollectQueryStore', ISNULL((SELECT ConfigValue FROM dbo.FR_Config WHERE ConfigKey = N'CollectQueryStore'), N'')
         UNION ALL SELECT N'CollectErrorLog', ISNULL((SELECT ConfigValue FROM dbo.FR_Config WHERE ConfigKey = N'CollectErrorLog'), N'')
         UNION ALL SELECT N'CollectSchemaActivity', ISNULL((SELECT ConfigValue FROM dbo.FR_Config WHERE ConfigKey = N'CollectSchemaActivity'), N'')
-        UNION ALL SELECT N'CollectPlanCacheSummary', ISNULL((SELECT ConfigValue FROM dbo.FR_Config WHERE ConfigKey = N'CollectPlanCacheSummary'), N'');
+        UNION ALL SELECT N'CollectPlanCacheSummary', ISNULL((SELECT ConfigValue FROM dbo.FR_Config WHERE ConfigKey = N'CollectPlanCacheSummary'), N'')
+        -- v0.4 capability + config surfacing
+        UNION ALL SELECT N'HasAdvancedHaSupport', CONVERT(nvarchar(1), @HasAdvancedHaSupport)
+        UNION ALL SELECT N'HasBufferPoolSupport', CONVERT(nvarchar(1), @HasBufferPoolSupport)
+        UNION ALL SELECT N'HasTimeZoneSupport', CONVERT(nvarchar(1), @HasTimeZoneSupport)
+        UNION ALL SELECT N'PlanAnalysisSupport', CASE WHEN OBJECT_ID(N'dbo.FR_QueryPlan', N'U') IS NOT NULL THEN N'1' ELSE N'0' END
+        UNION ALL SELECT N'EnableAdvancedHaCollector', ISNULL((SELECT ConfigValue FROM dbo.FR_Config WHERE ConfigKey = N'EnableAdvancedHaCollector'), N'')
+        UNION ALL SELECT N'EnableBufferPoolCollector', ISNULL((SELECT ConfigValue FROM dbo.FR_Config WHERE ConfigKey = N'EnableBufferPoolCollector'), N'')
+        UNION ALL SELECT N'BaselineLookbackHours', ISNULL((SELECT ConfigValue FROM dbo.FR_Config WHERE ConfigKey = N'BaselineLookbackHours'), N'')
+        UNION ALL SELECT N'TimeZoneMode', ISNULL((SELECT ConfigValue FROM dbo.FR_Config WHERE ConfigKey = N'TimeZoneMode'), N'');
 
         RETURN;
     END;
