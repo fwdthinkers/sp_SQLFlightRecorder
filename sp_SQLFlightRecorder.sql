@@ -2126,6 +2126,26 @@ END;
         FROM dbo.FR_Config WHERE ConfigKey = N'SchemaActivityMaxDatabases';
         IF @SchemaActMaxDb IS NULL OR @SchemaActMaxDb < 1 SET @SchemaActMaxDb = 50;
 
+        -- v0.4 collector gating (read once; bounded). Buffer pool is OPT-IN (D-051).
+        DECLARE @CollectAdvHa      bit = 0;
+        DECLARE @CollectBufferPool bit = 0;
+        DECLARE @BpMaxRows         int = 100;
+        DECLARE @BpMaxMemoryGB     int = 256;
+
+        SELECT @CollectAdvHa = CASE WHEN TRY_CONVERT(int, ConfigValue) = 1 THEN 1 ELSE 0 END
+        FROM dbo.FR_Config WHERE ConfigKey = N'EnableAdvancedHaCollector';
+
+        SELECT @CollectBufferPool = CASE WHEN TRY_CONVERT(int, ConfigValue) = 1 THEN 1 ELSE 0 END
+        FROM dbo.FR_Config WHERE ConfigKey = N'EnableBufferPoolCollector';
+
+        SELECT @BpMaxRows = TRY_CONVERT(int, ConfigValue)
+        FROM dbo.FR_Config WHERE ConfigKey = N'BufferPoolCollectionMaxRows';
+        IF @BpMaxRows IS NULL OR @BpMaxRows < 1 SET @BpMaxRows = 100;
+
+        SELECT @BpMaxMemoryGB = TRY_CONVERT(int, ConfigValue)
+        FROM dbo.FR_Config WHERE ConfigKey = N'BufferPoolMaxMemoryGB';
+        IF @BpMaxMemoryGB IS NULL OR @BpMaxMemoryGB < 1 SET @BpMaxMemoryGB = 256;
+
         EXEC @CollectLockResult = sys.sp_getapplock
               @Resource = N'SQLFlightRecorder/Collect'
             , @LockMode = N'Exclusive'
@@ -3500,6 +3520,162 @@ ORDER BY database_id ASC;';
                 END CATCH;
             END;
 
+            -- ============================================================
+            -- v0.4 collector: Advanced HA / Availability Group context (D-056)
+            -- Bounded; capability-gated on HADR + config (EnableAdvancedHaCollector).
+            -- Adds queue + rate + lag signals beyond v0.2 FR_AlwaysOnState.
+            -- All HADR DMV access is dynamic SQL (D-112) so the file compiles
+            -- on engines/editions without Always On.
+            -- ============================================================
+            IF @CollectAdvHa = 1
+               AND @HasAdvancedHaSupport = 1
+               AND OBJECT_ID(N'dbo.FR_HaState', N'U') IS NOT NULL
+            BEGIN
+                INSERT INTO dbo.FR_RunLogStep (RunId, StepName, StartUtc, Status)
+                VALUES (@CollectRunId, N'AdvancedHaState', SYSUTCDATETIME(), N'InProgress');
+                SET @CollectStepId = SCOPE_IDENTITY();
+                BEGIN TRY
+                    IF ISNULL(@IsHadrEnabledProbe, 0) = 0
+                    BEGIN
+                        UPDATE dbo.FR_RunLogStep
+                        SET EndUtc = SYSUTCDATETIME(), Status = N'Skipped', RowsCollected = 0,
+                            Reason = N'Always On not enabled (capability-gated).'
+                        WHERE RunStepId = @CollectStepId;
+                    END
+                    ELSE
+                    BEGIN
+                        DECLARE @HaSql nvarchar(max) = N'
+INSERT INTO dbo.FR_HaState
+(
+    SnapshotId, SnapshotUtc, AgName, ReplicaServer, DatabaseName,
+    IsLocalReplica, IsPrimaryReplica, RoleDesc, OperationalStateDesc,
+    ConnectedStateDesc, SynchronizationStateDesc, SynchronizationHealthDesc,
+    AvailabilityModeDesc, FailoverModeDesc,
+    LogSendQueueKb, LogSendRateKbPerSec, RedoQueueKb, RedoRateKbPerSec,
+    LastCommitUtc, SecondaryLagSeconds
+)
+SELECT TOP (@maxRows)
+    @sid, @sutc,
+    ag.name, ar.replica_server_name, DB_NAME(drs.database_id),
+    ars.is_local, ISNULL(ars.is_primary_replica, 0),
+    ars.role_desc, ars.operational_state_desc,
+    ars.connected_state_desc, drs.synchronization_state_desc, drs.synchronization_health_desc,
+    ar.availability_mode_desc, ar.failover_mode_desc,
+    drs.log_send_queue_size, drs.log_send_rate,
+    drs.redo_queue_size, drs.redo_rate,
+    drs.last_commit_time,
+    CASE WHEN drs.last_commit_time IS NOT NULL
+         THEN DATEDIFF(second, drs.last_commit_time, SYSUTCDATETIME()) END
+FROM sys.availability_groups AS ag
+INNER JOIN sys.availability_replicas AS ar ON ar.group_id = ag.group_id
+INNER JOIN sys.dm_hadr_availability_replica_states AS ars ON ars.replica_id = ar.replica_id
+LEFT JOIN sys.dm_hadr_database_replica_states AS drs ON drs.replica_id = ar.replica_id
+ORDER BY ag.name, ar.replica_server_name, drs.database_id;';
+
+                        EXEC sys.sp_executesql @HaSql,
+                             N'@sid bigint, @sutc datetime2(3), @maxRows int',
+                             @sid = @CollectSnapshotId, @sutc = @CollectSnapshotUtc, @maxRows = @CollectMaxRows;
+
+                        SET @CollectRows = @@ROWCOUNT;
+                        UPDATE dbo.FR_RunLogStep
+                        SET EndUtc = SYSUTCDATETIME(), Status = N'Success', RowsCollected = @CollectRows,
+                            Reason = CONCAT(N'Advanced HA context captured for ', @CollectRows, N' replica/database row(s).')
+                        WHERE RunStepId = @CollectStepId;
+                    END
+                END TRY
+                BEGIN CATCH
+                    -- One HADR read failing (e.g., readable-secondary restriction) must not
+                    -- fail the whole Collect (D-009/D-150).
+                    SET @CollectStatus = N'PartialSuccess';
+                    SET @CollectError = ERROR_MESSAGE();
+                    UPDATE dbo.FR_RunLogStep
+                    SET EndUtc = SYSUTCDATETIME(), Status = N'Error', ErrorMessage = @CollectError
+                    WHERE RunStepId = @CollectStepId;
+                END CATCH;
+            END;
+
+            -- ============================================================
+            -- v0.4 collector: Buffer pool composition (OPT-IN; D-051/D-142)
+            -- dm_os_buffer_descriptors AGGREGATED per database_id only.
+            -- NO per-page rows. NO user-table access. Skipped when target server
+            -- memory exceeds BufferPoolMaxMemoryGB (D-051) or unsupported.
+            -- ============================================================
+            IF @CollectBufferPool = 1
+               AND @HasBufferPoolSupport = 1
+               AND OBJECT_ID(N'dbo.FR_BufferPool', N'U') IS NOT NULL
+            BEGIN
+                INSERT INTO dbo.FR_RunLogStep (RunId, StepName, StartUtc, Status)
+                VALUES (@CollectRunId, N'BufferPool', SYSUTCDATETIME(), N'InProgress');
+                SET @CollectStepId = SCOPE_IDENTITY();
+                BEGIN TRY
+                    IF @TargetServerMemoryMb IS NOT NULL
+                       AND @TargetServerMemoryMb > (CONVERT(bigint, @BpMaxMemoryGB) * 1024)
+                    BEGIN
+                        -- D-051: skip on large-memory instances until empirically validated.
+                        UPDATE dbo.FR_RunLogStep
+                        SET EndUtc = SYSUTCDATETIME(), Status = N'Skipped', RowsCollected = 0,
+                            Reason = CONCAT(N'Skipped: target server memory ',
+                                            CONVERT(nvarchar(20), @TargetServerMemoryMb),
+                                            N' MB exceeds BufferPoolMaxMemoryGB=', CONVERT(nvarchar(10), @BpMaxMemoryGB),
+                                            N' (D-051).')
+                        WHERE RunStepId = @CollectStepId;
+                    END
+                    ELSE
+                    BEGIN
+                        DECLARE @BpTotalKb bigint = NULL;
+
+                        SELECT @BpTotalKb = CONVERT(bigint, COUNT_BIG(*)) * 8
+                        FROM sys.dm_os_buffer_descriptors
+                        WHERE database_id <> 32767;   -- exclude Resource DB
+
+                        ;WITH bp AS
+                        (
+                            SELECT
+                                bd.database_id,
+                                COUNT_BIG(*) AS CachedPageCount,
+                                SUM(CASE WHEN bd.is_modified = 1 THEN 1 ELSE 0 END) AS ModifiedPageCount,
+                                SUM(CASE WHEN bd.free_space_in_bytes >= 8000 THEN 1 ELSE 0 END) AS FreePageCount
+                            FROM sys.dm_os_buffer_descriptors AS bd
+                            WHERE bd.database_id <> 32767
+                            GROUP BY bd.database_id
+                        )
+                        INSERT INTO dbo.FR_BufferPool
+                        (
+                            SnapshotId, SnapshotUtc, DatabaseId, DatabaseName,
+                            CachedPageCount, CachedSizeKb, FreePageCount, ModifiedPageCount,
+                            TotalBufferPoolKb, PercentOfPool
+                        )
+                        SELECT TOP (@BpMaxRows)
+                            @CollectSnapshotId, @CollectSnapshotUtc,
+                            bp.database_id,
+                            CASE WHEN bp.database_id = 32767 THEN N'Resource' ELSE DB_NAME(bp.database_id) END,
+                            bp.CachedPageCount,
+                            bp.CachedPageCount * 8,
+                            bp.FreePageCount,
+                            bp.ModifiedPageCount,
+                            @BpTotalKb,
+                            CASE WHEN @BpTotalKb > 0
+                                 THEN CONVERT(decimal(5,2), (bp.CachedPageCount * 8 * 100.0) / @BpTotalKb)
+                                 ELSE NULL END
+                        FROM bp
+                        ORDER BY bp.CachedPageCount DESC;
+
+                        SET @CollectRows = @@ROWCOUNT;
+                        UPDATE dbo.FR_RunLogStep
+                        SET EndUtc = SYSUTCDATETIME(), Status = N'Success', RowsCollected = @CollectRows,
+                            Reason = CONCAT(N'Buffer pool summary captured for ', @CollectRows, N' database(s).')
+                        WHERE RunStepId = @CollectStepId;
+                    END
+                END TRY
+                BEGIN CATCH
+                    SET @CollectStatus = N'PartialSuccess';
+                    SET @CollectError = ERROR_MESSAGE();
+                    UPDATE dbo.FR_RunLogStep
+                    SET EndUtc = SYSUTCDATETIME(), Status = N'Error', ErrorMessage = @CollectError
+                    WHERE RunStepId = @CollectStepId;
+                END CATCH;
+            END;
+
             IF @CollectStatus = N'PartialSuccess'
                 SET @CollectReason = N'Collect completed with one or more collector failures. See FR_RunLogStep.';
             UPDATE dbo.FR_RunLog
@@ -3952,7 +4128,93 @@ ORDER BY database_id ASC;';
                 WHEN @StartTime IS NULL THEN DATEADD(hour, -1, @ReportEndUtc)
                 ELSE DATEADD(minute, DATEDIFF(minute, GETDATE(), SYSUTCDATETIME()), @StartTime)
             END;
+        -- =====================================================================
+        -- v0.4 baseline engine (D-092, D-103): materialize ONCE per report run.
+        -- 24h (configurable) median/avg of prior snapshots, EXCLUDING the incident
+        -- window. SampleCount drives Confidence downgrade (<5 => Low). Repository
+        -- reads only (D-081); set-based; no cursor (D-138).
+        -- =====================================================================
+        DECLARE @BaselineLookbackHours int = 24;
+        SELECT @BaselineLookbackHours = TRY_CONVERT(int, ConfigValue)
+        FROM dbo.FR_Config WHERE ConfigKey = N'BaselineLookbackHours';
+        IF @BaselineLookbackHours IS NULL OR @BaselineLookbackHours < 1 OR @BaselineLookbackHours > 168
+            SET @BaselineLookbackHours = 24;
 
+        DECLARE @BaselineStartUtc datetime2(3) = DATEADD(hour, -@BaselineLookbackHours, @ReportStartUtc);
+
+        IF OBJECT_ID(N'tempdb..#fr_baseline') IS NOT NULL DROP TABLE #fr_baseline;
+        CREATE TABLE #fr_baseline
+        (
+            MetricKey    nvarchar(200) NOT NULL,   -- e.g. 'Wait:PAGEIOLATCH_SH', 'FileIo:5:1', 'Perf:Batch Requests/sec', 'Memory:PLE'
+            MetricGroup  nvarchar(40)  NOT NULL,    -- Wait | FileIo | Perf | Memory | Tempdb
+            SampleCount  int           NOT NULL,
+            BaselineAvg  decimal(38,3) NULL,
+            BaselineMax  decimal(38,3) NULL,
+            PRIMARY KEY (MetricKey)
+        );
+
+        BEGIN TRY
+            -- Wait deltas are computed at report time (D-007); for a bounded baseline
+            -- we use per-snapshot cumulative values averaged across the lookback. This
+            -- is an approximation by design (documented; "above recent baseline").
+            INSERT INTO #fr_baseline (MetricKey, MetricGroup, SampleCount, BaselineAvg, BaselineMax)
+            SELECT
+                CONCAT(N'Wait:', w.WaitType), N'Wait',
+                COUNT(1),
+                AVG(CONVERT(decimal(38,3), w.WaitTimeMs)),
+                MAX(CONVERT(decimal(38,3), w.WaitTimeMs))
+            FROM dbo.FR_Wait AS w
+            INNER JOIN dbo.FR_Snapshot AS s ON s.SnapshotId = w.SnapshotId
+            WHERE s.SnapshotUtc >= @BaselineStartUtc
+              AND s.SnapshotUtc <  @ReportStartUtc            -- exclude incident window (D-092)
+            GROUP BY w.WaitType;
+
+            INSERT INTO #fr_baseline (MetricKey, MetricGroup, SampleCount, BaselineAvg, BaselineMax)
+            SELECT
+                CONCAT(N'FileIo:', f.DatabaseId, N':', f.FileId), N'FileIo',
+                COUNT(1),
+                AVG(CONVERT(decimal(38,3),
+                    CASE WHEN (f.NumOfReads + f.NumOfWrites) > 0
+                         THEN (f.IoStallReadMs + f.IoStallWriteMs) * 1.0 / (f.NumOfReads + f.NumOfWrites)
+                         ELSE 0 END)),
+                MAX(CONVERT(decimal(38,3),
+                    CASE WHEN (f.NumOfReads + f.NumOfWrites) > 0
+                         THEN (f.IoStallReadMs + f.IoStallWriteMs) * 1.0 / (f.NumOfReads + f.NumOfWrites)
+                         ELSE 0 END))
+            FROM dbo.FR_FileStat AS f
+            INNER JOIN dbo.FR_Snapshot AS s ON s.SnapshotId = f.SnapshotId
+            WHERE s.SnapshotUtc >= @BaselineStartUtc
+              AND s.SnapshotUtc <  @ReportStartUtc
+            GROUP BY f.DatabaseId, f.FileId;
+
+            INSERT INTO #fr_baseline (MetricKey, MetricGroup, SampleCount, BaselineAvg, BaselineMax)
+            SELECT
+                CONCAT(N'Perf:', RTRIM(p.CounterName)), N'Perf',
+                COUNT(1),
+                AVG(CONVERT(decimal(38,3), p.CounterValue)),
+                MAX(CONVERT(decimal(38,3), p.CounterValue))
+            FROM dbo.FR_PerfCounter AS p
+            INNER JOIN dbo.FR_Snapshot AS s ON s.SnapshotId = p.SnapshotId
+            WHERE s.SnapshotUtc >= @BaselineStartUtc
+              AND s.SnapshotUtc <  @ReportStartUtc
+            GROUP BY RTRIM(p.CounterName);
+
+            IF OBJECT_ID(N'dbo.FR_Memory', N'U') IS NOT NULL
+            INSERT INTO #fr_baseline (MetricKey, MetricGroup, SampleCount, BaselineAvg, BaselineMax)
+            SELECT N'Memory:PLE', N'Memory',
+                COUNT(1),
+                AVG(CONVERT(decimal(38,3), m.PageLifeExpectancy)),
+                MAX(CONVERT(decimal(38,3), m.PageLifeExpectancy))
+            FROM dbo.FR_Memory AS m
+            INNER JOIN dbo.FR_Snapshot AS s ON s.SnapshotId = m.SnapshotId
+            WHERE s.SnapshotUtc >= @BaselineStartUtc
+              AND s.SnapshotUtc <  @ReportStartUtc;
+        END TRY
+        BEGIN CATCH
+            -- A baseline build failure must not fail Report; rules treat a missing
+            -- row as "insufficient history" and downgrade to Low / skip escalation.
+            IF OBJECT_ID(N'tempdb..#fr_baseline') IS NOT NULL DELETE FROM #fr_baseline;
+        END CATCH;
         CREATE TABLE #fr_findings
         (
               FindingOrdinal int IDENTITY(1,1) NOT NULL
@@ -4749,6 +5011,203 @@ ORDER BY database_id ASC;';
               AND st.StartUtc >= @ReportStartUtc AND st.StartUtc <= @ReportEndUtc;
         END;
 
+        -- =====================================================================
+        -- v0.4 rules (FR_R0021–FR_R0025). Evidence-based; repository-only (D-081).
+        -- Each rule isolated; a rule error must not abort Report.
+        -- =====================================================================
+
+        -- FR_R0021 ConfigurationChangeInWindow (Configuration / Medium / High / Observed)
+        -- Evidence: a tracked configuration value differs across snapshots in window.
+        BEGIN TRY
+            ;WITH cfg AS
+            (
+                SELECT
+                    c.ConfigurationKind, c.Name, c.ValueText, s.SnapshotUtc,
+                    LAG(c.ValueText) OVER (PARTITION BY c.ConfigurationKind, c.Name ORDER BY s.SnapshotUtc) AS PrevValue
+                FROM dbo.FR_Configuration AS c
+                INNER JOIN dbo.FR_Snapshot AS s ON s.SnapshotId = c.SnapshotId
+                WHERE s.SnapshotUtc >= @ReportStartUtc AND s.SnapshotUtc <= @ReportEndUtc
+            )
+            INSERT INTO #fr_findings
+            (Severity, Confidence, EvidenceType, Category, RuleId, Title, Summary, Evidence, Recommendation, DatabaseName, ObjectName, SessionId, StartTimeUtc, EndTimeUtc, MoreInfo)
+            SELECT TOP (200)
+                N'Medium', N'High', N'Observed', N'Configuration',
+                N'FR_R0021_ConfigurationChangeInWindow',
+                N'Configuration changed during the window',
+                CONCAT(N'Setting "', cfg.Name, N'" changed in the analysis window.'),
+                LEFT(CONCAT(N'Kind=', cfg.ConfigurationKind, N'; Name=', cfg.Name,
+                            N'; From=', ISNULL(cfg.PrevValue, N'(null)'), N'; To=', ISNULL(cfg.ValueText, N'(null)'),
+                            N'; ChangedAtUtc=', CONVERT(nvarchar(30), cfg.SnapshotUtc, 126)), 1900),
+                N'Correlate the change time with the incident window; consider reviewing the change only after validating intent.',
+                NULL, cfg.Name, NULL, cfg.SnapshotUtc, cfg.SnapshotUtc,
+                N'Source: FR_Configuration snapshot diff.'
+            FROM cfg
+            WHERE cfg.PrevValue IS NOT NULL AND cfg.PrevValue <> cfg.ValueText
+            ORDER BY cfg.SnapshotUtc DESC;
+        END TRY
+        BEGIN CATCH
+            INSERT INTO #fr_findings
+            (Severity, Confidence, EvidenceType, Category, RuleId, Title, Summary, Evidence, Recommendation, DatabaseName, ObjectName, SessionId, StartTimeUtc, EndTimeUtc, MoreInfo)
+            VALUES (N'Informational', N'Low', N'Observed', N'Coverage',
+                    N'FR_R0026_CoverageAndCapabilitySummary',
+                    N'Rule evaluation skipped', N'FR_R0021 could not be evaluated.',
+                    LEFT(ERROR_MESSAGE(), 1900), NULL, NULL, NULL, NULL,
+                    @ReportStartUtc, @ReportEndUtc, N'FR_R0021 error captured as coverage note.');
+        END CATCH;
+
+        -- FR_R0022 LogReuseWaitElevated (IO / High / High / Observed) — baseline-aware.
+        -- Evidence: log_reuse_wait surfaced via FR_PerfCounter 'Percent Log Used' / 'Log Growths'
+        -- elevated vs recent baseline (D-092). Uses #fr_baseline; downgrades when <5 samples.
+        BEGIN TRY
+            ;WITH cur AS
+            (
+                SELECT RTRIM(p.CounterName) AS CounterName,
+                       MAX(CONVERT(decimal(38,3), p.CounterValue)) AS CurMax
+                FROM dbo.FR_PerfCounter AS p
+                INNER JOIN dbo.FR_Snapshot AS s ON s.SnapshotId = p.SnapshotId
+                WHERE s.SnapshotUtc >= @ReportStartUtc AND s.SnapshotUtc <= @ReportEndUtc
+                  AND RTRIM(p.CounterName) IN (N'Log Growths', N'Percent Log Used')
+                GROUP BY RTRIM(p.CounterName)
+            )
+            INSERT INTO #fr_findings
+            (Severity, Confidence, EvidenceType, Category, RuleId, Title, Summary, Evidence, Recommendation, DatabaseName, ObjectName, SessionId, StartTimeUtc, EndTimeUtc, MoreInfo)
+            SELECT TOP (50)
+                N'High',
+                CASE WHEN b.SampleCount IS NULL OR b.SampleCount < 5 THEN N'Low' ELSE N'High' END,
+                N'Observed', N'IO',
+                N'FR_R0022_LogReuseWaitElevated',
+                N'Transaction log reuse/growth elevated',
+                CONCAT(N'Counter "', cur.CounterName, N'" is elevated compared with observed history.'),
+                LEFT(CONCAT(N'Counter=', cur.CounterName, N'; WindowMax=', CONVERT(nvarchar(40), cur.CurMax),
+                            N'; BaselineAvg=', ISNULL(CONVERT(nvarchar(40), b.BaselineAvg), N'(insufficient history)'),
+                            N'; Samples=', ISNULL(CONVERT(nvarchar(10), b.SampleCount), N'0')), 1900),
+                N'Review log backup cadence and long-running transactions only after validating that the elevation correlates with the incident window.',
+                NULL, NULL, NULL, @ReportStartUtc, @ReportEndUtc,
+                N'Baseline-relative (D-092); above recent baseline.'
+            FROM cur
+            LEFT JOIN #fr_baseline AS b ON b.MetricKey = CONCAT(N'Perf:', cur.CounterName)
+            WHERE cur.CounterName = N'Log Growths'         -- growth events in window are the strong signal
+              AND cur.CurMax > 0
+              AND (b.BaselineAvg IS NULL OR cur.CurMax > (b.BaselineAvg + 1));
+        END TRY
+        BEGIN CATCH
+            INSERT INTO #fr_findings
+            (Severity, Confidence, EvidenceType, Category, RuleId, Title, Summary, Evidence, Recommendation, DatabaseName, ObjectName, SessionId, StartTimeUtc, EndTimeUtc, MoreInfo)
+            VALUES (N'Informational', N'Low', N'Observed', N'Coverage',
+                    N'FR_R0026_CoverageAndCapabilitySummary',
+                    N'Rule evaluation skipped', N'FR_R0022 could not be evaluated.',
+                    LEFT(ERROR_MESSAGE(), 1900), NULL, NULL, NULL, NULL,
+                    @ReportStartUtc, @ReportEndUtc, N'FR_R0022 error captured as coverage note.');
+        END CATCH;
+
+        -- FR_R0023 ThreadpoolWaitsObserved (Waits / Critical / High / Observed)
+        -- Evidence: any THREADPOOL wait recorded in window = worker starvation.
+        BEGIN TRY
+            INSERT INTO #fr_findings
+            (Severity, Confidence, EvidenceType, Category, RuleId, Title, Summary, Evidence, Recommendation, DatabaseName, ObjectName, SessionId, StartTimeUtc, EndTimeUtc, MoreInfo)
+            SELECT TOP (1)
+                N'Critical', N'High', N'Observed', N'Waits',
+                N'FR_R0023_ThreadpoolWaitsObserved',
+                N'THREADPOOL waits observed',
+                N'THREADPOOL waits were recorded during the window (possible worker thread starvation).',
+                LEFT(CONCAT(N'WaitType=THREADPOOL; SumWaitMs=', CONVERT(nvarchar(40), SUM(CONVERT(decimal(38,0), w.WaitTimeMs))),
+                            N'; MaxWaitMs=', CONVERT(nvarchar(40), MAX(CONVERT(decimal(38,0), w.MaxWaitTimeMs)))), 1900),
+                N'Investigate blocking chains and high session counts; consider reviewing max worker threads only after validating sustained starvation.',
+                NULL, NULL, NULL, @ReportStartUtc, @ReportEndUtc,
+                N'Source: FR_Wait (THREADPOOL).'
+            FROM dbo.FR_Wait AS w
+            INNER JOIN dbo.FR_Snapshot AS s ON s.SnapshotId = w.SnapshotId
+            WHERE s.SnapshotUtc >= @ReportStartUtc AND s.SnapshotUtc <= @ReportEndUtc
+              AND w.WaitType = N'THREADPOOL'
+              AND w.WaitTimeMs > 0
+            HAVING COUNT(1) > 0;
+        END TRY
+        BEGIN CATCH
+            INSERT INTO #fr_findings
+            (Severity, Confidence, EvidenceType, Category, RuleId, Title, Summary, Evidence, Recommendation, DatabaseName, ObjectName, SessionId, StartTimeUtc, EndTimeUtc, MoreInfo)
+            VALUES (N'Informational', N'Low', N'Observed', N'Coverage',
+                    N'FR_R0026_CoverageAndCapabilitySummary',
+                    N'Rule evaluation skipped', N'FR_R0023 could not be evaluated.',
+                    LEFT(ERROR_MESSAGE(), 1900), NULL, NULL, NULL, NULL,
+                    @ReportStartUtc, @ReportEndUtc, N'FR_R0023 error captured as coverage note.');
+        END CATCH;
+
+        -- FR_R0024 ResourceSemaphoreWaits (Memory / High / High / Observed)
+        -- Evidence: RESOURCE_SEMAPHORE waits in window = memory grant pressure.
+        BEGIN TRY
+            INSERT INTO #fr_findings
+            (Severity, Confidence, EvidenceType, Category, RuleId, Title, Summary, Evidence, Recommendation, DatabaseName, ObjectName, SessionId, StartTimeUtc, EndTimeUtc, MoreInfo)
+            SELECT TOP (1)
+                N'High', N'High', N'Observed', N'Memory',
+                N'FR_R0024_ResourceSemaphoreWaits',
+                N'RESOURCE_SEMAPHORE waits observed',
+                N'Query memory grant waits (RESOURCE_SEMAPHORE) were recorded during the window.',
+                LEFT(CONCAT(N'WaitType=RESOURCE_SEMAPHORE; SumWaitMs=', CONVERT(nvarchar(40), SUM(CONVERT(decimal(38,0), w.WaitTimeMs))),
+                            N'; WaitingTasks=', CONVERT(nvarchar(40), SUM(CONVERT(decimal(38,0), w.WaitingTasksCount)))), 1900),
+                N'Review large memory-grant queries and MAX_GRANT_PERCENT only after validating that grants correlate with the incident window.',
+                NULL, NULL, NULL, @ReportStartUtc, @ReportEndUtc,
+                N'Source: FR_Wait (RESOURCE_SEMAPHORE).'
+            FROM dbo.FR_Wait AS w
+            INNER JOIN dbo.FR_Snapshot AS s ON s.SnapshotId = w.SnapshotId
+            WHERE s.SnapshotUtc >= @ReportStartUtc AND s.SnapshotUtc <= @ReportEndUtc
+              AND w.WaitType = N'RESOURCE_SEMAPHORE'
+              AND w.WaitTimeMs > 0
+            HAVING COUNT(1) > 0;
+        END TRY
+        BEGIN CATCH
+            INSERT INTO #fr_findings
+            (Severity, Confidence, EvidenceType, Category, RuleId, Title, Summary, Evidence, Recommendation, DatabaseName, ObjectName, SessionId, StartTimeUtc, EndTimeUtc, MoreInfo)
+            VALUES (N'Informational', N'Low', N'Observed', N'Coverage',
+                    N'FR_R0026_CoverageAndCapabilitySummary',
+                    N'Rule evaluation skipped', N'FR_R0024 could not be evaluated.',
+                    LEFT(ERROR_MESSAGE(), 1900), NULL, NULL, NULL, NULL,
+                    @ReportStartUtc, @ReportEndUtc, N'FR_R0024 error captured as coverage note.');
+        END CATCH;
+
+        -- FR_R0025 RecentCheckDbOrBackupAge (Maintenance / Medium|High / High / Observed)
+        -- Evidence: latest FULL backup age > BackupWarnDays (Medium); thresholds via FR_Config (D-097).
+        -- CHECKDB age is best-effort: only emitted if a CHECKDB signal exists in FR_AgentJob/FR_ErrorLog.
+        BEGIN TRY
+            DECLARE @BackupWarnDays int = 7, @CheckDbWarnDays int = 14;
+            SELECT @BackupWarnDays  = ISNULL(TRY_CONVERT(int, ConfigValue), 7)
+            FROM dbo.FR_Config WHERE ConfigKey = N'BackupWarnDays';
+            SELECT @CheckDbWarnDays = ISNULL(TRY_CONVERT(int, ConfigValue), 14)
+            FROM dbo.FR_Config WHERE ConfigKey = N'CheckDbWarnDays';
+
+            IF OBJECT_ID(N'dbo.FR_BackupHistory', N'U') IS NOT NULL
+            INSERT INTO #fr_findings
+            (Severity, Confidence, EvidenceType, Category, RuleId, Title, Summary, Evidence, Recommendation, DatabaseName, ObjectName, SessionId, StartTimeUtc, EndTimeUtc, MoreInfo)
+            SELECT TOP (50)
+                N'Medium', N'High', N'Observed', N'Maintenance',
+                N'FR_R0025_RecentCheckDbOrBackupAge',
+                N'FULL backup age exceeds threshold',
+                CONCAT(N'Database "', lb.DatabaseName, N'" last FULL backup is older than ', @BackupWarnDays, N' day(s).'),
+                LEFT(CONCAT(N'Database=', lb.DatabaseName,
+                            N'; LastFullBackupUtc=', ISNULL(CONVERT(nvarchar(30), lb.LastFull, 126), N'(none observed)'),
+                            N'; AgeDays=', ISNULL(CONVERT(nvarchar(10), DATEDIFF(day, lb.LastFull, @ReportEndUtc)), N'>retention'),
+                            N'; ThresholdDays=', CONVERT(nvarchar(10), @BackupWarnDays)), 1900),
+                N'Confirm the backup schedule and chain; consider a FULL backup only after validating RPO requirements.',
+                lb.DatabaseName, NULL, NULL, @ReportStartUtc, @ReportEndUtc,
+                N'Source: FR_BackupHistory (BackupType=D). Age limited by repository retention.'
+            FROM (
+                SELECT bh.DatabaseName, MAX(bh.BackupFinishUtc) AS LastFull
+                FROM dbo.FR_BackupHistory AS bh
+                WHERE bh.BackupType IN (N'D', N'Database', N'Full')
+                GROUP BY bh.DatabaseName
+            ) AS lb
+            WHERE lb.LastFull IS NULL
+               OR DATEDIFF(day, lb.LastFull, @ReportEndUtc) > @BackupWarnDays;
+        END TRY
+        BEGIN CATCH
+            INSERT INTO #fr_findings
+            (Severity, Confidence, EvidenceType, Category, RuleId, Title, Summary, Evidence, Recommendation, DatabaseName, ObjectName, SessionId, StartTimeUtc, EndTimeUtc, MoreInfo)
+            VALUES (N'Informational', N'Low', N'Observed', N'Coverage',
+                    N'FR_R0026_CoverageAndCapabilitySummary',
+                    N'Rule evaluation skipped', N'FR_R0025 could not be evaluated.',
+                    LEFT(ERROR_MESSAGE(), 1900), NULL, NULL, NULL, NULL,
+                    @ReportStartUtc, @ReportEndUtc, N'FR_R0025 error captured as coverage note.');
+        END CATCH;
+        
         -- FR_R0018 FailedPlanForcing (QueryStore / Medium / High / Observed)
         -- Deduped by (db, query, plan) per D-074 intra-category anchor.
         IF OBJECT_ID(N'dbo.FR_QueryStoreTopN', N'U') IS NOT NULL
