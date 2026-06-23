@@ -1739,8 +1739,8 @@ END;
         UNION ALL SELECT N'EnableBufferPoolCollector', ISNULL((SELECT ConfigValue FROM dbo.FR_Config WHERE ConfigKey = N'EnableBufferPoolCollector'), N'')
         UNION ALL SELECT N'BaselineLookbackHours', ISNULL((SELECT ConfigValue FROM dbo.FR_Config WHERE ConfigKey = N'BaselineLookbackHours'), N'')
         UNION ALL SELECT N'TimeZoneMode', ISNULL((SELECT ConfigValue FROM dbo.FR_Config WHERE ConfigKey = N'TimeZoneMode'), N'')
-        UNION ALL SELECT N'FR_HaState'      AS TableName WHERE OBJECT_ID(N'dbo.FR_HaState', N'U')      IS NOT NULL
-        UNION ALL SELECT N'FR_BufferPool'   AS TableName WHERE OBJECT_ID(N'dbo.FR_BufferPool', N'U')   IS NOT NULL;
+        UNION ALL SELECT N'FR_HaState'      AS TableName, NULL WHERE OBJECT_ID(N'dbo.FR_HaState', N'U')      IS NOT NULL
+        UNION ALL SELECT N'FR_BufferPool'   AS TableName, NULL WHERE OBJECT_ID(N'dbo.FR_BufferPool', N'U')   IS NOT NULL;
 
         RETURN;
     END;
@@ -1802,7 +1802,7 @@ END;
             , N'TimeZoneMode'
             , N'TimeZoneName'
         )
-        )
+        
         BEGIN
             SELECT N'Error' AS Status, N'UnknownConfigKey' AS ErrorCode,
                 CONCAT(N'Unknown or read-only config key: ', @ConfigureKey) AS Message,
@@ -5721,7 +5721,7 @@ ORDER BY ag.name, ar.replica_server_name, drs.database_id;';
                 CONCAT(N'AG "', ISNULL(h.AgName, N'?'), N'" replica ', ISNULL(h.ReplicaServer, N'?'),
                        N' health=', ISNULL(h.SynchronizationHealthDesc, N'?'), N'.'),
                 h.DatabaseName, h.ReplicaServer, NULL, N'FR_R0014_AlwaysOnRoleOrStateChange', NULL, h.SnapshotId,
-                CONCAT(N'Role=', ISNULL(h.RoleDesc, N'?'), N'; RedoQueueKb=', ISNULL(CONVERT(nvarchar(20), h.RedoQueueKb), N'')))
+                CONCAT(N'Role=', ISNULL(h.RoleDesc, N'?'), N'; RedoQueueKb=', ISNULL(CONVERT(nvarchar(20), h.RedoQueueKb), N''))
             FROM dbo.FR_HaState AS h
             INNER JOIN dbo.FR_Snapshot AS s ON s.SnapshotId = h.SnapshotId
             WHERE s.SnapshotUtc >= @ReportStartUtc AND s.SnapshotUtc <= @ReportEndUtc
