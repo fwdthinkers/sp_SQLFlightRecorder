@@ -3826,6 +3826,8 @@ ORDER BY ag.name, ar.replica_server_name, drs.database_id;';
         DECLARE @PurgeRunLogCutoffUtc datetime2(3);
         DECLARE @PurgeRows int = 0;
         DECLARE @PurgeTotalRows int = 0;
+        DECLARE @PurgeStatus nvarchar(20) = N'Success';
+        DECLARE @PurgeErrors nvarchar(2000) = N'';
 
         SELECT @PurgeSnapshotRetentionDays = TRY_CONVERT(int, ConfigValue)
         FROM dbo.FR_Config
@@ -3900,226 +3902,397 @@ ORDER BY ag.name, ar.replica_server_name, drs.database_id;';
             RETURN;
         END;
 
-        WHILE OBJECT_ID(N'dbo.FR_InstanceSnapshot', N'U') IS NOT NULL
-        BEGIN
-            DELETE TOP (5000) FROM dbo.FR_InstanceSnapshot WHERE SnapshotUtc < @PurgeSnapshotCutoffUtc;
-            SET @PurgeRows = @@ROWCOUNT;
-            SET @PurgeTotalRows = @PurgeTotalRows + @PurgeRows;
-            IF @PurgeRows = 0 BREAK;
-            WAITFOR DELAY '00:00:00.250';
-        END;
+        -- ---------------------------------------------------------------------
+        -- Children of FR_Snapshot first, strictly before the parent (D-141).
+        -- Every table's batched loop is wrapped in TRY/CATCH (D-139): each
+        -- DELETE TOP batch is its own autocommit transaction, so a failing
+        -- batch loses nothing already deleted; the error is recorded in
+        -- @PurgeErrors, the run is marked PartialSuccess, and Purge continues
+        -- with the next table. The applock release at the end of this mode is
+        -- therefore always reached.
+        -- ---------------------------------------------------------------------
+        BEGIN TRY
+            WHILE OBJECT_ID(N'dbo.FR_InstanceSnapshot', N'U') IS NOT NULL
+            BEGIN
+                DELETE TOP (5000) FROM dbo.FR_InstanceSnapshot WHERE SnapshotUtc < @PurgeSnapshotCutoffUtc;
+                SET @PurgeRows = @@ROWCOUNT;
+                SET @PurgeTotalRows = @PurgeTotalRows + @PurgeRows;
+                IF @PurgeRows = 0 BREAK;
+                WAITFOR DELAY '00:00:00.250';
+            END;
+        END TRY
+        BEGIN CATCH
+            SET @PurgeStatus = N'PartialSuccess';
+            SET @PurgeErrors = LEFT(CONCAT(@PurgeErrors, N'[FR_InstanceSnapshot] ', ERROR_MESSAGE(), N' '), 2000);
+        END CATCH;
 
-        WHILE OBJECT_ID(N'dbo.FR_Configuration', N'U') IS NOT NULL
-        BEGIN
-            DELETE TOP (5000) FROM dbo.FR_Configuration WHERE SnapshotUtc < @PurgeSnapshotCutoffUtc;
-            SET @PurgeRows = @@ROWCOUNT;
-            SET @PurgeTotalRows = @PurgeTotalRows + @PurgeRows;
-            IF @PurgeRows = 0 BREAK;
-            WAITFOR DELAY '00:00:00.250';
-        END;
+        BEGIN TRY
+            WHILE OBJECT_ID(N'dbo.FR_Configuration', N'U') IS NOT NULL
+            BEGIN
+                DELETE TOP (5000) FROM dbo.FR_Configuration WHERE SnapshotUtc < @PurgeSnapshotCutoffUtc;
+                SET @PurgeRows = @@ROWCOUNT;
+                SET @PurgeTotalRows = @PurgeTotalRows + @PurgeRows;
+                IF @PurgeRows = 0 BREAK;
+                WAITFOR DELAY '00:00:00.250';
+            END;
+        END TRY
+        BEGIN CATCH
+            SET @PurgeStatus = N'PartialSuccess';
+            SET @PurgeErrors = LEFT(CONCAT(@PurgeErrors, N'[FR_Configuration] ', ERROR_MESSAGE(), N' '), 2000);
+        END CATCH;
 
-        WHILE OBJECT_ID(N'dbo.FR_Request', N'U') IS NOT NULL
-        BEGIN
-            DELETE TOP (5000) FROM dbo.FR_Request WHERE SnapshotUtc < @PurgeSnapshotCutoffUtc;
-            SET @PurgeRows = @@ROWCOUNT;
-            SET @PurgeTotalRows = @PurgeTotalRows + @PurgeRows;
-            IF @PurgeRows = 0 BREAK;
-            WAITFOR DELAY '00:00:00.250';
-        END;
+        BEGIN TRY
+            WHILE OBJECT_ID(N'dbo.FR_Request', N'U') IS NOT NULL
+            BEGIN
+                DELETE TOP (5000) FROM dbo.FR_Request WHERE SnapshotUtc < @PurgeSnapshotCutoffUtc;
+                SET @PurgeRows = @@ROWCOUNT;
+                SET @PurgeTotalRows = @PurgeTotalRows + @PurgeRows;
+                IF @PurgeRows = 0 BREAK;
+                WAITFOR DELAY '00:00:00.250';
+            END;
+        END TRY
+        BEGIN CATCH
+            SET @PurgeStatus = N'PartialSuccess';
+            SET @PurgeErrors = LEFT(CONCAT(@PurgeErrors, N'[FR_Request] ', ERROR_MESSAGE(), N' '), 2000);
+        END CATCH;
 
-        WHILE OBJECT_ID(N'dbo.FR_Wait', N'U') IS NOT NULL
-        BEGIN
-            DELETE TOP (5000) FROM dbo.FR_Wait WHERE SnapshotUtc < @PurgeSnapshotCutoffUtc;
-            SET @PurgeRows = @@ROWCOUNT;
-            SET @PurgeTotalRows = @PurgeTotalRows + @PurgeRows;
-            IF @PurgeRows = 0 BREAK;
-            WAITFOR DELAY '00:00:00.250';
-        END;
+        BEGIN TRY
+            WHILE OBJECT_ID(N'dbo.FR_Wait', N'U') IS NOT NULL
+            BEGIN
+                DELETE TOP (5000) FROM dbo.FR_Wait WHERE SnapshotUtc < @PurgeSnapshotCutoffUtc;
+                SET @PurgeRows = @@ROWCOUNT;
+                SET @PurgeTotalRows = @PurgeTotalRows + @PurgeRows;
+                IF @PurgeRows = 0 BREAK;
+                WAITFOR DELAY '00:00:00.250';
+            END;
+        END TRY
+        BEGIN CATCH
+            SET @PurgeStatus = N'PartialSuccess';
+            SET @PurgeErrors = LEFT(CONCAT(@PurgeErrors, N'[FR_Wait] ', ERROR_MESSAGE(), N' '), 2000);
+        END CATCH;
 
-        WHILE OBJECT_ID(N'dbo.FR_FileStat', N'U') IS NOT NULL
-        BEGIN
-            DELETE TOP (5000) FROM dbo.FR_FileStat WHERE SnapshotUtc < @PurgeSnapshotCutoffUtc;
-            SET @PurgeRows = @@ROWCOUNT;
-            SET @PurgeTotalRows = @PurgeTotalRows + @PurgeRows;
-            IF @PurgeRows = 0 BREAK;
-            WAITFOR DELAY '00:00:00.250';
-        END;
+        BEGIN TRY
+            WHILE OBJECT_ID(N'dbo.FR_FileStat', N'U') IS NOT NULL
+            BEGIN
+                DELETE TOP (5000) FROM dbo.FR_FileStat WHERE SnapshotUtc < @PurgeSnapshotCutoffUtc;
+                SET @PurgeRows = @@ROWCOUNT;
+                SET @PurgeTotalRows = @PurgeTotalRows + @PurgeRows;
+                IF @PurgeRows = 0 BREAK;
+                WAITFOR DELAY '00:00:00.250';
+            END;
+        END TRY
+        BEGIN CATCH
+            SET @PurgeStatus = N'PartialSuccess';
+            SET @PurgeErrors = LEFT(CONCAT(@PurgeErrors, N'[FR_FileStat] ', ERROR_MESSAGE(), N' '), 2000);
+        END CATCH;
 
-        WHILE OBJECT_ID(N'dbo.FR_PerfCounter', N'U') IS NOT NULL
-        BEGIN
-            DELETE TOP (5000) FROM dbo.FR_PerfCounter WHERE SnapshotUtc < @PurgeSnapshotCutoffUtc;
-            SET @PurgeRows = @@ROWCOUNT;
-            SET @PurgeTotalRows = @PurgeTotalRows + @PurgeRows;
-            IF @PurgeRows = 0 BREAK;
-            WAITFOR DELAY '00:00:00.250';
-        END;
+        BEGIN TRY
+            WHILE OBJECT_ID(N'dbo.FR_PerfCounter', N'U') IS NOT NULL
+            BEGIN
+                DELETE TOP (5000) FROM dbo.FR_PerfCounter WHERE SnapshotUtc < @PurgeSnapshotCutoffUtc;
+                SET @PurgeRows = @@ROWCOUNT;
+                SET @PurgeTotalRows = @PurgeTotalRows + @PurgeRows;
+                IF @PurgeRows = 0 BREAK;
+                WAITFOR DELAY '00:00:00.250';
+            END;
+        END TRY
+        BEGIN CATCH
+            SET @PurgeStatus = N'PartialSuccess';
+            SET @PurgeErrors = LEFT(CONCAT(@PurgeErrors, N'[FR_PerfCounter] ', ERROR_MESSAGE(), N' '), 2000);
+        END CATCH;
 
-        WHILE OBJECT_ID(N'dbo.FR_Tempdb', N'U') IS NOT NULL
-        BEGIN
-            DELETE TOP (5000) FROM dbo.FR_Tempdb WHERE SnapshotUtc < @PurgeSnapshotCutoffUtc;
-            SET @PurgeRows = @@ROWCOUNT;
-            SET @PurgeTotalRows = @PurgeTotalRows + @PurgeRows;
-            IF @PurgeRows = 0 BREAK;
-            WAITFOR DELAY '00:00:00.250';
-        END;
+        BEGIN TRY
+            WHILE OBJECT_ID(N'dbo.FR_Tempdb', N'U') IS NOT NULL
+            BEGIN
+                DELETE TOP (5000) FROM dbo.FR_Tempdb WHERE SnapshotUtc < @PurgeSnapshotCutoffUtc;
+                SET @PurgeRows = @@ROWCOUNT;
+                SET @PurgeTotalRows = @PurgeTotalRows + @PurgeRows;
+                IF @PurgeRows = 0 BREAK;
+                WAITFOR DELAY '00:00:00.250';
+            END;
+        END TRY
+        BEGIN CATCH
+            SET @PurgeStatus = N'PartialSuccess';
+            SET @PurgeErrors = LEFT(CONCAT(@PurgeErrors, N'[FR_Tempdb] ', ERROR_MESSAGE(), N' '), 2000);
+        END CATCH;
 
-        WHILE OBJECT_ID(N'dbo.FR_Memory', N'U') IS NOT NULL
-        BEGIN
-            DELETE TOP (5000) FROM dbo.FR_Memory WHERE SnapshotUtc < @PurgeSnapshotCutoffUtc;
-            SET @PurgeRows = @@ROWCOUNT;
-            SET @PurgeTotalRows = @PurgeTotalRows + @PurgeRows;
-            IF @PurgeRows = 0 BREAK;
-            WAITFOR DELAY '00:00:00.250';
-        END;
+        BEGIN TRY
+            WHILE OBJECT_ID(N'dbo.FR_Memory', N'U') IS NOT NULL
+            BEGIN
+                DELETE TOP (5000) FROM dbo.FR_Memory WHERE SnapshotUtc < @PurgeSnapshotCutoffUtc;
+                SET @PurgeRows = @@ROWCOUNT;
+                SET @PurgeTotalRows = @PurgeTotalRows + @PurgeRows;
+                IF @PurgeRows = 0 BREAK;
+                WAITFOR DELAY '00:00:00.250';
+            END;
+        END TRY
+        BEGIN CATCH
+            SET @PurgeStatus = N'PartialSuccess';
+            SET @PurgeErrors = LEFT(CONCAT(@PurgeErrors, N'[FR_Memory] ', ERROR_MESSAGE(), N' '), 2000);
+        END CATCH;
 
-        WHILE OBJECT_ID(N'dbo.FR_AgentJob', N'U') IS NOT NULL
-        BEGIN
-            DELETE TOP (5000) FROM dbo.FR_AgentJob WHERE SnapshotUtc < @PurgeSnapshotCutoffUtc;
-            SET @PurgeRows = @@ROWCOUNT;
-            SET @PurgeTotalRows = @PurgeTotalRows + @PurgeRows;
-            IF @PurgeRows = 0 BREAK;
-            WAITFOR DELAY '00:00:00.250';
-        END;
+        BEGIN TRY
+            WHILE OBJECT_ID(N'dbo.FR_AgentJob', N'U') IS NOT NULL
+            BEGIN
+                DELETE TOP (5000) FROM dbo.FR_AgentJob WHERE SnapshotUtc < @PurgeSnapshotCutoffUtc;
+                SET @PurgeRows = @@ROWCOUNT;
+                SET @PurgeTotalRows = @PurgeTotalRows + @PurgeRows;
+                IF @PurgeRows = 0 BREAK;
+                WAITFOR DELAY '00:00:00.250';
+            END;
+        END TRY
+        BEGIN CATCH
+            SET @PurgeStatus = N'PartialSuccess';
+            SET @PurgeErrors = LEFT(CONCAT(@PurgeErrors, N'[FR_AgentJob] ', ERROR_MESSAGE(), N' '), 2000);
+        END CATCH;
 
-        WHILE OBJECT_ID(N'dbo.FR_BackupHistory', N'U') IS NOT NULL
-        BEGIN
-            DELETE TOP (5000) FROM dbo.FR_BackupHistory WHERE SnapshotUtc < @PurgeSnapshotCutoffUtc;
-            SET @PurgeRows = @@ROWCOUNT;
-            SET @PurgeTotalRows = @PurgeTotalRows + @PurgeRows;
-            IF @PurgeRows = 0 BREAK;
-            WAITFOR DELAY '00:00:00.250';
-        END;
+        BEGIN TRY
+            WHILE OBJECT_ID(N'dbo.FR_BackupHistory', N'U') IS NOT NULL
+            BEGIN
+                DELETE TOP (5000) FROM dbo.FR_BackupHistory WHERE SnapshotUtc < @PurgeSnapshotCutoffUtc;
+                SET @PurgeRows = @@ROWCOUNT;
+                SET @PurgeTotalRows = @PurgeTotalRows + @PurgeRows;
+                IF @PurgeRows = 0 BREAK;
+                WAITFOR DELAY '00:00:00.250';
+            END;
+        END TRY
+        BEGIN CATCH
+            SET @PurgeStatus = N'PartialSuccess';
+            SET @PurgeErrors = LEFT(CONCAT(@PurgeErrors, N'[FR_BackupHistory] ', ERROR_MESSAGE(), N' '), 2000);
+        END CATCH;
 
-        WHILE OBJECT_ID(N'dbo.FR_AlwaysOnState', N'U') IS NOT NULL
-        BEGIN
-            DELETE TOP (5000) FROM dbo.FR_AlwaysOnState WHERE SnapshotUtc < @PurgeSnapshotCutoffUtc;
-            SET @PurgeRows = @@ROWCOUNT;
-            SET @PurgeTotalRows = @PurgeTotalRows + @PurgeRows;
-            IF @PurgeRows = 0 BREAK;
-            WAITFOR DELAY '00:00:00.250';
-        END;
+        BEGIN TRY
+            WHILE OBJECT_ID(N'dbo.FR_AlwaysOnState', N'U') IS NOT NULL
+            BEGIN
+                DELETE TOP (5000) FROM dbo.FR_AlwaysOnState WHERE SnapshotUtc < @PurgeSnapshotCutoffUtc;
+                SET @PurgeRows = @@ROWCOUNT;
+                SET @PurgeTotalRows = @PurgeTotalRows + @PurgeRows;
+                IF @PurgeRows = 0 BREAK;
+                WAITFOR DELAY '00:00:00.250';
+            END;
+        END TRY
+        BEGIN CATCH
+            SET @PurgeStatus = N'PartialSuccess';
+            SET @PurgeErrors = LEFT(CONCAT(@PurgeErrors, N'[FR_AlwaysOnState] ', ERROR_MESSAGE(), N' '), 2000);
+        END CATCH;
 
-        WHILE OBJECT_ID(N'dbo.FR_Deadlock', N'U') IS NOT NULL
-        BEGIN
-            DELETE TOP (5000) FROM dbo.FR_Deadlock WHERE SnapshotUtc < @PurgeSnapshotCutoffUtc;
-            SET @PurgeRows = @@ROWCOUNT;
-            SET @PurgeTotalRows = @PurgeTotalRows + @PurgeRows;
-            IF @PurgeRows = 0 BREAK;
-            WAITFOR DELAY '00:00:00.250';
-        END;
+        BEGIN TRY
+            WHILE OBJECT_ID(N'dbo.FR_Deadlock', N'U') IS NOT NULL
+            BEGIN
+                DELETE TOP (5000) FROM dbo.FR_Deadlock WHERE SnapshotUtc < @PurgeSnapshotCutoffUtc;
+                SET @PurgeRows = @@ROWCOUNT;
+                SET @PurgeTotalRows = @PurgeTotalRows + @PurgeRows;
+                IF @PurgeRows = 0 BREAK;
+                WAITFOR DELAY '00:00:00.250';
+            END;
+        END TRY
+        BEGIN CATCH
+            SET @PurgeStatus = N'PartialSuccess';
+            SET @PurgeErrors = LEFT(CONCAT(@PurgeErrors, N'[FR_Deadlock] ', ERROR_MESSAGE(), N' '), 2000);
+        END CATCH;
 
-        WHILE OBJECT_ID(N'dbo.FR_QueryPlan', N'U') IS NOT NULL
-        BEGIN
-            DELETE TOP (5000) FROM dbo.FR_QueryPlan WHERE SnapshotUtc < @PurgeSnapshotCutoffUtc;
-            SET @PurgeRows = @@ROWCOUNT;
-            SET @PurgeTotalRows = @PurgeTotalRows + @PurgeRows;
-            IF @PurgeRows = 0 BREAK;
-            WAITFOR DELAY '00:00:00.250';
-        END;
+        BEGIN TRY
+            WHILE OBJECT_ID(N'dbo.FR_QueryPlan', N'U') IS NOT NULL
+            BEGIN
+                DELETE TOP (5000) FROM dbo.FR_QueryPlan WHERE SnapshotUtc < @PurgeSnapshotCutoffUtc;
+                SET @PurgeRows = @@ROWCOUNT;
+                SET @PurgeTotalRows = @PurgeTotalRows + @PurgeRows;
+                IF @PurgeRows = 0 BREAK;
+                WAITFOR DELAY '00:00:00.250';
+            END;
+        END TRY
+        BEGIN CATCH
+            SET @PurgeStatus = N'PartialSuccess';
+            SET @PurgeErrors = LEFT(CONCAT(@PurgeErrors, N'[FR_QueryPlan] ', ERROR_MESSAGE(), N' '), 2000);
+        END CATCH;
+
+        -- FR_QueryStoreTopN previously had no purge loop at all (unbounded
+        -- growth + FK failure on the FR_Snapshot delete). Fixed in v0.4.1.
+        BEGIN TRY
+            WHILE OBJECT_ID(N'dbo.FR_QueryStoreTopN', N'U') IS NOT NULL
+            BEGIN
+                DELETE TOP (5000) FROM dbo.FR_QueryStoreTopN WHERE SnapshotUtc < @PurgeSnapshotCutoffUtc;
+                SET @PurgeRows = @@ROWCOUNT;
+                SET @PurgeTotalRows = @PurgeTotalRows + @PurgeRows;
+                IF @PurgeRows = 0 BREAK;
+                WAITFOR DELAY '00:00:00.250';
+            END;
+        END TRY
+        BEGIN CATCH
+            SET @PurgeStatus = N'PartialSuccess';
+            SET @PurgeErrors = LEFT(CONCAT(@PurgeErrors, N'[FR_QueryStoreTopN] ', ERROR_MESSAGE(), N' '), 2000);
+        END CATCH;
 
         -- v0.4 child tables (snapshot children; purge before FR_Snapshot, D-141).
-        WHILE OBJECT_ID(N'dbo.FR_HaState', N'U') IS NOT NULL
-        BEGIN
-            DELETE TOP (5000) FROM dbo.FR_HaState WHERE SnapshotUtc < @PurgeSnapshotCutoffUtc;
-            SET @PurgeRows = @@ROWCOUNT;
-            SET @PurgeTotalRows = @PurgeTotalRows + @PurgeRows;
-            IF @PurgeRows = 0 BREAK;
-            WAITFOR DELAY '00:00:00.250';
-        END;
+        BEGIN TRY
+            WHILE OBJECT_ID(N'dbo.FR_HaState', N'U') IS NOT NULL
+            BEGIN
+                DELETE TOP (5000) FROM dbo.FR_HaState WHERE SnapshotUtc < @PurgeSnapshotCutoffUtc;
+                SET @PurgeRows = @@ROWCOUNT;
+                SET @PurgeTotalRows = @PurgeTotalRows + @PurgeRows;
+                IF @PurgeRows = 0 BREAK;
+                WAITFOR DELAY '00:00:00.250';
+            END;
+        END TRY
+        BEGIN CATCH
+            SET @PurgeStatus = N'PartialSuccess';
+            SET @PurgeErrors = LEFT(CONCAT(@PurgeErrors, N'[FR_HaState] ', ERROR_MESSAGE(), N' '), 2000);
+        END CATCH;
 
-        WHILE OBJECT_ID(N'dbo.FR_BufferPool', N'U') IS NOT NULL
-        BEGIN
-            DELETE TOP (5000) FROM dbo.FR_BufferPool WHERE SnapshotUtc < @PurgeSnapshotCutoffUtc;
-            SET @PurgeRows = @@ROWCOUNT;
-            SET @PurgeTotalRows = @PurgeTotalRows + @PurgeRows;
-            IF @PurgeRows = 0 BREAK;
-            WAITFOR DELAY '00:00:00.250';
-        END;
+        BEGIN TRY
+            WHILE OBJECT_ID(N'dbo.FR_BufferPool', N'U') IS NOT NULL
+            BEGIN
+                DELETE TOP (5000) FROM dbo.FR_BufferPool WHERE SnapshotUtc < @PurgeSnapshotCutoffUtc;
+                SET @PurgeRows = @@ROWCOUNT;
+                SET @PurgeTotalRows = @PurgeTotalRows + @PurgeRows;
+                IF @PurgeRows = 0 BREAK;
+                WAITFOR DELAY '00:00:00.250';
+            END;
+        END TRY
+        BEGIN CATCH
+            SET @PurgeStatus = N'PartialSuccess';
+            SET @PurgeErrors = LEFT(CONCAT(@PurgeErrors, N'[FR_BufferPool] ', ERROR_MESSAGE(), N' '), 2000);
+        END CATCH;
 
-        WHILE OBJECT_ID(N'dbo.FR_Snapshot', N'U') IS NOT NULL
-        BEGIN
-            DELETE TOP (5000) FROM dbo.FR_Snapshot WHERE SnapshotUtc < @PurgeSnapshotCutoffUtc;
-            SET @PurgeRows = @@ROWCOUNT;
-            SET @PurgeTotalRows = @PurgeTotalRows + @PurgeRows;
-            IF @PurgeRows = 0 BREAK;
-            WAITFOR DELAY '00:00:00.250';
-        END;
+        BEGIN TRY
+            WHILE OBJECT_ID(N'dbo.FR_ErrorLog', N'U') IS NOT NULL
+            BEGIN
+                DELETE TOP (5000) FROM dbo.FR_ErrorLog WHERE SnapshotUtc < @PurgeSnapshotCutoffUtc;
+                SET @PurgeRows = @@ROWCOUNT;
+                SET @PurgeTotalRows = @PurgeTotalRows + @PurgeRows;
+                IF @PurgeRows = 0 BREAK;
+                WAITFOR DELAY '00:00:00.250';
+            END;
+        END TRY
+        BEGIN CATCH
+            SET @PurgeStatus = N'PartialSuccess';
+            SET @PurgeErrors = LEFT(CONCAT(@PurgeErrors, N'[FR_ErrorLog] ', ERROR_MESSAGE(), N' '), 2000);
+        END CATCH;
 
-        WHILE OBJECT_ID(N'dbo.FR_ErrorLog', N'U') IS NOT NULL
-        BEGIN
-            DELETE TOP (5000) FROM dbo.FR_ErrorLog WHERE SnapshotUtc < @PurgeSnapshotCutoffUtc;
-            SET @PurgeRows = @@ROWCOUNT;
-            SET @PurgeTotalRows = @PurgeTotalRows + @PurgeRows;
-            IF @PurgeRows = 0 BREAK;
-            WAITFOR DELAY '00:00:00.250';
-        END;
+        BEGIN TRY
+            WHILE OBJECT_ID(N'dbo.FR_SchemaActivity', N'U') IS NOT NULL
+            BEGIN
+                DELETE TOP (5000) FROM dbo.FR_SchemaActivity WHERE SnapshotUtc < @PurgeSnapshotCutoffUtc;
+                SET @PurgeRows = @@ROWCOUNT;
+                SET @PurgeTotalRows = @PurgeTotalRows + @PurgeRows;
+                IF @PurgeRows = 0 BREAK;
+                WAITFOR DELAY '00:00:00.250';
+            END;
+        END TRY
+        BEGIN CATCH
+            SET @PurgeStatus = N'PartialSuccess';
+            SET @PurgeErrors = LEFT(CONCAT(@PurgeErrors, N'[FR_SchemaActivity] ', ERROR_MESSAGE(), N' '), 2000);
+        END CATCH;
 
-        WHILE OBJECT_ID(N'dbo.FR_SchemaActivity', N'U') IS NOT NULL
-        BEGIN
-            DELETE TOP (5000) FROM dbo.FR_SchemaActivity WHERE SnapshotUtc < @PurgeSnapshotCutoffUtc;
-            SET @PurgeRows = @@ROWCOUNT;
-            SET @PurgeTotalRows = @PurgeTotalRows + @PurgeRows;
-            IF @PurgeRows = 0 BREAK;
-            WAITFOR DELAY '00:00:00.250';
-        END;
+        BEGIN TRY
+            WHILE OBJECT_ID(N'dbo.FR_PlanCacheSummary', N'U') IS NOT NULL
+            BEGIN
+                DELETE TOP (5000) FROM dbo.FR_PlanCacheSummary WHERE SnapshotUtc < @PurgeSnapshotCutoffUtc;
+                SET @PurgeRows = @@ROWCOUNT;
+                SET @PurgeTotalRows = @PurgeTotalRows + @PurgeRows;
+                IF @PurgeRows = 0 BREAK;
+                WAITFOR DELAY '00:00:00.250';
+            END;
+        END TRY
+        BEGIN CATCH
+            SET @PurgeStatus = N'PartialSuccess';
+            SET @PurgeErrors = LEFT(CONCAT(@PurgeErrors, N'[FR_PlanCacheSummary] ', ERROR_MESSAGE(), N' '), 2000);
+        END CATCH;
 
-        WHILE OBJECT_ID(N'dbo.FR_PlanCacheSummary', N'U') IS NOT NULL
-        BEGIN
-            DELETE TOP (5000) FROM dbo.FR_PlanCacheSummary WHERE SnapshotUtc < @PurgeSnapshotCutoffUtc;
-            SET @PurgeRows = @@ROWCOUNT;
-            SET @PurgeTotalRows = @PurgeTotalRows + @PurgeRows;
-            IF @PurgeRows = 0 BREAK;
-            WAITFOR DELAY '00:00:00.250';
-        END;
+        -- Parent spine: only after every child table above (D-141).
+        BEGIN TRY
+            WHILE OBJECT_ID(N'dbo.FR_Snapshot', N'U') IS NOT NULL
+            BEGIN
+                DELETE TOP (5000) FROM dbo.FR_Snapshot WHERE SnapshotUtc < @PurgeSnapshotCutoffUtc;
+                SET @PurgeRows = @@ROWCOUNT;
+                SET @PurgeTotalRows = @PurgeTotalRows + @PurgeRows;
+                IF @PurgeRows = 0 BREAK;
+                WAITFOR DELAY '00:00:00.250';
+            END;
+        END TRY
+        BEGIN CATCH
+            SET @PurgeStatus = N'PartialSuccess';
+            SET @PurgeErrors = LEFT(CONCAT(@PurgeErrors, N'[FR_Snapshot] ', ERROR_MESSAGE(), N' '), 2000);
+        END CATCH;
 
-        WHILE OBJECT_ID(N'dbo.FR_Snapshot', N'U') IS NOT NULL
-        BEGIN
-            DELETE TOP (5000) FROM dbo.FR_QueryPlan WHERE SnapshotUtc < @PurgeSnapshotCutoffUtc;
-            SET @PurgeRows = @@ROWCOUNT;
-            SET @PurgeTotalRows = @PurgeTotalRows + @PurgeRows;
-            IF @PurgeRows = 0 BREAK;
-            WAITFOR DELAY '00:00:00.250';
-        END;
+        -- FR_QueryText orphan cleanup (D-141): rows whose QueryHash is no
+        -- longer referenced by any remaining FR_Request or FR_QueryPlan row.
+        BEGIN TRY
+            WHILE OBJECT_ID(N'dbo.FR_QueryText', N'U') IS NOT NULL
+            BEGIN
+                DELETE TOP (5000) qt
+                FROM dbo.FR_QueryText AS qt
+                WHERE NOT EXISTS (SELECT 1 FROM dbo.FR_Request  AS r WHERE r.QueryHash = qt.QueryHash)
+                  AND NOT EXISTS (SELECT 1 FROM dbo.FR_QueryPlan AS p WHERE p.QueryHash = qt.QueryHash);
+                SET @PurgeRows = @@ROWCOUNT;
+                SET @PurgeTotalRows = @PurgeTotalRows + @PurgeRows;
+                IF @PurgeRows = 0 BREAK;
+                WAITFOR DELAY '00:00:00.250';
+            END;
+        END TRY
+        BEGIN CATCH
+            SET @PurgeStatus = N'PartialSuccess';
+            SET @PurgeErrors = LEFT(CONCAT(@PurgeErrors, N'[FR_QueryText] ', ERROR_MESSAGE(), N' '), 2000);
+        END CATCH;
 
-        WHILE OBJECT_ID(N'dbo.FR_Snapshot', N'U') IS NOT NULL
-        BEGIN
-            DELETE TOP (5000) FROM dbo.FR_Snapshot WHERE SnapshotUtc < @PurgeSnapshotCutoffUtc;
-            SET @PurgeRows = @@ROWCOUNT;
-            SET @PurgeTotalRows = @PurgeTotalRows + @PurgeRows;
-            IF @PurgeRows = 0 BREAK;
-            WAITFOR DELAY '00:00:00.250';
-        END;
+        -- Run log last (D-141). FR_RunLogStep first (FK to FR_RunLog); the
+        -- FR_RunLog delete additionally refuses rows still referenced by a
+        -- surviving FR_Snapshot (defense in depth for non-default retention).
+        BEGIN TRY
+            WHILE OBJECT_ID(N'dbo.FR_RunLogStep', N'U') IS NOT NULL
+            BEGIN
+                DELETE TOP (5000)
+                FROM dbo.FR_RunLogStep
+                WHERE RunId IN
+                (
+                    SELECT RunId FROM dbo.FR_RunLog WHERE StartUtc < @PurgeRunLogCutoffUtc
+                );
 
-        WHILE OBJECT_ID(N'dbo.FR_RunLogStep', N'U') IS NOT NULL
-        BEGIN
-            DELETE TOP (5000)
-            FROM dbo.FR_RunLogStep
-            WHERE RunId IN
-            (
-                SELECT RunId FROM dbo.FR_RunLog WHERE StartUtc < @PurgeRunLogCutoffUtc
-            );
+                SET @PurgeRows = @@ROWCOUNT;
+                SET @PurgeTotalRows = @PurgeTotalRows + @PurgeRows;
+                IF @PurgeRows = 0 BREAK;
+                WAITFOR DELAY '00:00:00.250';
+            END;
+        END TRY
+        BEGIN CATCH
+            SET @PurgeStatus = N'PartialSuccess';
+            SET @PurgeErrors = LEFT(CONCAT(@PurgeErrors, N'[FR_RunLogStep] ', ERROR_MESSAGE(), N' '), 2000);
+        END CATCH;
 
-            SET @PurgeRows = @@ROWCOUNT;
-            SET @PurgeTotalRows = @PurgeTotalRows + @PurgeRows;
-            IF @PurgeRows = 0 BREAK;
-            WAITFOR DELAY '00:00:00.250';
-        END;
+        BEGIN TRY
+            WHILE OBJECT_ID(N'dbo.FR_RunLog', N'U') IS NOT NULL
+            BEGIN
+                DELETE TOP (5000)
+                FROM dbo.FR_RunLog
+                WHERE StartUtc < @PurgeRunLogCutoffUtc
+                  AND NOT EXISTS (SELECT 1 FROM dbo.FR_Snapshot AS s WHERE s.RunId = dbo.FR_RunLog.RunId);
+                SET @PurgeRows = @@ROWCOUNT;
+                SET @PurgeTotalRows = @PurgeTotalRows + @PurgeRows;
+                IF @PurgeRows = 0 BREAK;
+                WAITFOR DELAY '00:00:00.250';
+            END;
+        END TRY
+        BEGIN CATCH
+            SET @PurgeStatus = N'PartialSuccess';
+            SET @PurgeErrors = LEFT(CONCAT(@PurgeErrors, N'[FR_RunLog] ', ERROR_MESSAGE(), N' '), 2000);
+        END CATCH;
 
-        WHILE OBJECT_ID(N'dbo.FR_RunLog', N'U') IS NOT NULL
-        BEGIN
-            DELETE TOP (5000) FROM dbo.FR_RunLog WHERE StartUtc < @PurgeRunLogCutoffUtc;
-            SET @PurgeRows = @@ROWCOUNT;
-            SET @PurgeTotalRows = @PurgeTotalRows + @PurgeRows;
-            IF @PurgeRows = 0 BREAK;
-            WAITFOR DELAY '00:00:00.250';
-        END;
-
-        IF @PurgeRunId IS NOT NULL
-            UPDATE dbo.FR_RunLog
-            SET EndUtc = SYSUTCDATETIME(),
-                Status = N'Success',
-                Reason = CONCAT(N'Purge deleted ', @PurgeTotalRows, N' rows.')
-            WHERE RunId = @PurgeRunId;
+        -- Close the run-log row, then release the applock. The close is
+        -- swallowed on error so the release below is always reached; the
+        -- applock can no longer leak on a failed purge.
+        BEGIN TRY
+            IF @PurgeRunId IS NOT NULL
+                UPDATE dbo.FR_RunLog
+                SET EndUtc = SYSUTCDATETIME(),
+                    Status = @PurgeStatus,
+                    Reason = LEFT(CONCAT(N'Purge deleted ', @PurgeTotalRows, N' rows.',
+                                         CASE WHEN @PurgeErrors = N'' THEN N''
+                                              ELSE CONCAT(N' Errors: ', @PurgeErrors) END), 400)
+                WHERE RunId = @PurgeRunId;
+        END TRY
+        BEGIN CATCH
+            SET @PurgeErrors = LEFT(CONCAT(@PurgeErrors, N'[RunLogClose] ', ERROR_MESSAGE(), N' '), 2000);
+        END CATCH;
 
         IF @WhatIf = 0
             EXEC sys.sp_releaseapplock
@@ -4127,10 +4300,11 @@ ORDER BY ag.name, ar.replica_server_name, drs.database_id;';
                 , @LockOwner = N'Session';
 
         SELECT
-              N'Success' AS Status
+              @PurgeStatus AS Status
             , @PurgeTotalRows AS RowsDeleted
             , @PurgeSnapshotCutoffUtc AS SnapshotCutoffUtc
-            , @PurgeRunLogCutoffUtc AS RunLogCutoffUtc;
+            , @PurgeRunLogCutoffUtc AS RunLogCutoffUtc
+            , NULLIF(@PurgeErrors, N'') AS Errors;
 
         RETURN;
     END;
