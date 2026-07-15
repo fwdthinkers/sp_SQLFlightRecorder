@@ -87,6 +87,15 @@ if ! command -v docker >/dev/null 2>&1; then
     exit 2
 fi
 
+# docker.exe on Windows needs a Windows-style host path for `docker cp`
+# (MSYS_NO_PATHCONV=1 disables Git Bash's automatic conversion, which we
+# need OFF for in-container /opt/... paths). cygpath exists on Git Bash /
+# MSYS only; on Linux/macOS the path is used as-is.
+SQL_FILE_HOST="${SQL_FILE}"
+if command -v cygpath >/dev/null 2>&1; then
+    SQL_FILE_HOST="$(cygpath -m "${SQL_FILE}")"
+fi
+
 EXPECTED_VERSION="$(grep -m1 -E '^-- Tool-Version:' "${SQL_FILE}" | awk '{print $3}')"
 if [[ -z "${EXPECTED_VERSION}" ]]; then
     echo "::error::Could not parse Tool-Version from ${SQL_FILE} header." >&2
@@ -169,7 +178,7 @@ run_target() {
         "IF DB_ID('FRTest') IS NOT NULL DROP DATABASE FRTest; CREATE DATABASE FRTest;" >/dev/null
 
     echo "  installing procedure (first run)..."
-    docker cp "${SQL_FILE}" "${CONTAINER_NAME}:/tmp/sp_SQLFlightRecorder.sql" >/dev/null
+    docker cp "${SQL_FILE_HOST}" "${CONTAINER_NAME}:/tmp/sp_SQLFlightRecorder.sql" >/dev/null
     sqx FRTest -i /tmp/sp_SQLFlightRecorder.sql >/dev/null
 
     echo "  installing procedure (re-run for idempotency)..."
