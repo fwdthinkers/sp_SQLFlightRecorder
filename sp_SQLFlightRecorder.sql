@@ -1402,17 +1402,44 @@ SELECT
     -- =========================================================================
     IF UPPER(@ModeNormalized) = N'UNINSTALL'
     BEGIN
+        -- Nested IF on purpose: the inner statement must not bind dbo.FR_RunLog
+        -- in the same statement as its existence guard, or Uninstall errors on
+        -- a database where Install never ran (deferred name resolution binds
+        -- per statement, not per predicate).
         IF OBJECT_ID(N'dbo.FR_RunLog', N'U') IS NOT NULL
-           AND EXISTS (SELECT 1 FROM dbo.FR_RunLog WHERE Mode = N'Collect' AND Status = N'InProgress')
         BEGIN
-            SELECT N'Error' AS Status, N'CollectInProgress' AS ErrorCode,
-                N'Collect is in progress. Retry uninstall later.' AS Message,
-                @ToolVersion AS ToolVersion;
-            RETURN;
+            IF EXISTS (SELECT 1 FROM dbo.FR_RunLog WHERE Mode = N'Collect' AND Status = N'InProgress')
+            BEGIN
+                SELECT N'Error' AS Status, N'CollectInProgress' AS ErrorCode,
+                    N'Collect is in progress. Retry uninstall later.' AS Message,
+                    @ToolVersion AS ToolVersion;
+                RETURN;
+            END;
         END;
 
         IF @WhatIf = 1
         BEGIN
+            -- @WhatIf must be safe on a database where Install never ran:
+            -- dbo.FR_Config is only referenced behind an existence check, in
+            -- its own statement, staged through a table variable so the
+            -- result stays a single result set.
+            DECLARE @WhatIfAgentJob TABLE (ObjectName sysname NOT NULL);
+
+            IF OBJECT_ID(N'dbo.FR_Config', N'U') IS NOT NULL
+            BEGIN
+                INSERT INTO @WhatIfAgentJob (ObjectName)
+                SELECT TRY_CONVERT(sysname, c.ConfigValue)
+                FROM dbo.FR_Config AS c
+                WHERE c.ConfigKey = N'AgentJobName'
+                  AND TRY_CONVERT(sysname, c.ConfigValue) IS NOT NULL
+                  AND EXISTS
+                  (
+                      SELECT 1
+                      FROM dbo.FR_Config AS c2
+                      WHERE c2.ConfigKey = N'AgentJobCreatedBySQLFlightRecorder'
+                        AND c2.ConfigValue = N'1'
+                  );
+            END;
             SELECT
                 N'WhatIf' AS Status,
                 ObjectType,
@@ -1459,18 +1486,9 @@ SELECT
                 N'WhatIf',
                 N'SQL_AGENT_JOB',
                 N'msdb',
-                ConfigValue,
+                ObjectName,
                 N'Drop'
-            FROM dbo.FR_Config
-            WHERE OBJECT_ID(N'dbo.FR_Config', N'U') IS NOT NULL
-              AND ConfigKey = N'AgentJobName'
-              AND EXISTS
-              (
-                  SELECT 1
-                  FROM dbo.FR_Config AS c2
-                  WHERE c2.ConfigKey = N'AgentJobCreatedBySQLFlightRecorder'
-                    AND c2.ConfigValue = N'1'
-              );
+            FROM @WhatIfAgentJob;
 
             RETURN;
         END;
@@ -1542,24 +1560,32 @@ END;
             -- Run log archive or removal after FR_Snapshot is gone.
             IF @PreserveRunLog = 1
             BEGIN
+                -- Each rename runs only when its table exists. The prior
+                -- shape (IF <exists> DECLARE ...; EXEC sp_rename;) executed
+                -- sp_rename unconditionally and failed with a NULL @newname
+                -- whenever a run-log table was absent.
                 DECLARE @UninstallArchiveSuffix nvarchar(32) = CONCAT(
                     CONVERT(nvarchar(8), SYSUTCDATETIME(), 112), N'_',
                     REPLACE(CONVERT(nvarchar(8), SYSUTCDATETIME(), 108), N':', N'')
                 );
+                DECLARE @RunLogStepNewname sysname = CONCAT(N'FR_RunLogStep_Archive_', @UninstallArchiveSuffix);
+                DECLARE @RunLogNewname     sysname = CONCAT(N'FR_RunLog_Archive_', @UninstallArchiveSuffix);
 
                 IF OBJECT_ID(N'dbo.FR_RunLogStep', N'U') IS NOT NULL
-                DECLARE @RunLogStepNewname NVARCHAR(1024) =  CONCAT(N'FR_RunLogStep_Archive_', @UninstallArchiveSuffix);
+                BEGIN
                     EXEC sys.sp_rename
                           @objname = N'dbo.FR_RunLogStep'
                         , @newname = @RunLogStepNewname
                         , @objtype = N'OBJECT';
+                END;
 
                 IF OBJECT_ID(N'dbo.FR_RunLog', N'U') IS NOT NULL
-                DECLARE @RunLogNewname NVARCHAR(1024) =  CONCAT(N'FR_RunLog_Archive_', @UninstallArchiveSuffix);
+                BEGIN
                     EXEC sys.sp_rename
                           @objname = N'dbo.FR_RunLog'
                         , @newname = @RunLogNewname
                         , @objtype = N'OBJECT';
+                END;
             END
             ELSE
             BEGIN
