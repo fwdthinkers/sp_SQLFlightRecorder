@@ -3902,15 +3902,11 @@ ORDER BY ag.name, ar.replica_server_name, drs.database_id;';
             RETURN;
         END;
 
-        -- ---------------------------------------------------------------------
         -- Children of FR_Snapshot first, strictly before the parent (D-141).
-        -- Every table's batched loop is wrapped in TRY/CATCH (D-139): each
-        -- DELETE TOP batch is its own autocommit transaction, so a failing
-        -- batch loses nothing already deleted; the error is recorded in
-        -- @PurgeErrors, the run is marked PartialSuccess, and Purge continues
-        -- with the next table. The applock release at the end of this mode is
-        -- therefore always reached.
-        -- ---------------------------------------------------------------------
+        -- Each table's batched loop is TRY/CATCH-wrapped (D-139): batches are
+        -- autocommit, so a failing batch loses nothing already removed; the
+        -- error lands in @PurgeErrors, the run closes as PartialSuccess, and
+        -- the applock release at the end of this mode is always reached.
         BEGIN TRY
             WHILE OBJECT_ID(N'dbo.FR_InstanceSnapshot', N'U') IS NOT NULL
             BEGIN
