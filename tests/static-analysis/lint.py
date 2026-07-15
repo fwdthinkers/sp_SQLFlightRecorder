@@ -78,7 +78,9 @@ ALLOW_LIST = LINT_DIR / "allow_list_small_dmvs.txt"
 FIXTURES_DIR = LINT_DIR / "fixtures"
 
 # Default target if no paths supplied on the command line.
-DEFAULT_TARGETS = [REPO_ROOT / "src" / "sp_SQLFlightRecorder.sql"]
+# The shipped artifact lives at the repository root (moved out of src/ in
+# commit 3dd87da); keep this in sync with the single-script model (D-110).
+DEFAULT_TARGETS = [REPO_ROOT / "sp_SQLFlightRecorder.sql"]
 
 
 # -----------------------------------------------------------------------------
@@ -539,8 +541,10 @@ def main() -> int:
 
     targets = discover_targets(args.targets)
     if not targets:
-        print("No lint targets found.", file=sys.stderr)
-        return 0
+        # Linting nothing must never look like a pass: a stale default path
+        # would otherwise let forbidden patterns ship unchecked (D-144).
+        print("::error::No lint targets found; refusing to pass vacuously.", file=sys.stderr)
+        return 1
 
     all_findings: list[Finding] = []
     for t in targets:

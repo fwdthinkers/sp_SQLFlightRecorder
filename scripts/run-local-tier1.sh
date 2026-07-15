@@ -2,11 +2,9 @@
 # =============================================================================
 # scripts/run-local-tier1.sh
 # -----------------------------------------------------------------------------
-# Part 2 of 9 (v0.1 Design Prototype).
-#
 # Local mirror of .github/workflows/ci-tier1.yml. Lets a contributor run the
-# same Tier 1 smoke tests on their laptop using Docker, so a PR rarely fails
-# CI for reasons the contributor could not have caught locally (D-187:
+# same Tier 1 checks on their machine using Docker, so a PR rarely fails CI
+# for reasons the contributor could not have caught locally (D-187:
 # recommended-but-not-required local tooling).
 #
 # Per D-148 this is build-pipeline / local-dev only. Nothing this script
@@ -14,20 +12,23 @@
 #
 # What it does:
 #   1. Runs the static-analysis linter (and its self-test).
-#   2. For each target image in TARGETS:
-#      a. Starts an mssql container on host port 1433.
+#   2. For each target image in TARGETS (D-120: 2017/2019/2022/2025):
+#      a. Starts an mssql container (no host port; sqlcmd runs via docker
+#         exec — mssql-tools18 with -C when present, mssql-tools otherwise).
 #      b. Waits for it to accept connections.
 #      c. Creates a disposable FRTest database.
-#      d. Installs src/sp_SQLFlightRecorder.sql twice (idempotency check).
-#      e. Smokes Help / About / Version / unknown-mode / out-of-range /
-#         not-yet-implemented dispatch.
-#      f. Drops the procedure.
-#      g. Tears down the container.
+#      d. Installs sp_SQLFlightRecorder.sql (repo root) twice (idempotency).
+#      e. Smokes Help / About / Version / unknown-mode / out-of-range.
+#      f. Lifecycle: Install → Collect ×2 → Report → Purge @WhatIf →
+#         Uninstall → asserts zero FR_* objects remain.
+#      g. Drops the procedure and tears down the container.
+#
+# The expected tool version is parsed from the file header (Tool-Version:)
+# so version bumps cannot silently diverge from the checks.
 #
 # Requirements:
 #   - bash 4+
 #   - docker (Linux containers)
-#   - Ability to publish port 1433 on the host
 #
 # Usage:
 #   ./scripts/run-local-tier1.sh                  # full matrix
@@ -38,30 +39,31 @@
 # =============================================================================
 
 set -euo pipefail
+export MSYS_NO_PATHCONV=1   # keep Git Bash on Windows from mangling /opt paths
 
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 REPO_ROOT="$( cd "${SCRIPT_DIR}/.." && pwd )"
-SQL_FILE="${REPO_ROOT}/src/sp_SQLFlightRecorder.sql"
+SQL_FILE="${REPO_ROOT}/sp_SQLFlightRecorder.sql"
 LINT_SCRIPT="${SCRIPT_DIR}/run-static-analysis.sh"
 
-# Tier 1 v0.1 Part 2 targets (D-120). 2017 added in Part 5; 2025 in Part 8.
+# Tier 1 targets (D-120).
 TARGETS=(
+  "2017|mcr.microsoft.com/mssql/server:2017-latest"
   "2019|mcr.microsoft.com/mssql/server:2019-latest"
   "2022|mcr.microsoft.com/mssql/server:2022-latest"
+  "2025|mcr.microsoft.com/mssql/server:2025-latest"
 )
 
 SA_PASSWORD="${SA_PASSWORD:-FlightRecorder!Tier1}"
 MSSQL_PID="${MSSQL_PID:-Developer}"
 CONTAINER_NAME="${CONTAINER_NAME:-fr-tier1-local}"
-HOST_PORT="${HOST_PORT:-1433}"
-SQLCMD_IMAGE="${SQLCMD_IMAGE:-mcr.microsoft.com/mssql-tools}"
-WAIT_SECONDS="${WAIT_SECONDS:-120}"
+WAIT_SECONDS="${WAIT_SECONDS:-180}"
 
 ONLY=""
 SKIP_LINT="0"
 
 usage() {
-    sed -n '2,40p' "$0"
+    sed -n '2,44p' "$0"
 }
 
 while [[ $# -gt 0 ]]; do
@@ -85,35 +87,50 @@ if ! command -v docker >/dev/null 2>&1; then
     exit 2
 fi
 
+EXPECTED_VERSION="$(grep -m1 -E '^-- Tool-Version:' "${SQL_FILE}" | awk '{print $3}')"
+if [[ -z "${EXPECTED_VERSION}" ]]; then
+    echo "::error::Could not parse Tool-Version from ${SQL_FILE} header." >&2
+    exit 2
+fi
+echo "Expected tool version: ${EXPECTED_VERSION}"
+
 # --- Helpers -----------------------------------------------------------------
+
+SQLTOOL=""
+CFLAG=""
 
 cleanup_container() {
     docker rm -f "${CONTAINER_NAME}" >/dev/null 2>&1 || true
 }
 
-# Trap to ensure no container is left running on Ctrl-C or error.
 trap cleanup_container EXIT
 
-sqlcmd_in_container() {
-    # $1 = database, remaining args = passed to sqlcmd
+sqx() {
+    # $1 = database, remaining args passed to sqlcmd (runs inside container)
     local db="$1"; shift
-    docker exec "${CONTAINER_NAME}" /opt/mssql-tools/bin/sqlcmd \
+    docker exec "${CONTAINER_NAME}" "${SQLTOOL}" ${CFLAG} \
         -S localhost -U sa -P "${SA_PASSWORD}" -b -d "${db}" "$@"
 }
 
-sqlcmd_host_to_container() {
-    # Runs an sqlcmd in a side container talking to the host-published port.
-    # Used only by the readiness probe (before sqlcmd is guaranteed to exist
-    # inside the server container).
-    docker run --rm --network host "${SQLCMD_IMAGE}" \
-        /opt/mssql-tools/bin/sqlcmd -S localhost -U sa -P "${SA_PASSWORD}" "$@"
+detect_sqlcmd() {
+    SQLTOOL=""; CFLAG=""
+    for _ in $(seq 1 30); do
+        if docker exec "${CONTAINER_NAME}" ls /opt/mssql-tools18/bin/sqlcmd >/dev/null 2>&1; then
+            SQLTOOL="/opt/mssql-tools18/bin/sqlcmd"; CFLAG="-C"; return 0
+        elif docker exec "${CONTAINER_NAME}" ls /opt/mssql-tools/bin/sqlcmd >/dev/null 2>&1; then
+            SQLTOOL="/opt/mssql-tools/bin/sqlcmd"; CFLAG=""; return 0
+        fi
+        sleep 1
+    done
+    echo "::error::No sqlcmd found inside the container." >&2
+    return 1
 }
 
 wait_for_ready() {
     echo "  waiting for SQL Server to accept connections..."
     local attempts=$(( WAIT_SECONDS / 2 ))
     for ((i=1; i<=attempts; i++)); do
-        if sqlcmd_host_to_container -Q "SELECT 1;" -l 5 >/dev/null 2>&1; then
+        if sqx master -Q "SELECT 1;" -l 5 >/dev/null 2>&1; then
             echo "  ready after ${i} attempt(s)."
             return 0
         fi
@@ -141,61 +158,80 @@ run_target() {
         -e "ACCEPT_EULA=Y" \
         -e "MSSQL_SA_PASSWORD=${SA_PASSWORD}" \
         -e "MSSQL_PID=${MSSQL_PID}" \
-        -p "${HOST_PORT}:1433" \
         "${image}" >/dev/null
 
+    detect_sqlcmd
+    echo "  sqlcmd: ${SQLTOOL} ${CFLAG}"
     wait_for_ready
 
     echo "  creating disposable FRTest database..."
-    sqlcmd_in_container "master" -Q \
+    sqx master -Q \
         "IF DB_ID('FRTest') IS NOT NULL DROP DATABASE FRTest; CREATE DATABASE FRTest;" >/dev/null
 
     echo "  installing procedure (first run)..."
     docker cp "${SQL_FILE}" "${CONTAINER_NAME}:/tmp/sp_SQLFlightRecorder.sql" >/dev/null
-    sqlcmd_in_container "FRTest" -i /tmp/sp_SQLFlightRecorder.sql >/dev/null
+    sqx FRTest -i /tmp/sp_SQLFlightRecorder.sql >/dev/null
 
     echo "  installing procedure (re-run for idempotency)..."
-    sqlcmd_in_container "FRTest" -i /tmp/sp_SQLFlightRecorder.sql >/dev/null
+    sqx FRTest -i /tmp/sp_SQLFlightRecorder.sql >/dev/null
 
     echo "  smoke — Help mode"
-    sqlcmd_in_container "FRTest" -Q "EXEC dbo.sp_SQLFlightRecorder;" > /tmp/help.out
-    grep -q "sp_SQLFlightRecorder" /tmp/help.out
-    grep -q "CHARTER PILLARS"      /tmp/help.out
-    grep -q "MODES"                /tmp/help.out
-    grep -q "PARAMETERS"           /tmp/help.out
+    sqx FRTest -Q "EXEC dbo.sp_SQLFlightRecorder;" > /tmp/fr-help.out
+    grep -q "sp_SQLFlightRecorder"    /tmp/fr-help.out
+    grep -q "CHARTER PILLARS"         /tmp/fr-help.out
+    grep -q "MODES"                   /tmp/fr-help.out
+    grep -q "PARAMETERS"              /tmp/fr-help.out
+    grep -q "${EXPECTED_VERSION}"     /tmp/fr-help.out
 
-    echo "  smoke — About mode"
-    sqlcmd_in_container "FRTest" -h -1 -W \
-        -Q "SET NOCOUNT ON; EXEC dbo.sp_SQLFlightRecorder @Mode = N'About';" \
-        > /tmp/about.out
-    grep -q "0.1.0-alpha.1" /tmp/about.out
+    echo "  smoke — About mode + Version alias"
+    sqx FRTest -h -1 -W \
+        -Q "SET NOCOUNT ON; EXEC dbo.sp_SQLFlightRecorder @Mode = N'About';" > /tmp/fr-about.out
+    grep -q "${EXPECTED_VERSION}" /tmp/fr-about.out
+    sqx FRTest -h -1 -W \
+        -Q "SET NOCOUNT ON; EXEC dbo.sp_SQLFlightRecorder @Mode = N'Version';" > /tmp/fr-version.out
+    grep -q "${EXPECTED_VERSION}" /tmp/fr-version.out
 
-    echo "  smoke — Version alias"
-    sqlcmd_in_container "FRTest" -h -1 -W \
-        -Q "SET NOCOUNT ON; EXEC dbo.sp_SQLFlightRecorder @Mode = N'Version';" \
-        > /tmp/version.out
-    grep -q "0.1.0-alpha.1" /tmp/version.out
+    echo "  smoke — validation errors return clean results"
+    sqx FRTest -h -1 -W \
+        -Q "SET NOCOUNT ON; EXEC dbo.sp_SQLFlightRecorder @Mode = N'BogusMode';" > /tmp/fr-bogus.out
+    grep -q "UnknownMode" /tmp/fr-bogus.out
+    sqx FRTest -h -1 -W \
+        -Q "SET NOCOUNT ON; EXEC dbo.sp_SQLFlightRecorder @MaxFindings = 5;" > /tmp/fr-maxf.out
+    grep -q "InvalidMaxFindings" /tmp/fr-maxf.out
 
-    echo "  smoke — unknown mode returns Error result"
-    sqlcmd_in_container "FRTest" -h -1 -W \
-        -Q "SET NOCOUNT ON; EXEC dbo.sp_SQLFlightRecorder @Mode = N'BogusMode';" \
-        > /tmp/bogus.out
-    grep -q "Unknown @Mode" /tmp/bogus.out
+    echo "  lifecycle — Install"
+    sqx FRTest -W -Q "EXEC dbo.sp_SQLFlightRecorder @Mode = N'Install';" > /tmp/fr-install.out
+    grep -q "Success" /tmp/fr-install.out
 
-    echo "  smoke — out-of-range @MaxFindings returns Error"
-    sqlcmd_in_container "FRTest" -h -1 -W \
-        -Q "SET NOCOUNT ON; EXEC dbo.sp_SQLFlightRecorder @MaxFindings = 5;" \
-        > /tmp/maxf.out
-    grep -q "Invalid @MaxFindings" /tmp/maxf.out
+    echo "  lifecycle — Collect ×2 (no collector errors)"
+    sqx FRTest -W -Q "EXEC dbo.sp_SQLFlightRecorder @Mode = N'Collect';" > /tmp/fr-collect1.out
+    grep -Eq "Success|PartialSuccess" /tmp/fr-collect1.out
+    sleep 3
+    sqx FRTest -W -Q "EXEC dbo.sp_SQLFlightRecorder @Mode = N'Collect';" > /tmp/fr-collect2.out
+    grep -Eq "Success|PartialSuccess" /tmp/fr-collect2.out
+    sqx FRTest -h -1 -W \
+        -Q "SET NOCOUNT ON; SELECT COUNT(*) FROM dbo.FR_RunLogStep WHERE Status = N'Error';" > /tmp/fr-errsteps.out
+    grep -Eq "^\s*0\s*$" /tmp/fr-errsteps.out
 
-    echo "  smoke — NotYetImplemented dispatch (Collect)"
-    sqlcmd_in_container "FRTest" -h -1 -W \
-        -Q "SET NOCOUNT ON; EXEC dbo.sp_SQLFlightRecorder @Mode = N'Collect';" \
-        > /tmp/collect.out
-    grep -q "NotYetImplemented" /tmp/collect.out
+    echo "  lifecycle — Report (Default + Markdown)"
+    sqx FRTest -W -Q "EXEC dbo.sp_SQLFlightRecorder @Mode = N'Report';" > /tmp/fr-report.out
+    grep -q "FR_R0026" /tmp/fr-report.out
+    sqx FRTest -y 0 -Q "EXEC dbo.sp_SQLFlightRecorder @Mode = N'Report', @OutputFormat = N'Markdown';" > /tmp/fr-md.out
+    grep -q "# SQL Server Flight Recorder Report" /tmp/fr-md.out
+
+    echo "  lifecycle — Purge @WhatIf"
+    sqx FRTest -W -Q "EXEC dbo.sp_SQLFlightRecorder @Mode = N'Purge', @WhatIf = 1;" > /tmp/fr-purgewi.out
+    grep -q "WhatIf" /tmp/fr-purgewi.out
+
+    echo "  lifecycle — Uninstall leaves zero FR_* objects"
+    sqx FRTest -W -Q "EXEC dbo.sp_SQLFlightRecorder @Mode = N'Uninstall';" > /tmp/fr-uninstall.out
+    grep -q "Success" /tmp/fr-uninstall.out
+    sqx FRTest -h -1 -W \
+        -Q "SET NOCOUNT ON; SELECT COUNT(*) FROM sys.objects WHERE name LIKE N'FR[_]%';" > /tmp/fr-leftover.out
+    grep -Eq "^\s*0\s*$" /tmp/fr-leftover.out
 
     echo "  clean removal — DROP PROCEDURE"
-    sqlcmd_in_container "FRTest" -Q "DROP PROCEDURE dbo.sp_SQLFlightRecorder;" >/dev/null
+    sqx FRTest -Q "DROP PROCEDURE dbo.sp_SQLFlightRecorder;" >/dev/null
 
     cleanup_container
     echo "  PASSED — SQL Server ${tag}"
@@ -204,11 +240,11 @@ run_target() {
 # --- Main --------------------------------------------------------------------
 
 if [[ "${SKIP_LINT}" != "1" ]]; then
-    if [[ -x "${LINT_SCRIPT}" ]]; then
+    if [[ -x "${LINT_SCRIPT}" || -f "${LINT_SCRIPT}" ]]; then
         echo "==> Static analysis"
-        "${LINT_SCRIPT}"
+        bash "${LINT_SCRIPT}"
     else
-        echo "::warning::run-static-analysis.sh not executable; skipping linter."
+        echo "::warning::run-static-analysis.sh not found; skipping linter."
     fi
 fi
 

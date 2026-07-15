@@ -1,32 +1,29 @@
 # =============================================================================
 # Tier 1 CI — SQL Server DBA Flight Recorder
 # -----------------------------------------------------------------------------
-# Part 2 of 9 (v0.1 Design Prototype).
-#
-# Per design decision D-120, Tier 1 CI is automated, blocking, and runs
-# against SQL Server Linux containers. v0.1 Part 2 ships the minimum viable
-# matrix: SQL Server 2019 and 2022. SQL Server 2017 is added in Part 5;
-# SQL Server 2025 is added in Part 8 (or when 2025 has GA'd, per D-124).
+# Per design decision D-120, Tier 1 CI is automated, blocking, and runs against
+# SQL Server Linux containers: 2017, 2019, 2022, 2025.
 #
 # What this workflow does, in order, for each matrix target:
-#   1. Starts a SQL Server Linux container.
+#   1. Starts a SQL Server Linux container (no host port; all sqlcmd runs via
+#      docker exec, using mssql-tools18 with -C when present, mssql-tools
+#      otherwise — 2022+ images ship only mssql-tools18).
 #   2. Waits for it to accept connections.
-#   3. Runs the static-analysis linter against src/sp_SQLFlightRecorder.sql.
-#   4. Creates a throwaway database FRTest.
-#   5. Installs the procedure by executing src/sp_SQLFlightRecorder.sql.
-#   6. Smokes Part 1 behavior (Help, About, Version alias, validation errors,
-#      not-yet-implemented dispatch).
-#   7. Re-runs the install script to prove idempotency (D-110 single-script
-#      model; Part 1 stub-plus-ALTER pattern).
-#   8. Drops the procedure to prove clean removal.
+#   3. Installs the procedure by executing sp_SQLFlightRecorder.sql (repo root,
+#      single-script model D-110/D-152), twice, to prove idempotency.
+#   4. Smokes Help / About / Version alias / validation errors.
+#   5. Runs the real lifecycle: Install → Collect ×2 → Report → Purge @WhatIf
+#      → Uninstall → verifies zero FR_* objects remain.
+#   6. Drops the procedure to prove clean removal.
+#
+# The expected tool version is parsed from the file header (Tool-Version:)
+# so a release bump cannot silently diverge from CI expectations.
 #
 # Per D-148, external tooling (Python here) is permitted in the build pipeline
-# only; nothing from this workflow ever runs on a user's SQL Server. Per the
-# implementation plan Part 2, this workflow does NOT install the procedure
-# on any persistent target — only inside the disposable container.
+# only; nothing from this workflow ever runs on a user's SQL Server.
 #
-# Cost-regression test (D-143) lands in Part 4. Golden output tests (D-122)
-# land in Part 6. Soak test (D-145) lands in Part 8. None of those exist yet.
+# Not yet implemented here (tracked for later releases per the design):
+#   cost-regression test (D-143), golden output tests (D-122), soak (D-145).
 # =============================================================================
 
 name: ci-tier1
@@ -38,7 +35,6 @@ on:
     branches: [main]
   workflow_dispatch:
 
-# Cancel in-flight runs for the same ref when a new commit is pushed.
 concurrency:
   group: ci-tier1-${{ github.ref }}
   cancel-in-progress: true
@@ -48,7 +44,7 @@ permissions:
 
 jobs:
   static-analysis:
-    name: Static analysis (Part 2 linter)
+    name: Static analysis (linter + self-test)
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -60,8 +56,8 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Run static-analysis linter
-        run: bash scripts/run-static-analysis.sh
+      - name: Run static-analysis linter (shipped artifact)
+        run: python tests/static-analysis/lint.py sp_SQLFlightRecorder.sql
 
       - name: Run linter self-tests
         run: python tests/static-analysis/lint.py --self-test
@@ -70,18 +66,20 @@ jobs:
     name: Tier 1 — ${{ matrix.label }}
     needs: static-analysis
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
 
     strategy:
       fail-fast: false
       matrix:
         include:
+          - label: SQL Server 2017 (Linux)
+            image: mcr.microsoft.com/mssql/server:2017-latest
           - label: SQL Server 2019 (Linux)
             image: mcr.microsoft.com/mssql/server:2019-latest
-            sqlcmd_image: mcr.microsoft.com/mssql-tools
           - label: SQL Server 2022 (Linux)
             image: mcr.microsoft.com/mssql/server:2022-latest
-            sqlcmd_image: mcr.microsoft.com/mssql-tools
+          - label: SQL Server 2025 (Linux)
+            image: mcr.microsoft.com/mssql/server:2025-latest
 
     env:
       SA_PASSWORD: 'FlightRecorder!Tier1'
@@ -91,6 +89,17 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
+      - name: Parse expected tool version from file header
+        run: |
+          set -euo pipefail
+          VER=$(grep -m1 -E '^-- Tool-Version:' sp_SQLFlightRecorder.sql | awk '{print $3}')
+          if [[ -z "${VER}" ]]; then
+            echo "::error::Could not parse Tool-Version from sp_SQLFlightRecorder.sql header."
+            exit 1
+          fi
+          echo "EXPECTED_VERSION=${VER}" >> "${GITHUB_ENV}"
+          echo "Expecting tool version ${VER}"
+
       - name: Start SQL Server container
         run: |
           set -euo pipefail
@@ -98,112 +107,140 @@ jobs:
             -e "ACCEPT_EULA=Y" \
             -e "MSSQL_SA_PASSWORD=${SA_PASSWORD}" \
             -e "MSSQL_PID=${MSSQL_PID}" \
-            -p 1433:1433 \
             "${{ matrix.image }}"
 
-      - name: Wait for SQL Server to accept connections
+      - name: Detect in-container sqlcmd and wait for readiness
         run: |
           set -euo pipefail
-          echo "Waiting for SQL Server to become ready..."
-          for i in $(seq 1 60); do
-            if docker run --rm --network host \
-                 "${{ matrix.sqlcmd_image }}" \
-                 /opt/mssql-tools/bin/sqlcmd -S localhost -U sa -P "${SA_PASSWORD}" \
-                   -Q "SELECT 1;" -b -l 5 >/dev/null 2>&1; then
-              echo "SQL Server is ready after ${i} attempt(s)."
+          SQLTOOL=""; CFLAG=""
+          for i in $(seq 1 30); do
+            if docker exec mssql ls /opt/mssql-tools18/bin/sqlcmd >/dev/null 2>&1; then
+              SQLTOOL="/opt/mssql-tools18/bin/sqlcmd"; CFLAG="-C"; break
+            elif docker exec mssql ls /opt/mssql-tools/bin/sqlcmd >/dev/null 2>&1; then
+              SQLTOOL="/opt/mssql-tools/bin/sqlcmd"; CFLAG=""; break
+            fi
+            sleep 1
+          done
+          if [[ -z "${SQLTOOL}" ]]; then
+            echo "::error::No sqlcmd found in container."
+            exit 1
+          fi
+          echo "SQLTOOL=${SQLTOOL}" >> "${GITHUB_ENV}"
+          echo "CFLAG=${CFLAG}" >> "${GITHUB_ENV}"
+          for i in $(seq 1 90); do
+            if docker exec mssql "${SQLTOOL}" ${CFLAG} -S localhost -U sa -P "${SA_PASSWORD}" \
+                 -Q "SELECT 1;" -b -l 5 >/dev/null 2>&1; then
+              echo "SQL Server ready after ${i} attempt(s)."
               exit 0
             fi
             sleep 2
           done
-          echo "::error::SQL Server did not become ready within 120 seconds."
+          echo "::error::SQL Server did not become ready within 180 seconds."
           docker logs mssql || true
           exit 1
 
       - name: Create disposable test database (FRTest)
         run: |
           set -euo pipefail
-          docker run --rm --network host \
-            "${{ matrix.sqlcmd_image }}" \
-            /opt/mssql-tools/bin/sqlcmd -S localhost -U sa -P "${SA_PASSWORD}" -b \
-              -Q "IF DB_ID('FRTest') IS NOT NULL DROP DATABASE FRTest; CREATE DATABASE FRTest;"
+          docker exec mssql ${SQLTOOL} ${CFLAG} -S localhost -U sa -P "${SA_PASSWORD}" -b \
+            -Q "IF DB_ID('FRTest') IS NOT NULL DROP DATABASE FRTest; CREATE DATABASE FRTest;"
 
       - name: Install procedure (first run)
         run: |
           set -euo pipefail
-          docker cp src/sp_SQLFlightRecorder.sql mssql:/tmp/sp_SQLFlightRecorder.sql
-          docker exec mssql /opt/mssql-tools/bin/sqlcmd \
-            -S localhost -U sa -P "${SA_PASSWORD}" -b -d FRTest \
+          docker cp sp_SQLFlightRecorder.sql mssql:/tmp/sp_SQLFlightRecorder.sql
+          docker exec mssql ${SQLTOOL} ${CFLAG} -S localhost -U sa -P "${SA_PASSWORD}" -b -d FRTest \
             -i /tmp/sp_SQLFlightRecorder.sql
 
       - name: Install procedure (re-run — idempotency check)
         run: |
           set -euo pipefail
-          docker exec mssql /opt/mssql-tools/bin/sqlcmd \
-            -S localhost -U sa -P "${SA_PASSWORD}" -b -d FRTest \
+          docker exec mssql ${SQLTOOL} ${CFLAG} -S localhost -U sa -P "${SA_PASSWORD}" -b -d FRTest \
             -i /tmp/sp_SQLFlightRecorder.sql
 
       - name: Smoke — Help mode (default; no parameters)
         run: |
           set -euo pipefail
-          docker exec mssql /opt/mssql-tools/bin/sqlcmd \
-            -S localhost -U sa -P "${SA_PASSWORD}" -b -d FRTest \
+          docker exec mssql ${SQLTOOL} ${CFLAG} -S localhost -U sa -P "${SA_PASSWORD}" -b -d FRTest \
             -Q "EXEC dbo.sp_SQLFlightRecorder;" | tee /tmp/help.out
           grep -q "sp_SQLFlightRecorder" /tmp/help.out
           grep -q "CHARTER PILLARS" /tmp/help.out
           grep -q "MODES" /tmp/help.out
           grep -q "PARAMETERS" /tmp/help.out
-          grep -q "SAFETY" /tmp/help.out
+          grep -q "${EXPECTED_VERSION}" /tmp/help.out
 
-      - name: Smoke — About mode (one-row result)
+      - name: Smoke — About mode and Version alias
         run: |
           set -euo pipefail
-          docker exec mssql /opt/mssql-tools/bin/sqlcmd \
-            -S localhost -U sa -P "${SA_PASSWORD}" -b -d FRTest -h -1 -W \
-            -Q "SET NOCOUNT ON; EXEC dbo.sp_SQLFlightRecorder @Mode = N'About';" \
-            | tee /tmp/about.out
-          grep -q "0.1.0-alpha.1" /tmp/about.out
+          docker exec mssql ${SQLTOOL} ${CFLAG} -S localhost -U sa -P "${SA_PASSWORD}" -b -d FRTest -h -1 -W \
+            -Q "SET NOCOUNT ON; EXEC dbo.sp_SQLFlightRecorder @Mode = N'About';" | tee /tmp/about.out
+          grep -q "${EXPECTED_VERSION}" /tmp/about.out
+          docker exec mssql ${SQLTOOL} ${CFLAG} -S localhost -U sa -P "${SA_PASSWORD}" -b -d FRTest -h -1 -W \
+            -Q "SET NOCOUNT ON; EXEC dbo.sp_SQLFlightRecorder @Mode = N'Version';" | tee /tmp/version.out
+          grep -q "${EXPECTED_VERSION}" /tmp/version.out
 
-      - name: Smoke — Version alias resolves to About
+      - name: Smoke — validation errors are clean results, not exceptions
         run: |
           set -euo pipefail
-          docker exec mssql /opt/mssql-tools/bin/sqlcmd \
-            -S localhost -U sa -P "${SA_PASSWORD}" -b -d FRTest -h -1 -W \
-            -Q "SET NOCOUNT ON; EXEC dbo.sp_SQLFlightRecorder @Mode = N'Version';" \
-            | tee /tmp/version.out
-          grep -q "0.1.0-alpha.1" /tmp/version.out
+          docker exec mssql ${SQLTOOL} ${CFLAG} -S localhost -U sa -P "${SA_PASSWORD}" -b -d FRTest -h -1 -W \
+            -Q "SET NOCOUNT ON; EXEC dbo.sp_SQLFlightRecorder @Mode = N'BogusMode';" | tee /tmp/bogus.out
+          grep -q "UnknownMode" /tmp/bogus.out
+          docker exec mssql ${SQLTOOL} ${CFLAG} -S localhost -U sa -P "${SA_PASSWORD}" -b -d FRTest -h -1 -W \
+            -Q "SET NOCOUNT ON; EXEC dbo.sp_SQLFlightRecorder @MaxFindings = 5;" | tee /tmp/maxf.out
+          grep -q "InvalidMaxFindings" /tmp/maxf.out
 
-      - name: Smoke — Unknown mode returns Error result, not exception
+      - name: Lifecycle — Install repository
         run: |
           set -euo pipefail
-          docker exec mssql /opt/mssql-tools/bin/sqlcmd \
-            -S localhost -U sa -P "${SA_PASSWORD}" -b -d FRTest -h -1 -W \
-            -Q "SET NOCOUNT ON; EXEC dbo.sp_SQLFlightRecorder @Mode = N'BogusMode';" \
-            | tee /tmp/bogus.out
-          grep -q "Unknown @Mode" /tmp/bogus.out
+          docker exec mssql ${SQLTOOL} ${CFLAG} -S localhost -U sa -P "${SA_PASSWORD}" -b -d FRTest -W \
+            -Q "EXEC dbo.sp_SQLFlightRecorder @Mode = N'Install';" | tee /tmp/install.out
+          grep -q "Success" /tmp/install.out
 
-      - name: Smoke — Out-of-range @MaxFindings returns Error
+      - name: Lifecycle — Collect twice
         run: |
           set -euo pipefail
-          docker exec mssql /opt/mssql-tools/bin/sqlcmd \
-            -S localhost -U sa -P "${SA_PASSWORD}" -b -d FRTest -h -1 -W \
-            -Q "SET NOCOUNT ON; EXEC dbo.sp_SQLFlightRecorder @MaxFindings = 5;" \
-            | tee /tmp/maxf.out
-          grep -q "Invalid @MaxFindings" /tmp/maxf.out
+          docker exec mssql ${SQLTOOL} ${CFLAG} -S localhost -U sa -P "${SA_PASSWORD}" -b -d FRTest -W \
+            -Q "EXEC dbo.sp_SQLFlightRecorder @Mode = N'Collect';" | tee /tmp/collect1.out
+          grep -Eq "Success|PartialSuccess" /tmp/collect1.out
+          sleep 3
+          docker exec mssql ${SQLTOOL} ${CFLAG} -S localhost -U sa -P "${SA_PASSWORD}" -b -d FRTest -W \
+            -Q "EXEC dbo.sp_SQLFlightRecorder @Mode = N'Collect';" | tee /tmp/collect2.out
+          grep -Eq "Success|PartialSuccess" /tmp/collect2.out
+          docker exec mssql ${SQLTOOL} ${CFLAG} -S localhost -U sa -P "${SA_PASSWORD}" -b -d FRTest -h -1 -W \
+            -Q "SET NOCOUNT ON; SELECT COUNT(*) FROM dbo.FR_RunLogStep WHERE Status = N'Error';" | tee /tmp/errsteps.out
+          grep -Eq "^\s*0\s*$" /tmp/errsteps.out
 
-      - name: Smoke — Not-yet-implemented dispatch (Collect)
+      - name: Lifecycle — Report (Default + Markdown)
         run: |
           set -euo pipefail
-          docker exec mssql /opt/mssql-tools/bin/sqlcmd \
-            -S localhost -U sa -P "${SA_PASSWORD}" -b -d FRTest -h -1 -W \
-            -Q "SET NOCOUNT ON; EXEC dbo.sp_SQLFlightRecorder @Mode = N'Collect';" \
-            | tee /tmp/collect.out
-          grep -q "NotYetImplemented" /tmp/collect.out
+          docker exec mssql ${SQLTOOL} ${CFLAG} -S localhost -U sa -P "${SA_PASSWORD}" -b -d FRTest -W \
+            -Q "EXEC dbo.sp_SQLFlightRecorder @Mode = N'Report';" | tee /tmp/report.out
+          grep -q "FR_R0026" /tmp/report.out
+          docker exec mssql ${SQLTOOL} ${CFLAG} -S localhost -U sa -P "${SA_PASSWORD}" -b -d FRTest -y 0 \
+            -Q "EXEC dbo.sp_SQLFlightRecorder @Mode = N'Report', @OutputFormat = N'Markdown';" | tee /tmp/md.out
+          grep -q "# SQL Server Flight Recorder Report" /tmp/md.out
+
+      - name: Lifecycle — Purge @WhatIf
+        run: |
+          set -euo pipefail
+          docker exec mssql ${SQLTOOL} ${CFLAG} -S localhost -U sa -P "${SA_PASSWORD}" -b -d FRTest -W \
+            -Q "EXEC dbo.sp_SQLFlightRecorder @Mode = N'Purge', @WhatIf = 1;" | tee /tmp/purgewi.out
+          grep -q "WhatIf" /tmp/purgewi.out
+
+      - name: Lifecycle — Uninstall removes every FR_* object
+        run: |
+          set -euo pipefail
+          docker exec mssql ${SQLTOOL} ${CFLAG} -S localhost -U sa -P "${SA_PASSWORD}" -b -d FRTest -W \
+            -Q "EXEC dbo.sp_SQLFlightRecorder @Mode = N'Uninstall';" | tee /tmp/uninstall.out
+          grep -q "Success" /tmp/uninstall.out
+          docker exec mssql ${SQLTOOL} ${CFLAG} -S localhost -U sa -P "${SA_PASSWORD}" -b -d FRTest -h -1 -W \
+            -Q "SET NOCOUNT ON; SELECT COUNT(*) FROM sys.objects WHERE name LIKE N'FR[_]%';" | tee /tmp/leftover.out
+          grep -Eq "^\s*0\s*$" /tmp/leftover.out
 
       - name: Clean removal (DROP PROCEDURE)
         run: |
           set -euo pipefail
-          docker exec mssql /opt/mssql-tools/bin/sqlcmd \
-            -S localhost -U sa -P "${SA_PASSWORD}" -b -d FRTest \
+          docker exec mssql ${SQLTOOL} ${CFLAG} -S localhost -U sa -P "${SA_PASSWORD}" -b -d FRTest \
             -Q "DROP PROCEDURE dbo.sp_SQLFlightRecorder;"
 
       - name: Container logs on failure
