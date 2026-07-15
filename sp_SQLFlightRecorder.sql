@@ -86,6 +86,9 @@ BEGIN
     DECLARE @ToolVersion             nvarchar(30)  = N'0.4.0';
     DECLARE @BuildDateUtc            datetime2(3)  = CONVERT(datetime2(3), '2026-06-16T00:00:00');
     DECLARE @SchemaVersion            nvarchar(20) = N'0.4.0';
+    -- Rule-pack version is part of the Markdown header contract (D-085).
+    -- It tracks the minor release that last changed rule logic or catalog.
+    DECLARE @RulePackVersion         nvarchar(20)  = N'0.4';
     DECLARE @SupportedSqlServerRange nvarchar(50)  = N'SQL Server 2012–2025';
     DECLARE @PartNumber              int           = 1;
     DECLARE @PartTotal               int           = 1;
@@ -5670,11 +5673,34 @@ ORDER BY ag.name, ar.replica_server_name, drs.database_id;';
         BEGIN
             DECLARE @ReportMarkdown nvarchar(max) = N'';
 
+            -- D-085: the machine-parseable header block is a public contract
+            -- of exactly these 14 keys, in this order. Counts are computed
+            -- after filtering so they describe the emitted report.
+            -- Report-Run-Id and Report-Generated-Utc vary per run by nature;
+            -- golden-output tests must mask those two lines (D-122).
+            DECLARE @MdFindingCount  int = 0;
+            DECLARE @MdCoverageCount int = 0;
+            DECLARE @MdTimelineCount int = 0;
+            SELECT @MdFindingCount  = COUNT(*) FROM #fr_findings;
+            SELECT @MdCoverageCount = COUNT(*) FROM #fr_findings WHERE Category = N'Coverage';
+            SELECT @MdTimelineCount = COUNT(*) FROM #fr_timeline;
+
             SET @ReportMarkdown =
                 N'# SQL Server Flight Recorder Report' + CHAR(13) + CHAR(10) +
                 N'Tool-Version: ' + @ToolVersion + CHAR(13) + CHAR(10) +
                 N'Schema-Version: ' + @SchemaVersion + CHAR(13) + CHAR(10) +
+                N'Rule-Pack-Version: ' + @RulePackVersion + CHAR(13) + CHAR(10) +
+                N'Report-Run-Id: ' + CONVERT(nvarchar(36), NEWID()) + CHAR(13) + CHAR(10) +
+                N'Report-Generated-Utc: ' + CONVERT(nvarchar(30), SYSUTCDATETIME(), 126) + N'Z' + CHAR(13) + CHAR(10) +
+                N'Window-Start-Utc: ' + CONVERT(nvarchar(30), @ReportStartUtc, 126) + N'Z' + CHAR(13) + CHAR(10) +
+                N'Window-End-Utc: ' + CONVERT(nvarchar(30), @ReportEndUtc, 126) + N'Z' + CHAR(13) + CHAR(10) +
+                N'Instance-Fingerprint: ' + ISNULL(CONVERT(nvarchar(200), SERVERPROPERTY(N'ServerName')), N'') + CHAR(13) + CHAR(10) +
+                N'Database-Filter: ' + ISNULL(@DatabaseName, N'(all databases)') + CHAR(13) + CHAR(10) +
+                N'Min-Severity: ' + @MinSeverity + CHAR(13) + CHAR(10) +
                 N'Snapshot-Count: ' + CONVERT(nvarchar(20), @ReportSnapshotCount) + CHAR(13) + CHAR(10) +
+                N'Coverage-Warning-Count: ' + CONVERT(nvarchar(20), @MdCoverageCount) + CHAR(13) + CHAR(10) +
+                N'Finding-Count: ' + CONVERT(nvarchar(20), @MdFindingCount) + CHAR(13) + CHAR(10) +
+                N'Timeline-Event-Count: ' + CONVERT(nvarchar(20), @MdTimelineCount) + CHAR(13) + CHAR(10) +
                 CHAR(13) + CHAR(10) +
                 N'## Findings' + CHAR(13) + CHAR(10);
 
@@ -5692,12 +5718,8 @@ ORDER BY ag.name, ar.replica_server_name, drs.database_id;';
             FROM #fr_timeline
             ORDER BY EventUtc, EventType, SnapshotId;
 
-            -- v0.4 Markdown enrichment (additive; D-085 14-key header above is unchanged).
-            DECLARE @MdSnapCount int = 0;
-            SELECT @MdSnapCount = COUNT(1)
-            FROM dbo.FR_Snapshot
-            WHERE SnapshotUtc >= @ReportStartUtc AND SnapshotUtc <= @ReportEndUtc;
-
+            -- v0.4 Markdown enrichment (human-readable context; additive to
+            -- the D-085 header block emitted above).
             DECLARE @MdWindowStart nvarchar(40);
             DECLARE @MdWindowEnd   nvarchar(40);
 
@@ -5727,7 +5749,7 @@ ORDER BY ag.name, ar.replica_server_name, drs.database_id;';
                                      THEN N'local: ' + ISNULL(@TzName, N'server') ELSE N'UTC' END + N'): '
                     + @MdWindowStart + N' → ' + @MdWindowEnd + NCHAR(13) + NCHAR(10) +
                 N'- Database filter: ' + ISNULL(@DatabaseName, N'(all databases)') + NCHAR(13) + NCHAR(10) +
-                N'- Snapshots in window: ' + CONVERT(nvarchar(10), @MdSnapCount) + NCHAR(13) + NCHAR(10) +
+                N'- Snapshots in window: ' + CONVERT(nvarchar(10), @ReportSnapshotCount) + NCHAR(13) + NCHAR(10) +
                 N'- Min severity: ' + @MinSeverity + N'  |  Max findings: ' + CONVERT(nvarchar(10), @MaxFindings) + NCHAR(13) + NCHAR(10) +
                 N'- Capability: QS=' + CONVERT(nvarchar(1), @HasQueryStoreSupport)
                     + N' AdvHA=' + CONVERT(nvarchar(1), @HasAdvancedHaSupport)
