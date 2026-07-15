@@ -30,9 +30,9 @@
 #   FR-LINT-002  Every external SELECT has TOP(n) ORDER BY, or reads from a
 #                small-DMV allow-listed object (D-137). List in
 #                allow_list_small_dmvs.txt. (Strict mode; opt-in per file via
-#                file-level pragma -- lint:scan-bounded-reads. Off by default
-#                for Part 1 so this PR is green; Part 4 will turn it on for
-#                src/sp_SQLFlightRecorder.sql when collectors land.)
+#                file-level pragma -- lint:scan-bounded-reads. Off by default;
+#                enable per file on sp_SQLFlightRecorder.sql (repo root) when
+#                a stricter bounded-reads pass is wanted.)
 #   FR-LINT-003  No CROSS APPLY sys.dm_exec_query_plan or
 #                sys.dm_exec_text_query_plan (D-046, D-015).
 #   FR-LINT-004  No BEGIN TRAN / BEGIN TRANSACTION (D-138). Future Install
