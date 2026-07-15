@@ -82,9 +82,12 @@ sys.dm_tran_locks
 
 # -- Category: Per-row plan / sql_text fanout ---------------------------------
 # CROSS APPLY against these is the most common way these tools cause harm.
-# sys.dm_exec_sql_text is allowed in v0.2+ via the small-DMV allow-list when
-# bounded by handle; until then, forbid to keep Part 2/3 honest.
-sys.dm_exec_sql_text
+# sys.dm_exec_sql_text moved to allow_list_small_dmvs.txt in v0.4.1, exactly
+# as this file anticipated ("allowed in v0.2+ ... when bounded by handle"):
+# the QueryText collector reads it only by sql_handle of TOP-capped active
+# requests, one row per handle, with an inline lint:allow annotation stating
+# the bound. The plan-XML DMVs above remain forbidden without exception
+# (D-015, D-046, D-082, D-136).
 
 
 # -- Category: Page / extent inspection --------------------------------------

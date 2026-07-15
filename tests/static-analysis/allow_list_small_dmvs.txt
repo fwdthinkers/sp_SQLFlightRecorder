@@ -117,6 +117,17 @@ sys.availability_replicas
 sys.dm_hadr_availability_replica_states
 
 
+# -- Category: Text-by-handle lookup (QueryText collector, v0.2+) -------------
+# Moved from forbidden_dmvs.txt in v0.4.1 per that file's own "allowed in
+# v0.2+ when bounded by handle" note. Permitted ONLY as an APPLY against the
+# sql_handle of already-TOP-capped active requests (one row per handle,
+# never a plan-cache scan); the call site carries an inline
+# "-- lint:allow FR-LINT-001" annotation restating the bound (D-137).
+# This is text-by-handle, NOT plan XML: sys.dm_exec_query_plan and friends
+# remain forbidden without exception (D-015, D-046, D-082, D-136).
+sys.dm_exec_sql_text
+
+
 # =============================================================================
 # Items intentionally NOT on the allow-list (documented here so future
 # contributors do not "fix" the omission). These either belong in collectors
@@ -134,7 +145,6 @@ sys.dm_hadr_availability_replica_states
 #   sys.query_store_*              -- v0.3 only; bounded; not in v0.1.
 #   sys.dm_tran_locks              -- forbidden by FR-LINT-001 until D-047's
 #                                     bounded wrapper lands.
-#   sys.dm_exec_sql_text           -- forbidden by FR-LINT-001 in v0.1.
 #   sys.dm_exec_query_plan*        -- forbidden by FR-LINT-001 and D-046.
 #   sys.dm_db_index_usage_stats    -- excluded from v1 entirely (§11.7).
 #   sys.dm_db_missing_index_*      -- excluded from v1 entirely (§11.7).

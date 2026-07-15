@@ -305,10 +305,10 @@ BEGIN
         PRINT N'  @MaxFindings      Cap findings at 10–2000 rows (default: 200).';
         PRINT N'  @TopN             Collector-side row cap per category (default: 50).';
         PRINT N'  @OutputFormat     Default, FindingsOnly, TimelineOnly, or Markdown (default: Default).';
-        PRINT N'  @IncludeQueryPlans 0=off (default). 1=bounded, opt-in plan collection and shredding';
-        PRINT N'                    for active requests only (bounded by @TopN / MaxRowsPerCollector).';
-        PRINT N'                    Surfaces evidence-only plan findings (missing index, implicit';
-        PRINT N'                    conversion, tempdb spill, warnings, parallelism). May add overhead.';
+        PRINT N'  @IncludeQueryPlans RESERVED; no-op in this build. Plan capture and plan-XML';
+        PRINT N'                    analysis are disabled by design (D-015/D-046/D-082/D-136):';
+        PRINT N'                    this tool never reads sys.dm_exec_query_plan and never';
+        PRINT N'                    shreds plan XML in T-SQL. 1 = emit an honest coverage note.';
         PRINT N'  @DatabaseName     Report: scope DB-bound findings/timeline to one database.';
         PRINT N'                    Instance-level and Coverage findings are always retained.';
         PRINT N'  @MinSeverity      Report filter applied after rules: Informational, Low, Medium,';
@@ -1208,29 +1208,32 @@ CREATE TABLE dbo.FR_Rules (
                 ShortDescription = N'Coverage and capability summary (always emitted)', IntroducedInVersion = N'0.4'
             WHERE RuleId = N'FR_R0026_CoverageAndCapabilitySummary';
 
-            -- Opt-in query-plan evidence rules (surfaced only when @IncludeQueryPlans = 1)
+            -- Query-plan rules FR_R0030–FR_R0034: cataloged but DISABLED.
+            -- Their original implementation shredded plan XML from
+            -- sys.dm_exec_query_plan, which locked decisions D-015/D-046/
+            -- D-082/D-136 forbid. RuleIds are never renamed or reused
+            -- (D-089); lifecycle state carries the truth (D-090). They stay
+            -- Disabled until a decision-log-approved plan analysis design
+            -- exists.
             IF NOT EXISTS (SELECT 1 FROM dbo.FR_Rules WHERE RuleId = N'FR_R0030_PlanMissingIndex')
-                INSERT INTO dbo.FR_Rules VALUES (N'FR_R0030_PlanMissingIndex', N'QueryPlan', N'Medium', N'Medium', N'Inferred', N'Active', N'Plan shows missing-index evidence', N'0.2');
+                INSERT INTO dbo.FR_Rules VALUES (N'FR_R0030_PlanMissingIndex', N'QueryPlan', N'Medium', N'Medium', N'Inferred', N'Disabled', N'Plan shows missing-index evidence (no compliant implementation; disabled)', N'0.2');
             IF NOT EXISTS (SELECT 1 FROM dbo.FR_Rules WHERE RuleId = N'FR_R0031_PlanImplicitConversion')
-                INSERT INTO dbo.FR_Rules VALUES (N'FR_R0031_PlanImplicitConversion', N'QueryPlan', N'Low', N'Medium', N'Inferred', N'Active', N'Plan shows implicit conversion evidence', N'0.2');
+                INSERT INTO dbo.FR_Rules VALUES (N'FR_R0031_PlanImplicitConversion', N'QueryPlan', N'Low', N'Medium', N'Inferred', N'Disabled', N'Plan shows implicit conversion evidence (no compliant implementation; disabled)', N'0.2');
             IF NOT EXISTS (SELECT 1 FROM dbo.FR_Rules WHERE RuleId = N'FR_R0032_PlanSpillToTempDb')
-                INSERT INTO dbo.FR_Rules VALUES (N'FR_R0032_PlanSpillToTempDb', N'QueryPlan', N'Medium', N'Medium', N'Inferred', N'Active', N'Plan shows tempdb spill evidence', N'0.2');
+                INSERT INTO dbo.FR_Rules VALUES (N'FR_R0032_PlanSpillToTempDb', N'QueryPlan', N'Medium', N'Medium', N'Inferred', N'Disabled', N'Plan shows tempdb spill evidence (no compliant implementation; disabled)', N'0.2');
             IF NOT EXISTS (SELECT 1 FROM dbo.FR_Rules WHERE RuleId = N'FR_R0033_PlanWarnings')
-                INSERT INTO dbo.FR_Rules VALUES (N'FR_R0033_PlanWarnings', N'QueryPlan', N'Low', N'Medium', N'Inferred', N'Active', N'Plan contains optimizer warnings', N'0.2');
+                INSERT INTO dbo.FR_Rules VALUES (N'FR_R0033_PlanWarnings', N'QueryPlan', N'Low', N'Medium', N'Inferred', N'Disabled', N'Plan contains optimizer warnings (no compliant implementation; disabled)', N'0.2');
             IF NOT EXISTS (SELECT 1 FROM dbo.FR_Rules WHERE RuleId = N'FR_R0034_PlanParallelism')
-                INSERT INTO dbo.FR_Rules VALUES (N'FR_R0034_PlanParallelism', N'QueryPlan', N'Low', N'Low', N'Inferred', N'Active', N'Plan uses parallelism', N'0.2');
+                INSERT INTO dbo.FR_Rules VALUES (N'FR_R0034_PlanParallelism', N'QueryPlan', N'Low', N'Low', N'Inferred', N'Disabled', N'Plan uses parallelism (no compliant implementation; disabled)', N'0.2');
 
-            -- Opt-in query-plan rules (evidence-only; surfaced when @IncludeQueryPlans = 1)
-            IF NOT EXISTS (SELECT 1 FROM dbo.FR_Rules WHERE RuleId = N'FR_R0030_PlanMissingIndex')
-                INSERT INTO dbo.FR_Rules VALUES (N'FR_R0030_PlanMissingIndex', N'QueryPlan', N'Medium', N'Medium', N'Inferred', N'Active', N'Plan shows missing-index evidence', N'0.1');
-            IF NOT EXISTS (SELECT 1 FROM dbo.FR_Rules WHERE RuleId = N'FR_R0031_PlanImplicitConversion')
-                INSERT INTO dbo.FR_Rules VALUES (N'FR_R0031_PlanImplicitConversion', N'QueryPlan', N'Low', N'Medium', N'Inferred', N'Active', N'Plan shows implicit conversion evidence', N'0.1');
-            IF NOT EXISTS (SELECT 1 FROM dbo.FR_Rules WHERE RuleId = N'FR_R0032_PlanSpillToTempDb')
-                INSERT INTO dbo.FR_Rules VALUES (N'FR_R0032_PlanSpillToTempDb', N'QueryPlan', N'Medium', N'Medium', N'Inferred', N'Active', N'Plan shows tempdb spill evidence', N'0.1');
-            IF NOT EXISTS (SELECT 1 FROM dbo.FR_Rules WHERE RuleId = N'FR_R0033_PlanWarnings')
-                INSERT INTO dbo.FR_Rules VALUES (N'FR_R0033_PlanWarnings', N'QueryPlan', N'Low', N'Medium', N'Inferred', N'Active', N'Plan contains optimizer warnings', N'0.1');
-            IF NOT EXISTS (SELECT 1 FROM dbo.FR_Rules WHERE RuleId = N'FR_R0034_PlanParallelism')
-                INSERT INTO dbo.FR_Rules VALUES (N'FR_R0034_PlanParallelism', N'QueryPlan', N'Low', N'Low', N'Inferred', N'Active', N'Plan uses parallelism', N'0.1');
+            -- Forward-only migration for repositories seeded by earlier 0.x
+            -- builds where these five rules were marked Active.
+            UPDATE dbo.FR_Rules
+            SET LifecycleState = N'Disabled'
+            WHERE RuleId IN (N'FR_R0030_PlanMissingIndex', N'FR_R0031_PlanImplicitConversion',
+                             N'FR_R0032_PlanSpillToTempDb', N'FR_R0033_PlanWarnings',
+                             N'FR_R0034_PlanParallelism')
+              AND LifecycleState <> N'Disabled';
 
             -- Optional SQL Agent job creation. Explicit opt-in only.
             IF @CreateAgentJob = 1
@@ -1734,7 +1737,9 @@ END;
         UNION ALL SELECT N'HasAdvancedHaSupport', CONVERT(nvarchar(1), @HasAdvancedHaSupport)
         UNION ALL SELECT N'HasBufferPoolSupport', CONVERT(nvarchar(1), @HasBufferPoolSupport)
         UNION ALL SELECT N'HasTimeZoneSupport', CONVERT(nvarchar(1), @HasTimeZoneSupport)
-        UNION ALL SELECT N'PlanAnalysisSupport', CASE WHEN OBJECT_ID(N'dbo.FR_QueryPlan', N'U') IS NOT NULL THEN N'1' ELSE N'0' END
+        -- Plan analysis is disabled by design (D-015/D-046/D-082); the key is
+        -- kept in the closed set (D-127) and reports 0 in every build.
+        UNION ALL SELECT N'PlanAnalysisSupport', N'0'
         UNION ALL SELECT N'EnableAdvancedHaCollector', ISNULL((SELECT ConfigValue FROM dbo.FR_Config WHERE ConfigKey = N'EnableAdvancedHaCollector'), N'')
         UNION ALL SELECT N'EnableBufferPoolCollector', ISNULL((SELECT ConfigValue FROM dbo.FR_Config WHERE ConfigKey = N'EnableBufferPoolCollector'), N'')
         UNION ALL SELECT N'BaselineLookbackHours', ISNULL((SELECT ConfigValue FROM dbo.FR_Config WHERE ConfigKey = N'BaselineLookbackHours'), N'')
@@ -1969,7 +1974,7 @@ END;
     END;
 
     -- =========================================================================
-    -- Mode: INSTALLDEMODATA (D-182, refined by D-192)
+    -- Mode: INSTALLDEMODATA (D-182)
     -- Clearly-synthetic, idempotent demo rows in dbo.FR_* so Report shows sample
     -- findings. NO production DMVs. Refuses if real (non-demo) snapshots exist.
     -- =========================================================================
@@ -1986,7 +1991,7 @@ END;
 
         DECLARE @DemoFingerprint nvarchar(200) = N'SQLFlightRecorder-DEMO';
 
-        -- Safe-by-default refusal (D-192): never mix demo and real data. No force
+        -- Safe-by-default refusal: never mix demo and real data. No force
         -- flag exists in the public surface, so refuse cleanly if real data exists.
         IF EXISTS (SELECT 1 FROM dbo.FR_Snapshot
                    WHERE ISNULL(InstanceFingerprint, N'') <> @DemoFingerprint)
@@ -2007,7 +2012,7 @@ END;
             DECLARE @demoDbId int = DB_ID();
             DECLARE @demoDbName sysname = DB_NAME();
 
-            BEGIN TRAN;
+            BEGIN TRAN;  -- lint:allow FR-LINT-004 reason: atomic demo-data seed; ROLLBACK in CATCH; touches only FR_* rows
 
             -- Idempotent cleanup of any prior demo rows (children → snapshot → runlog).
             IF OBJECT_ID(N'dbo.FR_QueryStoreTopN', N'U') IS NOT NULL
@@ -2403,7 +2408,7 @@ END;
                                r.query_hash AS QueryHash,
                                st.text      AS SqlText
                         FROM sys.dm_exec_requests AS r
-                        OUTER APPLY sys.dm_exec_sql_text(r.sql_handle) AS st
+                        OUTER APPLY sys.dm_exec_sql_text(r.sql_handle) AS st  -- lint:allow FR-LINT-001 reason: bounded by sql_handle of TOP-capped active requests; one row per handle; never a cache scan (D-137). Unlike the plan DMVs (D-015/D-046), text-by-handle is sanctioned for v0.2+ per the forbidden-list note.
                         WHERE r.session_id <> @@SPID
                           AND r.query_hash IS NOT NULL
                           AND st.text IS NOT NULL
@@ -2586,51 +2591,18 @@ END;
                 END CATCH;
             END;
 
-            -- Query plan collector (opt-in: @IncludeQueryPlans = 1 only).
-            -- Bounded to currently-active requests. No plan-cache scan.
-            IF @IncludeQueryPlans = 1 AND OBJECT_ID(N'dbo.FR_QueryPlan', N'U') IS NOT NULL
+            -- Query plan capture is DISABLED BY DESIGN. Locked decisions
+            -- D-015 / D-046 / D-082 / D-136 forbid sys.dm_exec_query_plan and
+            -- any plan-XML shredding in T-SQL, opt-in or not. Until a future
+            -- decision-log-approved design exists, @IncludeQueryPlans = 1 is
+            -- an honest no-op: one Skipped step (D-054) and one Informational
+            -- coverage finding in Report. dbo.FR_QueryPlan remains for
+            -- forward schema compatibility (D-038) and is never written.
+            IF @IncludeQueryPlans = 1
             BEGIN
-                INSERT INTO dbo.FR_RunLogStep (RunId, StepName, StartUtc, Status)
-                VALUES (@CollectRunId, N'QueryPlans', SYSUTCDATETIME(), N'InProgress');
-
-                SET @CollectStepId = SCOPE_IDENTITY();
-
-                BEGIN TRY
-                    INSERT INTO dbo.FR_QueryPlan
-                    (
-                        SnapshotId, SnapshotUtc, DatabaseId, SessionId,
-                        QueryHash, QueryPlanHash, PlanXml, PlanXmlHash
-                    )
-                    SELECT TOP (@CollectMaxRows)
-                        @CollectSnapshotId,
-                        @CollectSnapshotUtc,
-                        ISNULL(r.database_id, 0),
-                        r.session_id,
-                        r.query_hash,
-                        r.query_plan_hash,
-                        qp.query_plan,
-                        HASHBYTES('SHA2_256', CONVERT(nvarchar(max), qp.query_plan))
-                    FROM sys.dm_exec_requests AS r
-                    OUTER APPLY sys.dm_exec_query_plan(r.plan_handle) AS qp
-                    WHERE r.session_id <> @@SPID
-                      AND r.plan_handle IS NOT NULL
-                      AND qp.query_plan IS NOT NULL
-                    ORDER BY r.cpu_time DESC, r.logical_reads DESC, r.session_id ASC;
-
-                    SET @CollectRows = @@ROWCOUNT;
-
-                    UPDATE dbo.FR_RunLogStep
-                    SET EndUtc = SYSUTCDATETIME(), Status = N'Success', RowsCollected = @CollectRows
-                    WHERE RunStepId = @CollectStepId;
-                END TRY
-                BEGIN CATCH
-                    SET @CollectStatus = N'PartialSuccess';
-                    SET @CollectError = ERROR_MESSAGE();
-
-                    UPDATE dbo.FR_RunLogStep
-                    SET EndUtc = SYSUTCDATETIME(), Status = N'Error', ErrorMessage = @CollectError
-                    WHERE RunStepId = @CollectStepId;
-                END CATCH;
+                INSERT INTO dbo.FR_RunLogStep (RunId, StepName, StartUtc, EndUtc, Status, RowsCollected, Reason)
+                VALUES (@CollectRunId, N'QueryPlans', SYSUTCDATETIME(), SYSUTCDATETIME(), N'Skipped', 0,
+                        N'Plan capture disabled by design (D-015/D-046/D-082); @IncludeQueryPlans is reserved.');
             END;
 
             -- ============================================================
@@ -2984,48 +2956,6 @@ END;
                         SET EndUtc = SYSUTCDATETIME(), Status = N'Success', RowsCollected = @CollectRows
                         WHERE RunStepId = @CollectStepId;
                     END
-                END TRY
-                BEGIN CATCH
-                    SET @CollectStatus = N'PartialSuccess';
-                    SET @CollectError = ERROR_MESSAGE();
-                    UPDATE dbo.FR_RunLogStep
-                    SET EndUtc = SYSUTCDATETIME(), Status = N'Error', ErrorMessage = @CollectError
-                    WHERE RunStepId = @CollectStepId;
-                END CATCH;
-            END;
-
-            -- ============================================================
-            -- Opt-in collector: Query plans (D-188) — @IncludeQueryPlans = 1 ONLY.
-            -- Active-request plan handles only; never the whole plan cache.
-            -- ============================================================
-            IF @IncludeQueryPlans = 1 AND OBJECT_ID(N'dbo.FR_QueryPlan', N'U') IS NOT NULL
-            BEGIN
-                INSERT INTO dbo.FR_RunLogStep (RunId, StepName, StartUtc, Status)
-                VALUES (@CollectRunId, N'QueryPlans', SYSUTCDATETIME(), N'InProgress');
-                SET @CollectStepId = SCOPE_IDENTITY();
-                BEGIN TRY
-                    INSERT INTO dbo.FR_QueryPlan
-                    (
-                        SnapshotId, SnapshotUtc, DatabaseId, SessionId,
-                        QueryHash, QueryPlanHash, PlanXml, PlanXmlHash
-                    )
-                    SELECT TOP (@CollectMaxRows)
-                        @CollectSnapshotId, @CollectSnapshotUtc,
-                        ISNULL(r.database_id, 0), r.session_id,
-                        r.query_hash, r.query_plan_hash,
-                        qp.query_plan,
-                        HASHBYTES('SHA2_256', CONVERT(nvarchar(max), qp.query_plan))
-                    FROM sys.dm_exec_requests AS r
-                    OUTER APPLY sys.dm_exec_query_plan(r.plan_handle) AS qp
-                    WHERE r.session_id <> @@SPID
-                      AND r.plan_handle IS NOT NULL
-                      AND qp.query_plan IS NOT NULL
-                    ORDER BY r.cpu_time DESC, r.logical_reads DESC, r.session_id ASC;
-
-                    SET @CollectRows = @@ROWCOUNT;
-                    UPDATE dbo.FR_RunLogStep
-                    SET EndUtc = SYSUTCDATETIME(), Status = N'Success', RowsCollected = @CollectRows
-                    WHERE RunStepId = @CollectStepId;
                 END TRY
                 BEGIN CATCH
                     SET @CollectStatus = N'PartialSuccess';
@@ -4620,242 +4550,30 @@ ORDER BY ag.name, ar.replica_server_name, drs.database_id;';
             END;
         END;
 
-        -- Query plan shredding (opt-in: @IncludeQueryPlans = 1 only).
-        -- Bounded by @TopN, namespace-guarded, single statement, TRY/CATCH.
-        -- Evidence-only: language is deliberately non-prescriptive.
-        IF @IncludeQueryPlans = 1 AND OBJECT_ID(N'dbo.FR_QueryPlan', N'U') IS NOT NULL
+        -- Query plan analysis is DISABLED BY DESIGN (D-015/D-046/D-082/D-136):
+        -- plan XML is never parsed or shredded in T-SQL. When the caller asks
+        -- for plans, say so honestly with exactly one Informational coverage
+        -- finding instead of silence. Rules FR_R0030-FR_R0034 are retained in
+        -- the FR_Rules catalog as Disabled (D-089/D-090) and have no logic.
+        IF @IncludeQueryPlans = 1
         BEGIN
-            BEGIN TRY
-                ;WITH XMLNAMESPACES (DEFAULT N'http://schemas.microsoft.com/sqlserver/2004/07/showplan'),
-                BoundedPlans AS
-                (
-                    SELECT TOP (@TopN)
-                          qp.QueryPlanId
-                        , qp.SnapshotUtc
-                        , qp.DatabaseId
-                        , qp.SessionId
-                        , qp.PlanXml
-                    FROM dbo.FR_QueryPlan AS qp
-                    WHERE qp.SnapshotUtc >= @ReportStartUtc
-                      AND qp.SnapshotUtc <= @ReportEndUtc
-                      AND qp.PlanXml IS NOT NULL
-                    ORDER BY qp.SnapshotUtc DESC, qp.QueryPlanId DESC
-                ),
-                Signals AS
-                (
-                    SELECT
-                          bp.QueryPlanId
-                        , bp.SnapshotUtc
-                        , bp.DatabaseId
-                        , bp.SessionId
-                        , s.RuleId, s.Severity, s.Confidence, s.Title, s.Summary, s.Recommendation
-                    FROM BoundedPlans AS bp
-                    CROSS APPLY (VALUES
-                        (N'FR_R0030_PlanMissingIndex', N'Medium', N'Medium',
-                         N'Plan shows evidence consistent with a missing index',
-                         N'Captured plan contains missing-index information.',
-                         N'Consider reviewing the workload and validating whether an index change is justified. Test impact before any change; do not create indexes blindly.',
-                         CASE WHEN bp.PlanXml.exist('//MissingIndexes') = 1 THEN 1 ELSE 0 END),
-                        (N'FR_R0031_PlanImplicitConversion', N'Low', N'Medium',
-                         N'Plan shows evidence consistent with an implicit conversion',
-                         N'Captured plan contains a plan-affecting convert (possible implicit conversion).',
-                         N'Consider reviewing whether data types between predicates and columns match. Validate before changing schema or queries.',
-                         CASE WHEN bp.PlanXml.exist('//Warnings/PlanAffectingConvert') = 1 THEN 1 ELSE 0 END),
-                        (N'FR_R0032_PlanSpillToTempDb', N'Medium', N'Medium',
-                         N'Plan shows evidence consistent with a tempdb spill',
-                         N'Captured plan contains a spill-to-tempdb warning.',
-                         N'Consider reviewing cardinality estimates and memory grants for this workload. Validate before acting.',
-                         CASE WHEN bp.PlanXml.exist('//Warnings/SpillToTempDb') = 1 THEN 1 ELSE 0 END),
-                        (N'FR_R0033_PlanWarnings', N'Low', N'Medium',
-                         N'Plan contains optimizer warnings',
-                         N'Captured plan contains one or more optimizer warnings.',
-                         N'Consider reviewing the plan warnings to understand potential estimation or execution issues.',
-                         CASE WHEN bp.PlanXml.exist('//Warnings') = 1 THEN 1 ELSE 0 END),
-                        (N'FR_R0034_PlanParallelism', N'Low', N'Low',
-                         N'Plan uses parallelism',
-                         N'Captured plan contains parallel operators.',
-                         N'Consider validating whether parallelism is appropriate for this workload (review cost threshold / MAXDOP) before changing settings.',
-                         CASE WHEN bp.PlanXml.exist('//RelOp[@Parallel="1"]') = 1 THEN 1 ELSE 0 END)
-                    ) AS s(RuleId, Severity, Confidence, Title, Summary, Recommendation, Present)
-                    WHERE s.Present = 1
-                )
-                INSERT INTO #fr_findings
-                (
-                    Severity, Confidence, EvidenceType, Category, RuleId,
-                    Title, Summary, Evidence, Recommendation,
-                    DatabaseName, SessionId, StartTimeUtc, EndTimeUtc, MoreInfo
-                )
-                SELECT
-                      Severity
-                    , Confidence
-                    , N'Inferred'
-                    , N'QueryPlan'
-                    , RuleId
-                    , Title
-                    , Summary
-                    , CONCAT(N'PlanId=', QueryPlanId, N'; SessionId=', SessionId)
-                    , Recommendation
-                    , DB_NAME(DatabaseId)
-                    , SessionId
-                    , SnapshotUtc
-                    , SnapshotUtc
-                    , N'Evidence shredded from captured plan XML. This is evidence consistent with the pattern, not a confirmed root cause or a prescription to act.'
-                FROM Signals;
-            END TRY
-            BEGIN CATCH
-                INSERT INTO #fr_findings
-                (
-                    Severity, Confidence, EvidenceType, Category, RuleId,
-                    Title, Summary, Evidence, Recommendation,
-                    StartTimeUtc, EndTimeUtc, MoreInfo
-                )
-                VALUES
-                (
-                    N'Informational', N'High', N'Observed', N'Coverage',
-                    N'FR_R0026_CoverageAndCapabilitySummary',
-                    N'Query plan shredding encountered an error',
-                    N'Plan parsing failed; other findings are unaffected.',
-                    LEFT(ERROR_MESSAGE(), 1900),
-                    N'Re-run Report; if it persists, plan XML may be malformed or unsupported on this version.',
-                    @ReportStartUtc, @ReportEndUtc,
-                    N'Plan shredding is best-effort and isolated; it never fails the whole Report.'
-                );
-            END CATCH;
-
-            -- No plans captured in window: surface explicitly (not silently).
-            IF NOT EXISTS (
-                SELECT 1 FROM dbo.FR_QueryPlan
-                WHERE SnapshotUtc >= @ReportStartUtc AND SnapshotUtc <= @ReportEndUtc
+            INSERT INTO #fr_findings
+            (
+                Severity, Confidence, EvidenceType, Category, RuleId,
+                Title, Summary, Evidence, Recommendation,
+                StartTimeUtc, EndTimeUtc, MoreInfo
             )
-            BEGIN
-                INSERT INTO #fr_findings
-                (
-                    Severity, Confidence, EvidenceType, Category, RuleId,
-                    Title, Summary, Evidence, Recommendation,
-                    StartTimeUtc, EndTimeUtc, MoreInfo
-                )
-                VALUES
-                (
-                    N'Informational', N'High', N'Observed', N'Coverage',
-                    N'FR_R0026_CoverageAndCapabilitySummary',
-                    N'Query plans requested but none captured',
-                    N'@IncludeQueryPlans = 1 but no plan XML was captured in the report window.',
-                    N'Plans are captured only for active requests at Collect time; none were active or retrievable.',
-                    N'Run Collect with @IncludeQueryPlans = 1 while the workload is active to capture plans.',
-                    @ReportStartUtc, @ReportEndUtc,
-                    N'No plan rows in FR_QueryPlan for the selected window.'
-                );
-            END;
-        END;
-
-        -- =====================================================================
-        -- Opt-in query-plan shredding (D-188). @IncludeQueryPlans = 1 ONLY.
-        -- Bounded by @TopN; evidence-only; never fails the Report.
-        -- =====================================================================
-        IF @IncludeQueryPlans = 1 AND OBJECT_ID(N'dbo.FR_QueryPlan', N'U') IS NOT NULL
-        BEGIN
-            BEGIN TRY
-                ;WITH XMLNAMESPACES (DEFAULT N'http://schemas.microsoft.com/sqlserver/2004/07/showplan'),
-                BoundedPlans AS
-                (
-                    SELECT TOP (@TopN)
-                          qp.QueryPlanId, qp.SnapshotUtc, qp.DatabaseId, qp.SessionId, qp.PlanXml
-                    FROM dbo.FR_QueryPlan AS qp
-                    WHERE qp.SnapshotUtc >= @ReportStartUtc
-                      AND qp.SnapshotUtc <= @ReportEndUtc
-                      AND qp.PlanXml IS NOT NULL
-                    ORDER BY qp.SnapshotUtc DESC, qp.QueryPlanId DESC
-                ),
-                Signals AS
-                (
-                    SELECT bp.QueryPlanId, bp.SnapshotUtc, bp.DatabaseId, bp.SessionId,
-                           s.RuleId, s.Severity, s.Confidence, s.Title, s.Summary, s.Recommendation
-                    FROM BoundedPlans AS bp
-                    CROSS APPLY (VALUES
-                        (N'FR_R0030_PlanMissingIndex', N'Medium', N'Medium',
-                         N'Plan shows evidence consistent with a missing index',
-                         N'Captured plan contains missing-index information.',
-                         N'Consider reviewing the workload and validating whether an index change is justified only after testing impact; do not create indexes blindly.',
-                         CASE WHEN bp.PlanXml.exist('//MissingIndexes') = 1 THEN 1 ELSE 0 END),
-                        (N'FR_R0031_PlanImplicitConversion', N'Low', N'Medium',
-                         N'Plan shows evidence consistent with an implicit conversion',
-                         N'Captured plan contains a plan-affecting convert.',
-                         N'Consider reviewing whether predicate and column data types match only after validating this query is relevant.',
-                         CASE WHEN bp.PlanXml.exist('//Warnings/PlanAffectingConvert') = 1 THEN 1 ELSE 0 END),
-                        (N'FR_R0032_PlanSpillToTempDb', N'Medium', N'Medium',
-                         N'Plan shows evidence consistent with a tempdb spill',
-                         N'Captured plan contains a spill-to-tempdb warning.',
-                         N'Consider reviewing cardinality estimates and memory grants only after validating the spill is material.',
-                         CASE WHEN bp.PlanXml.exist('//Warnings/SpillToTempDb') = 1 THEN 1 ELSE 0 END),
-                        (N'FR_R0033_PlanWarnings', N'Low', N'Medium',
-                         N'Plan contains optimizer warnings',
-                         N'Captured plan contains one or more optimizer warnings.',
-                         N'Consider reviewing the plan warnings to understand potential estimation or execution issues.',
-                         CASE WHEN bp.PlanXml.exist('//Warnings') = 1 THEN 1 ELSE 0 END),
-                        (N'FR_R0034_PlanParallelism', N'Low', N'Low',
-                         N'Plan uses parallelism',
-                         N'Captured plan contains parallel operators.',
-                         N'Consider validating whether parallelism is appropriate (review cost threshold / MAXDOP) only after confirming relevance.',
-                         CASE WHEN bp.PlanXml.exist('//RelOp[@Parallel="1"]') = 1 THEN 1 ELSE 0 END)
-                    ) AS s(RuleId, Severity, Confidence, Title, Summary, Recommendation, Present)
-                    WHERE s.Present = 1
-                )
-                INSERT INTO #fr_findings
-                (
-                    Severity, Confidence, EvidenceType, Category, RuleId,
-                    Title, Summary, Evidence, Recommendation,
-                    DatabaseName, SessionId, StartTimeUtc, EndTimeUtc, MoreInfo
-                )
-                SELECT
-                      Severity, Confidence, N'Inferred', N'QueryPlan', RuleId,
-                      Title, Summary,
-                      CONCAT(N'PlanId=', QueryPlanId, N'; SessionId=', SessionId),
-                      Recommendation,
-                      DB_NAME(DatabaseId), SessionId, SnapshotUtc, SnapshotUtc,
-                      N'Evidence shredded from captured plan XML (D-188). Evidence consistent with the pattern; not a confirmed root cause.'
-                FROM Signals;
-            END TRY
-            BEGIN CATCH
-                INSERT INTO #fr_findings
-                (
-                    Severity, Confidence, EvidenceType, Category, RuleId,
-                    Title, Summary, Evidence, Recommendation,
-                    StartTimeUtc, EndTimeUtc, MoreInfo
-                )
-                VALUES
-                (
-                    N'Informational', N'High', N'Observed', N'Coverage',
-                    N'FR_R0026_CoverageAndCapabilitySummary',
-                    N'Query plan shredding encountered an error',
-                    N'Plan parsing failed; other findings are unaffected.',
-                    LEFT(ERROR_MESSAGE(), 1900),
-                    N'Re-run Report; if it persists, plan XML may be malformed or unsupported on this version.',
-                    @ReportStartUtc, @ReportEndUtc,
-                    N'Plan shredding is best-effort and isolated (D-188); it never fails the whole Report.'
-                );
-            END CATCH;
-
-            IF NOT EXISTS (
-                SELECT 1 FROM dbo.FR_QueryPlan
-                WHERE SnapshotUtc >= @ReportStartUtc AND SnapshotUtc <= @ReportEndUtc
-            )
-                INSERT INTO #fr_findings
-                (
-                    Severity, Confidence, EvidenceType, Category, RuleId,
-                    Title, Summary, Evidence, Recommendation,
-                    StartTimeUtc, EndTimeUtc, MoreInfo
-                )
-                VALUES
-                (
-                    N'Informational', N'High', N'Observed', N'Coverage',
-                    N'FR_R0026_CoverageAndCapabilitySummary',
-                    N'Query plans requested but none captured',
-                    N'@IncludeQueryPlans = 1 but no plan XML was captured in the report window.',
-                    N'Plans are captured only for active requests at Collect time; none were active or retrievable.',
-                    N'Run Collect with @IncludeQueryPlans = 1 while the workload is active.',
-                    @ReportStartUtc, @ReportEndUtc,
-                    N'No FR_QueryPlan rows for the selected window.'
-                );
+            VALUES
+            (
+                N'Informational', N'High', N'Observed', N'Coverage',
+                N'FR_R0026_CoverageAndCapabilitySummary',
+                N'Query plan analysis is not available in this build',
+                N'@IncludeQueryPlans = 1 was requested, but plan capture and plan-XML analysis are disabled by design.',
+                N'Locked design decisions D-015, D-046, D-082, and D-136 forbid reading sys.dm_exec_query_plan and shredding plan XML in T-SQL.',
+                N'For plan-level evidence, consider reviewing the query in Query Store, which retains plans without this tool parsing them.',
+                @ReportStartUtc, @ReportEndUtc,
+                N'Rules FR_R0030-FR_R0034 are cataloged as Disabled until a decision-log-approved plan analysis design exists.'
+            );
         END;
 
         -- =====================================================================
@@ -5205,7 +4923,7 @@ ORDER BY ag.name, ar.replica_server_name, drs.database_id;';
         END;
 
         -- FR_R0016 TopCpuConsumerInWindow (QueryStore / Medium / High / Observed)
-        -- Top-5 by total CPU; duration/reads carried as supplementary evidence (D-191).
+        -- Top-5 by total CPU; duration/reads carried as supplementary evidence.
         IF OBJECT_ID(N'dbo.FR_QueryStoreTopN', N'U') IS NOT NULL
            AND CHARINDEX(N';FR_R0016_TopCpuConsumerInWindow;', @DisabledRules) = 0
         BEGIN
@@ -5590,7 +5308,7 @@ ORDER BY ag.name, ar.replica_server_name, drs.database_id;';
             ORDER BY st.RowsCollected DESC;
         END;
 
-        -- FR_R0006 corroboration from the error log (D-191). Emitted only if the
+        -- FR_R0006 corroboration from the error log. Emitted only if the
         -- v0.1 start-time logic did not already emit FR_R0006 (no intra-rule dup).
         IF OBJECT_ID(N'dbo.FR_ErrorLog', N'U') IS NOT NULL
            AND CHARINDEX(N';FR_R0006_ServerRestartDuringWindow;', @DisabledRules) = 0
@@ -5610,7 +5328,7 @@ ORDER BY ag.name, ar.replica_server_name, drs.database_id;';
                 LEFT(N'Restart log line: ' + ISNULL(e.LogText, N''), 1900),
                 N'Consider correlating the restart time with the incident only after validating whether the restart was expected.',
                 e.LogDateUtc, e.LogDateUtc,
-                N'Corroborating evidence from FR_ErrorLog (Category=Restart); independent of snapshot start-time delta (D-191).'
+                N'Corroborating evidence from FR_ErrorLog (Category=Restart); independent of snapshot start-time delta.'
             FROM dbo.FR_ErrorLog AS e
             WHERE e.Category = N'Restart'
               AND e.LogDateUtc >= @ReportStartUtc AND e.LogDateUtc <= @ReportEndUtc
@@ -5797,7 +5515,7 @@ ORDER BY ag.name, ar.replica_server_name, drs.database_id;';
                     N'; AdvHA=', CONVERT(nvarchar(1), @HasAdvancedHaSupport),
                     N'; BufferPool=', CONVERT(nvarchar(1), @HasBufferPoolSupport),
                     N'; TimeDisplay=', CONVERT(nvarchar(1), @HasTimeZoneSupport),
-                    N'; PlanAnalysis=', CASE WHEN OBJECT_ID(N'dbo.FR_QueryPlan', N'U') IS NOT NULL THEN N'1' ELSE N'0' END,
+                    N'; PlanAnalysis=0',
                     N'; ErrorLog=', ISNULL((SELECT ConfigValue FROM dbo.FR_Config WHERE ConfigKey = N'CollectErrorLog'), N'0')), 1000)
             );
         END TRY
@@ -5812,11 +5530,6 @@ ORDER BY ag.name, ar.replica_server_name, drs.database_id;';
                     LEFT(ERROR_MESSAGE(), 1900), N'Address the error before relying on coverage completeness.',
                     NULL, NULL, NULL, @ReportStartUtc, @ReportEndUtc, N'FR_R0026 degraded.');
         END CATCH;
-
-        -- (Removed in v0.3) Legacy @IncludeQueryPlans "not available in this build"
-        -- coverage finding deleted: it contradicted the bounded opt-in plan
-        -- shredding implemented per D-188 earlier in this Report block.
-
 
         -- =====================================================================
         -- v0.4 dedup + ranking (D-074 intra-category only; D-075 Coverage exempt;
