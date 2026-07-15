@@ -19,8 +19,8 @@
 --   * Collect / CollectDebug / Report / Configure / Purge:
 --       implemented as the procedure evolves through the v0.1 roadmap
 --
--- Tool-Version:   0.4.0
--- Build-Date-Utc: 2026-06-16
+-- Tool-Version:   0.4.1
+-- Build-Date-Utc: 2026-07-15
 -- Design:         docs/design.md
 -- Decisions:      docs/decisions.md
 --
@@ -83,12 +83,15 @@ BEGIN
     -- =========================================================================
     -- Constants and version info
     -- =========================================================================
-    DECLARE @ToolVersion             nvarchar(30)  = N'0.4.0';
-    DECLARE @BuildDateUtc            datetime2(3)  = CONVERT(datetime2(3), '2026-06-16T00:00:00');
+    DECLARE @ToolVersion             nvarchar(30)  = N'0.4.1';
+    DECLARE @BuildDateUtc            datetime2(3)  = CONVERT(datetime2(3), '2026-07-15T00:00:00');
+    -- SchemaVersion stays 0.4.0: v0.4.1 changes no DDL (rule lifecycle flips
+    -- are seed data, not schema). Forward-only marker per D-038.
     DECLARE @SchemaVersion            nvarchar(20) = N'0.4.0';
     -- Rule-pack version is part of the Markdown header contract (D-085).
-    -- It tracks the minor release that last changed rule logic or catalog.
-    DECLARE @RulePackVersion         nvarchar(20)  = N'0.4';
+    -- It names the release that last changed rule logic or the rule catalog
+    -- (0.4.1 disabled FR_R0030-FR_R0034).
+    DECLARE @RulePackVersion         nvarchar(20)  = N'0.4.1';
     DECLARE @SupportedSqlServerRange nvarchar(50)  = N'SQL Server 2012–2025';
     DECLARE @PartNumber              int           = 1;
     DECLARE @PartTotal               int           = 1;
@@ -177,9 +180,6 @@ BEGIN
 
     -- @Debug routes Collect to safe CollectDebug (D-128): no collector rows,
     -- a single FR_RunLog row written as Mode = 'CollectDebug'.
-    IF UPPER(@ModeNormalized) = N'COLLECT' AND @Debug = 1
-        SET @ModeNormalized = N'CollectDebug';
-
     IF UPPER(@ModeNormalized) = N'COLLECT' AND @Debug = 1
         SET @ModeNormalized = N'CollectDebug';
 
@@ -304,7 +304,6 @@ BEGIN
         PRINT N'PARAMETERS';
         PRINT N'----------';
         PRINT N'  @Mode             Which mode to run (default: Help).';
-        PRINT N'  @MinSeverity      Report filter: Informational, Low, Medium, High, Critical (default: Low).';
         PRINT N'  @MaxFindings      Cap findings at 10–2000 rows (default: 200).';
         PRINT N'  @TopN             Collector-side row cap per category (default: 50).';
         PRINT N'  @OutputFormat     Default, FindingsOnly, TimelineOnly, or Markdown (default: Default).';
@@ -316,11 +315,11 @@ BEGIN
         PRINT N'                    Instance-level and Coverage findings are always retained.';
         PRINT N'  @MinSeverity      Report filter applied after rules: Informational, Low, Medium,';
         PRINT N'                    High, Critical (default: Low). Critical and Coverage are never hidden.';
-        PRINT N'  @Debug            1 with @Mode=Collect routes to safe CollectDebug (no collector rows).';
+        PRINT N'  @Debug            1 with @Mode=Collect routes to safe CollectDebug: no collector';
+        PRINT N'                    rows; dynamic SQL is printed, not executed (default: 0).';
         PRINT N'  @WhatIf           Preview without executing (Uninstall, Purge modes).';
         PRINT N'  @PreserveRunLog   Uninstall: 1=archive FR_RunLog with timestamped name (default: 0).';
-        PRINT N'  @Debug            Print dynamic SQL without executing (default: 0).';
-		PRINT N'  @ConfigKey        Configure mode: key to update. NULL returns all config.';
+        PRINT N'  @ConfigKey        Configure mode: key to update. NULL returns all config.';
         PRINT N'  @ConfigValue      Configure mode: value to write for @ConfigKey.';
         PRINT N'  @CreateAgentJob   Install mode: explicit opt-in SQL Agent job creation.';
         PRINT N'';
@@ -788,27 +787,6 @@ CREATE TABLE dbo.FR_QueryPlan (
     PlanXmlHash    varbinary(32) NULL
 )' + @TableCompressionClause;
                 EXEC sys.sp_executesql @CreateSql;
-                SET @CreateSql = N'CREATE CLUSTERED INDEX CIX_FR_QueryPlan_SnapshotUtc_QueryPlanId ON dbo.FR_QueryPlan (SnapshotUtc, QueryPlanId)' + @IndexCompressionClause;
-                EXEC sys.sp_executesql @CreateSql;
-            END;
-
-            -- Create FR_Rules (D-029: metadata only; logic in code)
-            IF OBJECT_ID(N'dbo.FR_QueryPlan', N'U') IS NULL
-            BEGIN
-                SET @CreateSql = N'
-CREATE TABLE dbo.FR_QueryPlan (
-    QueryPlanId    bigint         IDENTITY(1,1) NOT NULL PRIMARY KEY NONCLUSTERED,
-    SnapshotId     bigint         NOT NULL FOREIGN KEY REFERENCES dbo.FR_Snapshot (SnapshotId),
-    SnapshotUtc    datetime2(3)   NOT NULL,
-    DatabaseId     int            NOT NULL,
-    SessionId      int            NULL,
-    QueryHash      binary(8)      NULL,
-    QueryPlanHash  binary(8)      NULL,
-    PlanXml        xml            NULL,
-    PlanXmlHash    varbinary(32)  NULL
-)' + @TableCompressionClause;
-                EXEC sys.sp_executesql @CreateSql;
-
                 SET @CreateSql = N'CREATE CLUSTERED INDEX CIX_FR_QueryPlan_SnapshotUtc_QueryPlanId ON dbo.FR_QueryPlan (SnapshotUtc, QueryPlanId)' + @IndexCompressionClause;
                 EXEC sys.sp_executesql @CreateSql;
             END;
