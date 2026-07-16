@@ -5330,6 +5330,7 @@ ORDER BY ag.name, ar.replica_server_name, drs.database_id;';
                 N'Source: FR_Configuration snapshot diff.'
             FROM cfg
             WHERE cfg.PrevValue IS NOT NULL AND cfg.PrevValue <> cfg.ValueText
+              AND CHARINDEX(N';FR_R0021_ConfigurationChangeInWindow;', @DisabledRules) = 0
             ORDER BY cfg.SnapshotUtc DESC;
         END TRY
         BEGIN CATCH
@@ -5375,6 +5376,7 @@ ORDER BY ag.name, ar.replica_server_name, drs.database_id;';
             LEFT JOIN #fr_baseline AS b ON b.MetricKey = CONCAT(N'Perf:', cur.CounterName)
             WHERE cur.CounterName = N'Log Growths'         -- growth events in window are the strong signal
               AND cur.CurMax > 0
+              AND CHARINDEX(N';FR_R0022_LogReuseWaitElevated;', @DisabledRules) = 0
               AND (b.BaselineAvg IS NULL OR cur.CurMax > (b.BaselineAvg + 1));
         END TRY
         BEGIN CATCH
@@ -5407,6 +5409,7 @@ ORDER BY ag.name, ar.replica_server_name, drs.database_id;';
             WHERE s.SnapshotUtc >= @ReportStartUtc AND s.SnapshotUtc <= @ReportEndUtc
               AND w.WaitType = N'THREADPOOL'
               AND w.WaitTimeMs > 0
+              AND CHARINDEX(N';FR_R0023_ThreadpoolWaitsObserved;', @DisabledRules) = 0
             HAVING COUNT(1) > 0;
         END TRY
         BEGIN CATCH
@@ -5439,6 +5442,7 @@ ORDER BY ag.name, ar.replica_server_name, drs.database_id;';
             WHERE s.SnapshotUtc >= @ReportStartUtc AND s.SnapshotUtc <= @ReportEndUtc
               AND w.WaitType = N'RESOURCE_SEMAPHORE'
               AND w.WaitTimeMs > 0
+              AND CHARINDEX(N';FR_R0024_ResourceSemaphoreWaits;', @DisabledRules) = 0
             HAVING COUNT(1) > 0;
         END TRY
         BEGIN CATCH
@@ -5482,8 +5486,9 @@ ORDER BY ag.name, ar.replica_server_name, drs.database_id;';
                 WHERE bh.BackupType IN (N'D', N'Database', N'Full')
                 GROUP BY bh.DatabaseName
             ) AS lb
-            WHERE lb.LastFull IS NULL
-               OR DATEDIFF(day, lb.LastFull, @ReportEndUtc) > @BackupWarnDays;
+            WHERE CHARINDEX(N';FR_R0025_RecentCheckDbOrBackupAge;', @DisabledRules) = 0
+              AND (lb.LastFull IS NULL
+                   OR DATEDIFF(day, lb.LastFull, @ReportEndUtc) > @BackupWarnDays);
         END TRY
         BEGIN CATCH
             INSERT INTO #fr_findings
@@ -5947,6 +5952,92 @@ ORDER BY ag.name, ar.replica_server_name, drs.database_id;';
         FROM #fr_findings AS f
         INNER JOIN ranked AS r ON r.FindingOrdinal = f.FindingOrdinal
         WHERE r.rn > 1;
+
+        -- =====================================================================
+        -- §7.13 folds: a headline finding consolidates its contributor findings
+        -- (D-106: headline keeps its RuleId; contributors move to MoreInfo;
+        -- disabling a contributor never disables the headline). Runs AFTER
+        -- per-rule dedup and BEFORE @DatabaseName/@MinSeverity filters, the
+        -- @MaxFindings cap, sort, and display-rank. Window-wide fold for the
+        -- window-level headlines FR_R0007/FR_R0024 (approved Option A); exact
+        -- AnchorKey fold for the query-level pair FR_R0015/FR_R0016. Disabled
+        -- contributors are already absent from #fr_findings, so they are never
+        -- folded or resurrected. Contributor rows are deleted only after their
+        -- detail is written into the headline MoreInfo.
+        -- =====================================================================
+
+        -- Pair 1 (Blocking): FR_R0007 folds FR_R0001 + FR_R0002, window-wide.
+        IF EXISTS (SELECT 1 FROM #fr_findings WHERE RuleId = N'FR_R0007_BlockingStorm')
+           AND EXISTS (SELECT 1 FROM #fr_findings
+                       WHERE RuleId IN (N'FR_R0001_ActiveBlockingChain', N'FR_R0002_LongRunningOpenTransaction'))
+        BEGIN
+            DECLARE @Fold1Count int =
+                (SELECT COUNT(1) FROM #fr_findings
+                 WHERE RuleId IN (N'FR_R0001_ActiveBlockingChain', N'FR_R0002_LongRunningOpenTransaction'));
+            DECLARE @Fold1Detail nvarchar(600) = N'';
+            SELECT @Fold1Detail = LEFT(STUFF((
+                SELECT N'; ' + c.RuleId + N'(SessionId=' + ISNULL(CONVERT(nvarchar(12), c.SessionId), N'?') + N')'
+                FROM #fr_findings AS c
+                WHERE c.RuleId IN (N'FR_R0001_ActiveBlockingChain', N'FR_R0002_LongRunningOpenTransaction')
+                ORDER BY c.RuleId, c.SessionId
+                FOR XML PATH(N''), TYPE).value(N'.', N'nvarchar(max)'), 1, 2, N''), 600);
+
+            UPDATE #fr_findings
+            SET MoreInfo = LEFT(ISNULL(MoreInfo, N'') +
+                    N' | Folded ' + CONVERT(nvarchar(12), @Fold1Count) +
+                    N' blocking contributor(s): ' + @Fold1Detail, 1000)
+            WHERE RuleId = N'FR_R0007_BlockingStorm';
+
+            DELETE FROM #fr_findings
+            WHERE RuleId IN (N'FR_R0001_ActiveBlockingChain', N'FR_R0002_LongRunningOpenTransaction');
+        END;
+
+        -- Pair 2 (Memory): FR_R0024 folds FR_R0005, window-wide.
+        IF EXISTS (SELECT 1 FROM #fr_findings WHERE RuleId = N'FR_R0024_ResourceSemaphoreWaits')
+           AND EXISTS (SELECT 1 FROM #fr_findings WHERE RuleId = N'FR_R0005_MemoryGrantsPending')
+        BEGIN
+            DECLARE @Fold2Count int =
+                (SELECT COUNT(1) FROM #fr_findings WHERE RuleId = N'FR_R0005_MemoryGrantsPending');
+            DECLARE @Fold2Detail nvarchar(600) = N'';
+            SELECT @Fold2Detail = LEFT(STUFF((
+                SELECT N'; FR_R0005_MemoryGrantsPending(SessionId=' + ISNULL(CONVERT(nvarchar(12), c.SessionId), N'?') + N')'
+                FROM #fr_findings AS c
+                WHERE c.RuleId = N'FR_R0005_MemoryGrantsPending'
+                ORDER BY c.SessionId
+                FOR XML PATH(N''), TYPE).value(N'.', N'nvarchar(max)'), 1, 2, N''), 600);
+
+            UPDATE #fr_findings
+            SET MoreInfo = LEFT(ISNULL(MoreInfo, N'') +
+                    N' | Folded ' + CONVERT(nvarchar(12), @Fold2Count) +
+                    N' memory contributor(s): ' + @Fold2Detail, 1000)
+            WHERE RuleId = N'FR_R0024_ResourceSemaphoreWaits';
+
+            DELETE FROM #fr_findings WHERE RuleId = N'FR_R0005_MemoryGrantsPending';
+        END;
+
+        -- Pair 3 (QueryStore): FR_R0015 folds FR_R0016 only on exact AnchorKey
+        -- (same db:query). FR_R0015 is the headline (higher severity).
+        IF EXISTS (SELECT 1 FROM #fr_findings WHERE RuleId = N'FR_R0015_QueryPlanRegression')
+           AND EXISTS (SELECT 1 FROM #fr_findings WHERE RuleId = N'FR_R0016_TopCpuConsumerInWindow')
+        BEGIN
+            UPDATE h
+            SET MoreInfo = LEFT(ISNULL(h.MoreInfo, N'') +
+                    N' | Folded FR_R0016_TopCpuConsumerInWindow (same query): ' + ISNULL(c.Evidence, N''), 1000)
+            FROM #fr_findings AS h
+            INNER JOIN #fr_findings AS c
+                ON h.RuleId = N'FR_R0015_QueryPlanRegression'
+               AND c.RuleId = N'FR_R0016_TopCpuConsumerInWindow'
+               AND c.AnchorKey IS NOT NULL
+               AND c.AnchorKey = h.AnchorKey;
+
+            DELETE c
+            FROM #fr_findings AS c
+            WHERE c.RuleId = N'FR_R0016_TopCpuConsumerInWindow'
+              AND c.AnchorKey IS NOT NULL
+              AND EXISTS (SELECT 1 FROM #fr_findings AS h
+                          WHERE h.RuleId = N'FR_R0015_QueryPlanRegression'
+                            AND h.AnchorKey = c.AnchorKey);
+        END;
 
             -- v0.4 timeline events (additive; D-073). 12-col contract unchanged.
         BEGIN TRY
