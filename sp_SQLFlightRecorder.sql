@@ -4804,8 +4804,12 @@ ORDER BY ag.name, ar.replica_server_name, drs.database_id;';
             ),
             LatMs AS
             (
+                -- NULLIF guards the division: SQL Server may evaluate the
+                -- projection before the WHERE filter, so DeltaOps = 0 must not
+                -- reach the divide. Rows with NULL latency are dropped by the
+                -- WHERE below anyway.
                 SELECT DatabaseId, FileId,
-                       CONVERT(decimal(18,2), DeltaStallMs * 1.0 / DeltaOps) AS LatencyMs
+                       CONVERT(decimal(18,2), DeltaStallMs * 1.0 / NULLIF(DeltaOps, 0)) AS LatencyMs
                 FROM Lat
                 WHERE DeltaOps > 0 AND DeltaStallMs >= 0   -- exclude counter reset
             )
@@ -5577,7 +5581,7 @@ ORDER BY ag.name, ar.replica_server_name, drs.database_id;';
             CROSS JOIN LastRow AS l
             WHERE DATEDIFF(second, f.SnapshotUtc, l.SnapshotUtc) > 0
               AND (l.CompilationsPerSec - f.CompilationsPerSec)
-                  / DATEDIFF(second, f.SnapshotUtc, l.SnapshotUtc) >= @CompilationsWarn;
+                  / NULLIF(DATEDIFF(second, f.SnapshotUtc, l.SnapshotUtc), 0) >= @CompilationsWarn;
         END;
 
         -- FR_R0019 QueryStoreNearingCapacity (QueryStore / Medium / High / Observed)
