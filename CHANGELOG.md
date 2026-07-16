@@ -7,6 +7,56 @@ Per design decision D-175, entries tag the affected `RuleId`s and `@Mode`s so
 runbook owners can grep. Versioning follows the project-specific semver of
 D-171 (major = contract break; minor = additive; patch = fixes).
 
+## [0.4.2] - 2026-07-16
+
+Promised-scope rule completion and report-contract stabilization. No new
+collectors, tables, modes, or rule IDs. `SchemaVersion` stays `0.4.0` (no DDL;
+new `FR_Config` keys and rule-lifecycle values are data).
+
+### Added
+
+- **FR_R0001 ActiveBlockingChain** (`@Mode = Report`): head-of-chain detection
+  from `FR_Request.BlockingSessionId` (a blocker not itself blocked), session
+  anchored (§7.9, D-074).
+- **FR_R0002 LongRunningOpenTransaction**: open transaction persisting across
+  snapshots spanning ≥ `LongOpenTxnSeconds` (new tunable, default 60) (§7.9,
+  D-048).
+- **FR_R0004 FileIoLatencySpike**: per-file window delta latency vs the recent
+  baseline; escalates High above `max(4× baseline, 4× FileIoLatencyWarnMs)`
+  (new tunable, default 20 ms) (§7.9, D-092).
+- **FR_R0005 MemoryGrantsPending**: observed pending grant from `FR_Request`
+  (§7.9, D-048).
+- **FR_R0006 ServerRestartDuringWindow**: primary detection from the
+  `FR_InstanceSnapshot` start-time change, with a **window split** (D-064) that
+  re-anchors the delta rules (FR_R0002/FR_R0003/FR_R0004/FR_R0020) at the first
+  post-restart snapshot so a counter reset can no longer register as a spike.
+- **Graded collection-gap findings** (D-066): a gap > 2× the interval emits a
+  Coverage finding scaled Medium/High/Critical (RuleId `FR_R0026`, dedup-exempt).
+- **§7.13 folds**: `FR_R0007` folds `FR_R0001`/`FR_R0002`; `FR_R0024` folds
+  `FR_R0005` (window-wide); `FR_R0015` folds `FR_R0016` on same query. Headline
+  keeps its RuleId; contributors move to `MoreInfo` (D-106).
+- `InstallDemoData` now also surfaces FR_R0001/2/4/5.
+- `tests/rules/` fixtures runner + demo golden (D-160, D-122).
+- New tunables `LongOpenTxnSeconds`, `FileIoLatencyWarnMs` (Configure + Status).
+
+### Changed
+
+- **Deterministic sort (D-068)** (`@Mode = Report`): Findings now order by
+  Severity → Confidence → EvidenceType → StartTimeUtc → RuleId; `FindingOrdinal`
+  is the 1..N display rank. The 16-column contract (D-067) is unchanged.
+- **`@MaxFindings` enforcement + overflow finding (D-087)**: the final result
+  set is capped (Critical/Coverage never truncated); one Informational Coverage
+  row records the truncation.
+- Query-scoped dedup now separates distinct queries (internal `AnchorKey`), so
+  `FR_R0016` no longer collapses its top-N to a single row (D-074).
+
+### Fixed
+
+- **FR_R0004/FR_R0020**: divide-by-zero in `Report` on a quiet instance (no I/O
+  or one plan-cache row between snapshots); the divisor is now `NULLIF`-guarded.
+- **FR_R0021–FR_R0025** did not honor `FR_Config.DisabledRules` (D-099); they
+  can now be disabled. `FR_R0026` remains non-disableable (D-098).
+
 ## [0.4.1] - 2026-07-15
 
 Hardening/bugfix release. No new features. SchemaVersion stays `0.4.0`
