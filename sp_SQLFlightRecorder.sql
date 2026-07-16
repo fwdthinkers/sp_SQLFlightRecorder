@@ -4324,9 +4324,44 @@ ORDER BY ag.name, ar.replica_server_name, drs.database_id;';
             END;
 
         -- Delta-anchor for cumulative-DMV rules (D-007). Defaults to the window
-        -- start; Group D (restart/window split, D-064) advances it to the first
+        -- start; the restart detection below advances it to the first
         -- post-restart snapshot so delta rules never span a counter reset.
         DECLARE @DeltaStartUtc datetime2(3) = @ReportStartUtc;
+
+        -- Restart detection + window split (D-064, §6.2). A change in the
+        -- captured SQL Server start time within the window means the cumulative
+        -- DMVs reset; deltas across that boundary are meaningless. Detect it
+        -- here, advance @DeltaStartUtc to the first post-restart snapshot, and
+        -- remember it so FR_R0006 can be emitted later (where DisabledRules is
+        -- in scope). The split always applies, even if the FR_R0006 finding is
+        -- disabled, because it is delta-correctness, not a recommendation.
+        DECLARE @RestartDetected bit = 0;
+        DECLARE @RestartUtc datetime2(3) = NULL;
+        IF OBJECT_ID(N'dbo.FR_InstanceSnapshot', N'U') IS NOT NULL
+        BEGIN
+            DECLARE @DistinctStarts int = 0;
+            SELECT @DistinctStarts = COUNT(DISTINCT i.SqlStartTimeUtc),
+                   @RestartUtc = MAX(i.SqlStartTimeUtc)
+            FROM dbo.FR_InstanceSnapshot AS i
+            INNER JOIN dbo.FR_Snapshot AS s ON s.SnapshotId = i.SnapshotId
+            WHERE s.SnapshotUtc >= @ReportStartUtc AND s.SnapshotUtc <= @ReportEndUtc
+              AND i.SqlStartTimeUtc IS NOT NULL;
+
+            IF @DistinctStarts > 1 OR (@RestartUtc IS NOT NULL AND @RestartUtc > @ReportStartUtc)
+                SET @RestartDetected = 1;
+
+            IF @RestartDetected = 1 AND @RestartUtc IS NOT NULL
+            BEGIN
+                DECLARE @PostRestartFirstUtc datetime2(3) = NULL;
+                SELECT @PostRestartFirstUtc = MIN(s.SnapshotUtc)
+                FROM dbo.FR_InstanceSnapshot AS i
+                INNER JOIN dbo.FR_Snapshot AS s ON s.SnapshotId = i.SnapshotId
+                WHERE s.SnapshotUtc >= @ReportStartUtc AND s.SnapshotUtc <= @ReportEndUtc
+                  AND i.SqlStartTimeUtc = @RestartUtc;
+                IF @PostRestartFirstUtc IS NOT NULL
+                    SET @DeltaStartUtc = @PostRestartFirstUtc;
+            END;
+        END;
 
         -- v0.4 display-time resolution (D-180). Storage + sort stay UTC.
         DECLARE @TzMode  nvarchar(10) = N'UTC';
@@ -4526,11 +4561,13 @@ ORDER BY ag.name, ar.replica_server_name, drs.database_id;';
 
             IF OBJECT_ID(N'dbo.FR_Wait', N'U') IS NOT NULL
             BEGIN
+                -- Delta anchor at @DeltaStartUtc (D-064): post-restart when a
+                -- restart split the window, else the window start.
                 ;WITH FirstSnapshot AS
                 (
                     SELECT TOP (1) SnapshotId
                     FROM dbo.FR_Snapshot
-                    WHERE SnapshotUtc >= @ReportStartUtc
+                    WHERE SnapshotUtc >= @DeltaStartUtc
                       AND SnapshotUtc <= @ReportEndUtc
                     ORDER BY SnapshotUtc ASC, SnapshotId ASC
                 ),
@@ -5497,11 +5534,14 @@ ORDER BY ag.name, ar.replica_server_name, drs.database_id;';
         IF OBJECT_ID(N'dbo.FR_PlanCacheSummary', N'U') IS NOT NULL
            AND CHARINDEX(N';FR_R0020_HighCompilationRate;', @DisabledRules) = 0
         BEGIN
+            -- Delta anchor at @DeltaStartUtc (D-064): post-restart when a restart
+            -- split the window (compilation counters reset on restart), else the
+            -- window start.
             ;WITH FirstRow AS
             (
                 SELECT TOP (1) SnapshotUtc, CompilationsPerSec
                 FROM dbo.FR_PlanCacheSummary
-                WHERE SnapshotUtc >= @ReportStartUtc AND SnapshotUtc <= @ReportEndUtc
+                WHERE SnapshotUtc >= @DeltaStartUtc AND SnapshotUtc <= @ReportEndUtc
                   AND CompilationsPerSec IS NOT NULL
                 ORDER BY SnapshotUtc ASC
             ),
@@ -5574,8 +5614,88 @@ ORDER BY ag.name, ar.replica_server_name, drs.database_id;';
             ORDER BY st.RowsCollected DESC;
         END;
 
+        -- FR_R0006 ServerRestartDuringWindow (Configuration / Critical / High /
+        -- Observed — §7.9, D-064). Primary detection from the instance-snapshot
+        -- start-time change computed at window setup; the error-log block below
+        -- only corroborates when this did not fire. Emitted before the error-log
+        -- block so its NOT EXISTS guard sees this row (no intra-rule dup).
+        IF @RestartDetected = 1
+           AND CHARINDEX(N';FR_R0006_ServerRestartDuringWindow;', @DisabledRules) = 0
+           AND NOT EXISTS (SELECT 1 FROM #fr_findings WHERE RuleId = N'FR_R0006_ServerRestartDuringWindow')
+        BEGIN
+            INSERT INTO #fr_findings
+            (
+                Severity, Confidence, EvidenceType, Category, RuleId,
+                Title, Summary, Evidence, Recommendation,
+                StartTimeUtc, EndTimeUtc, MoreInfo
+            )
+            VALUES
+            (
+                N'Critical', N'High', N'Observed', N'Configuration',
+                N'FR_R0006_ServerRestartDuringWindow',
+                N'SQL Server restart detected during the window',
+                N'The captured SQL Server start time changed within the report window, consistent with a restart.',
+                LEFT(CONCAT(N'RestartInstanceStartUtc=', CONVERT(nvarchar(30), @RestartUtc, 126), N'Z',
+                            N'; deltaAnchorUtc=', CONVERT(nvarchar(30), @DeltaStartUtc, 126), N'Z'), 1900),
+                N'Cross-restart cumulative deltas are not comparable; consider analyzing the pre- and post-restart segments separately.',
+                @ReportStartUtc, @ReportEndUtc,
+                N'Window split at the restart boundary (D-064): delta rules anchor at the first post-restart snapshot.'
+            );
+        END;
+
+        -- Graded collection-gap findings (D-066, D-104). A gap between
+        -- consecutive snapshots greater than 2x the configured interval is a
+        -- Coverage finding scaled by magnitude. Dedup-exempt (D-075); coexists
+        -- with the FR_R0026 summary (D-104). RuleId stays FR_R0026 (the rule
+        -- pack is fixed at 26; no new ID). FR_R0026 cannot be disabled (D-098).
+        IF OBJECT_ID(N'dbo.FR_Snapshot', N'U') IS NOT NULL AND @ReportSnapshotCount >= 2
+        BEGIN
+            DECLARE @IntervalSec int = 60;
+            SELECT @IntervalSec = TRY_CONVERT(int, ConfigValue)
+            FROM dbo.FR_Config WHERE ConfigKey = N'SnapshotIntervalSeconds';
+            IF @IntervalSec IS NULL OR @IntervalSec < 1 SET @IntervalSec = 60;
+            DECLARE @WindowSec int = DATEDIFF(second, @ReportStartUtc, @ReportEndUtc);
+
+            ;WITH Snaps AS
+            (
+                SELECT SnapshotUtc,
+                       LAG(SnapshotUtc) OVER (ORDER BY SnapshotUtc) AS PrevUtc
+                FROM dbo.FR_Snapshot
+                WHERE SnapshotUtc >= @ReportStartUtc AND SnapshotUtc <= @ReportEndUtc
+            ),
+            Gaps AS
+            (
+                SELECT PrevUtc, SnapshotUtc, DATEDIFF(second, PrevUtc, SnapshotUtc) AS GapSec
+                FROM Snaps WHERE PrevUtc IS NOT NULL
+            )
+            INSERT INTO #fr_findings
+            (
+                Severity, Confidence, EvidenceType, Category, RuleId,
+                Title, Summary, Evidence, Recommendation,
+                StartTimeUtc, EndTimeUtc, MoreInfo
+            )
+            SELECT TOP (@MaxFindings)
+                CASE WHEN GapSec > @IntervalSec * 30
+                          OR (@WindowSec > 0 AND GapSec * 2 >= @WindowSec) THEN N'Critical'
+                     WHEN GapSec > @IntervalSec * 5 THEN N'High'
+                     ELSE N'Medium' END,
+                N'High', N'Observed', N'Coverage',
+                N'FR_R0026_CoverageAndCapabilitySummary',
+                N'Collection gap in the window',
+                N'A gap between consecutive snapshots exceeded twice the configured collection interval.',
+                LEFT(CONCAT(N'GapSeconds=', GapSec, N'; intervalSeconds=', @IntervalSec,
+                            N'; from=', CONVERT(nvarchar(30), PrevUtc, 126), N'Z',
+                            N'; to=', CONVERT(nvarchar(30), SnapshotUtc, 126), N'Z'), 1900),
+                N'Collection gaps reduce confidence in absence-of-findings; investigate missed snapshots (Agent job, load, or restart).',
+                PrevUtc, SnapshotUtc,
+                N'Per-gap coverage finding (D-066); coexists with the FR_R0026 summary (D-104), never deduped against it (D-075).'
+            FROM Gaps
+            WHERE GapSec > @IntervalSec * 2
+            ORDER BY GapSec DESC;
+        END;
+
         -- FR_R0006 corroboration from the error log. Emitted only if the
-        -- v0.1 start-time logic did not already emit FR_R0006 (no intra-rule dup).
+        -- start-time detection above did not already emit FR_R0006 (no intra-rule dup).
         IF OBJECT_ID(N'dbo.FR_ErrorLog', N'U') IS NOT NULL
            AND CHARINDEX(N';FR_R0006_ServerRestartDuringWindow;', @DisabledRules) = 0
            AND NOT EXISTS (SELECT 1 FROM #fr_findings WHERE RuleId = N'FR_R0006_ServerRestartDuringWindow')
