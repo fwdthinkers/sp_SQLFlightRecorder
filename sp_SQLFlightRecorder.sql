@@ -4731,6 +4731,123 @@ ORDER BY ag.name, ar.replica_server_name, drs.database_id;';
             ORDER BY DATEDIFF(second, FirstUtc, LastUtc) DESC, SessionId ASC;
         END;
 
+        -- FR_R0004 FileIoLatencySpike (IO / Medium->High / Medium / Inferred —
+        -- §7.9, D-092/D-103). Window delta latency per (db, file) vs the recent
+        -- baseline (#fr_baseline, group FileIo). Delta anchored at @DeltaStartUtc
+        -- (D-007) so a restart's counter reset cannot register as a spike.
+        -- Escalation to High is magnitude-based, which D-069 permits (it forbids
+        -- promotion by row count, not by threshold; §7.9 lists "escalates High").
+        IF OBJECT_ID(N'dbo.FR_FileStat', N'U') IS NOT NULL
+           AND CHARINDEX(N';FR_R0004_FileIoLatencySpike;', @DisabledRules) = 0
+        BEGIN
+            DECLARE @FileIoWarnMs int = 20;
+            SELECT @FileIoWarnMs = TRY_CONVERT(int, ConfigValue)
+            FROM dbo.FR_Config WHERE ConfigKey = N'FileIoLatencyWarnMs';
+            IF @FileIoWarnMs IS NULL OR @FileIoWarnMs < 1 SET @FileIoWarnMs = 20;
+
+            ;WITH Ranked AS
+            (
+                SELECT f.DatabaseId, f.FileId, f.SnapshotUtc,
+                       CONVERT(bigint, f.IoStallReadMs) + f.IoStallWriteMs AS StallMs,
+                       CONVERT(bigint, f.NumOfReads) + f.NumOfWrites AS Ops,
+                       ROW_NUMBER() OVER (PARTITION BY f.DatabaseId, f.FileId ORDER BY f.SnapshotUtc ASC)  AS rnFirst,
+                       ROW_NUMBER() OVER (PARTITION BY f.DatabaseId, f.FileId ORDER BY f.SnapshotUtc DESC) AS rnLast
+                FROM dbo.FR_FileStat AS f
+                WHERE f.SnapshotUtc >= @DeltaStartUtc AND f.SnapshotUtc <= @ReportEndUtc
+            ),
+            Lat AS
+            (
+                SELECT a.DatabaseId, a.FileId,
+                       (l.StallMs - a.StallMs) AS DeltaStallMs,
+                       (l.Ops - a.Ops) AS DeltaOps
+                FROM Ranked AS a
+                INNER JOIN Ranked AS l
+                    ON l.DatabaseId = a.DatabaseId AND l.FileId = a.FileId AND l.rnLast = 1
+                WHERE a.rnFirst = 1
+            ),
+            LatMs AS
+            (
+                SELECT DatabaseId, FileId,
+                       CONVERT(decimal(18,2), DeltaStallMs * 1.0 / DeltaOps) AS LatencyMs
+                FROM Lat
+                WHERE DeltaOps > 0 AND DeltaStallMs >= 0   -- exclude counter reset
+            )
+            INSERT INTO #fr_findings
+            (
+                Severity, Confidence, EvidenceType, Category, RuleId,
+                Title, Summary, Evidence, Recommendation,
+                DatabaseName, StartTimeUtc, EndTimeUtc, MoreInfo
+            )
+            SELECT TOP (@MaxFindings)
+                CASE WHEN m.LatencyMs > @FileIoWarnMs * 4
+                          AND (b.BaselineAvg IS NULL OR m.LatencyMs > b.BaselineAvg * 4)
+                     THEN N'High' ELSE N'Medium' END,
+                CASE WHEN b.SampleCount IS NULL OR b.SampleCount < 5 THEN N'Low' ELSE N'Medium' END,
+                N'Inferred', N'IO',
+                N'FR_R0004_FileIoLatencySpike',
+                N'File I/O latency increased during the window',
+                N'Average read+write stall per I/O for a database file is elevated over its recent baseline.',
+                LEFT(CONCAT(N'DatabaseId=', m.DatabaseId, N'; FileId=', m.FileId,
+                            N'; windowLatencyMs=', CONVERT(nvarchar(40), m.LatencyMs),
+                            N'; baselineAvgMs=', ISNULL(CONVERT(nvarchar(40), b.BaselineAvg), N'(insufficient history)'),
+                            N'; floorMs=', @FileIoWarnMs,
+                            N'; baselineSamples=', ISNULL(CONVERT(nvarchar(10), b.SampleCount), N'0')), 1900),
+                N'Consider correlating file latency with workload, storage, and backup activity only after validating the elevation is sustained.',
+                DB_NAME(m.DatabaseId), @ReportStartUtc, @ReportEndUtc,
+                N'Delta latency = change in IO stall divided by change in ops from @DeltaStartUtc (D-007); baseline-relative (D-092).'
+            FROM LatMs AS m
+            LEFT JOIN #fr_baseline AS b
+                ON b.MetricKey = CONCAT(N'FileIo:', m.DatabaseId, N':', m.FileId)
+            WHERE m.LatencyMs > @FileIoWarnMs
+              AND (b.BaselineAvg IS NULL OR m.LatencyMs > b.BaselineAvg * 2)
+            ORDER BY m.LatencyMs DESC;
+        END;
+
+        -- FR_R0005 MemoryGrantsPending (Memory / High / High / Observed — §7.9,
+        -- D-048). Observed pending grant = FR_Request row with RequestedMemoryKb
+        -- > 0 and no grant yet. Session anchored (for the R0005/R0024 fold).
+        IF OBJECT_ID(N'dbo.FR_Request', N'U') IS NOT NULL
+           AND CHARINDEX(N';FR_R0005_MemoryGrantsPending;', @DisabledRules) = 0
+        BEGIN
+            DECLARE @MemGrantsPendingMax bigint = NULL;
+            IF OBJECT_ID(N'dbo.FR_Memory', N'U') IS NOT NULL
+                SELECT @MemGrantsPendingMax = MAX(m.MemoryGrantsPending)
+                FROM dbo.FR_Memory AS m
+                INNER JOIN dbo.FR_Snapshot AS s ON s.SnapshotId = m.SnapshotId
+                WHERE s.SnapshotUtc >= @ReportStartUtc AND s.SnapshotUtc <= @ReportEndUtc;
+
+            ;WITH Pending AS
+            (
+                SELECT r.SessionId, r.DatabaseId,
+                       MIN(r.SnapshotUtc) AS FirstUtc, MAX(r.SnapshotUtc) AS LastUtc,
+                       MAX(r.RequestedMemoryKb) AS MaxRequestedKb
+                FROM dbo.FR_Request AS r
+                WHERE r.SnapshotUtc >= @ReportStartUtc AND r.SnapshotUtc <= @ReportEndUtc
+                  AND r.RequestedMemoryKb > 0
+                  AND (r.GrantedMemoryKb IS NULL OR r.GrantedMemoryKb = 0)
+                GROUP BY r.SessionId, r.DatabaseId
+            )
+            INSERT INTO #fr_findings
+            (
+                Severity, Confidence, EvidenceType, Category, RuleId,
+                Title, Summary, Evidence, Recommendation,
+                DatabaseName, SessionId, StartTimeUtc, EndTimeUtc, MoreInfo
+            )
+            SELECT TOP (@MaxFindings)
+                N'High', N'High', N'Observed', N'Memory',
+                N'FR_R0005_MemoryGrantsPending',
+                N'Query memory grant pending',
+                N'A request was waiting for a query memory grant (requested but not yet granted).',
+                LEFT(CONCAT(N'SessionId=', p.SessionId,
+                            N'; maxRequestedMemoryKb=', p.MaxRequestedKb,
+                            N'; memoryGrantsPendingCounterMax=', ISNULL(CONVERT(nvarchar(20), @MemGrantsPendingMax), N'(n/a)')), 1900),
+                N'Consider reviewing large memory-grant queries and concurrency only after validating the pending grants correlate with the incident.',
+                DB_NAME(p.DatabaseId), p.SessionId, p.FirstUtc, p.LastUtc,
+                N'Observed pending grant from FR_Request (RequestedMemoryKb > 0, GrantedMemoryKb NULL/0); FR_Memory counter for corroboration.'
+            FROM Pending AS p
+            ORDER BY p.MaxRequestedKb DESC, p.SessionId ASC;
+        END;
+
         DECLARE @BlockingStormThreshold int = 5;
         SELECT @BlockingStormThreshold = TRY_CONVERT(int, ConfigValue)
         FROM dbo.FR_Config WHERE ConfigKey = N'BlockingStormSessionThreshold';
