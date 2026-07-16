@@ -1086,6 +1086,15 @@ CREATE TABLE dbo.FR_Rules (
                 INSERT INTO dbo.FR_Config (ConfigKey, ConfigValue, Description)
                 VALUES (N'CheckDbWarnDays', N'14', N'CHECKDB age (days) that flags FR_R0025 High (D-097).');
 
+            -- v0.4.2 rule tunables (Tentative; revisable per D-181).
+            IF NOT EXISTS (SELECT 1 FROM dbo.FR_Config WHERE ConfigKey = N'LongOpenTxnSeconds')
+                INSERT INTO dbo.FR_Config (ConfigKey, ConfigValue, Description)
+                VALUES (N'LongOpenTxnSeconds', N'60', N'Open-transaction span (seconds) across snapshots that flags FR_R0002 (tentative).');
+
+            IF NOT EXISTS (SELECT 1 FROM dbo.FR_Config WHERE ConfigKey = N'FileIoLatencyWarnMs')
+                INSERT INTO dbo.FR_Config (ConfigKey, ConfigValue, Description)
+                VALUES (N'FileIoLatencyWarnMs', N'20', N'Absolute per-file IO latency floor (ms) for FR_R0004 escalation over baseline (tentative).');
+
             -- Forward-only migration marker maintenance: advance recorded SchemaVersion (D-038).
             UPDATE dbo.FR_Config
             SET ConfigValue = @SchemaVersion, ModifiedUtc = SYSUTCDATETIME()
@@ -1813,6 +1822,9 @@ END;
             , N'CheckDbWarnDays'
             , N'TimeZoneMode'
             , N'TimeZoneName'
+            -- v0.4.2 rule tunables
+            , N'LongOpenTxnSeconds'
+            , N'FileIoLatencyWarnMs'
         )
         
         BEGIN
@@ -1837,7 +1849,8 @@ END;
                N'CollectErrorLog', N'CollectSchemaActivity', N'SchemaActivityMaxDatabases', N'CollectPlanCacheSummary',
                N'CompilationsPerSecWarn',
                N'CollectAdvancedHa', N'CollectBufferPool', N'SecondaryLagWarnSeconds', N'RedoQueueWarnKb',
-               N'BackupWarnDays', N'CheckDbWarnDays')
+               N'BackupWarnDays', N'CheckDbWarnDays',
+               N'LongOpenTxnSeconds', N'FileIoLatencyWarnMs')
            AND TRY_CONVERT(int, @ConfigValue) IS NULL
         BEGIN
             SELECT N'Error' AS Status, N'InvalidConfigValue' AS ErrorCode,
@@ -4601,6 +4614,122 @@ ORDER BY ag.name, ar.replica_server_name, drs.database_id;';
         SELECT @DisabledRules = ISNULL(ConfigValue, N'')
         FROM dbo.FR_Config WHERE ConfigKey = N'DisabledRules';
         SET @DisabledRules = N';' + @DisabledRules + N';';
+
+        -- =====================================================================
+        -- v0.1 rule evaluation (FR_R0001, FR_R0002; FR_R0004, FR_R0005 follow in
+        -- their own sections). Repository-only reads (D-014/D-081); honors
+        -- DisabledRules (D-099). FR_R0003 (wait spike) is emitted earlier in the
+        -- >=2-snapshot block; FR_R0006 (restart) is handled in its own section.
+        -- =====================================================================
+
+        -- FR_R0001 ActiveBlockingChain (Blocking / High / High / Observed — §7.9)
+        -- Head-of-chain = a session that blocks others but is not itself blocked
+        -- in the same snapshot (D-074 session anchor). Point-in-time; full window.
+        IF OBJECT_ID(N'dbo.FR_Request', N'U') IS NOT NULL
+           AND CHARINDEX(N';FR_R0001_ActiveBlockingChain;', @DisabledRules) = 0
+        BEGIN
+            ;WITH Blocked AS
+            (
+                SELECT r.SnapshotId, r.SnapshotUtc, r.SessionId, r.BlockingSessionId
+                FROM dbo.FR_Request AS r
+                WHERE r.SnapshotUtc >= @ReportStartUtc AND r.SnapshotUtc <= @ReportEndUtc
+                  AND r.BlockingSessionId IS NOT NULL
+                  AND r.BlockingSessionId <> 0
+                  AND r.BlockingSessionId <> r.SessionId
+            ),
+            Leads AS
+            (
+                SELECT b.BlockingSessionId AS LeadSessionId, b.SnapshotUtc,
+                       COUNT(1) AS BlockedCount
+                FROM Blocked AS b
+                WHERE NOT EXISTS
+                (
+                    SELECT 1 FROM dbo.FR_Request AS x
+                    WHERE x.SnapshotId = b.SnapshotId
+                      AND x.SessionId = b.BlockingSessionId
+                      AND x.BlockingSessionId IS NOT NULL
+                      AND x.BlockingSessionId <> 0
+                )
+                GROUP BY b.BlockingSessionId, b.SnapshotUtc
+            ),
+            LeadAgg AS
+            (
+                SELECT LeadSessionId, MIN(SnapshotUtc) AS FirstUtc,
+                       MAX(SnapshotUtc) AS LastUtc, MAX(BlockedCount) AS MaxBlocked
+                FROM Leads GROUP BY LeadSessionId
+            )
+            INSERT INTO #fr_findings
+            (
+                Severity, Confidence, EvidenceType, Category, RuleId,
+                Title, Summary, Evidence, Recommendation,
+                SessionId, StartTimeUtc, EndTimeUtc, MoreInfo
+            )
+            SELECT TOP (@MaxFindings)
+                N'High', N'High', N'Observed', N'Blocking',
+                N'FR_R0001_ActiveBlockingChain',
+                N'Active blocking chain observed',
+                N'One or more sessions were blocked by a session at the head of a chain.',
+                LEFT(CONCAT(N'LeadSessionId=', LeadSessionId,
+                            N'; maxDirectlyBlockedSessions=', MaxBlocked), 1900),
+                N'Consider reviewing the lead blocker''s transaction and what it holds only after validating it is the head of the chain.',
+                LeadSessionId, FirstUtc, LastUtc,
+                N'Head-of-chain = a blocker not itself blocked in the same snapshot (FR_Request.BlockingSessionId).'
+            FROM LeadAgg
+            ORDER BY MaxBlocked DESC, LeadSessionId ASC;
+        END;
+
+        -- FR_R0002 LongRunningOpenTransaction (Blocking / Medium / High / Observed
+        -- — §7.9, D-048). No elapsed column is stored, so "long-running" = an
+        -- open transaction persisting across snapshots spanning >= threshold.
+        -- Anchored at @DeltaStartUtc so a restart (Group D) cannot inflate the
+        -- span via session-id reuse.
+        DECLARE @LongOpenTxnSeconds int = 60;
+        SELECT @LongOpenTxnSeconds = TRY_CONVERT(int, ConfigValue)
+        FROM dbo.FR_Config WHERE ConfigKey = N'LongOpenTxnSeconds';
+        IF @LongOpenTxnSeconds IS NULL OR @LongOpenTxnSeconds < 1 SET @LongOpenTxnSeconds = 60;
+
+        IF OBJECT_ID(N'dbo.FR_Request', N'U') IS NOT NULL
+           AND CHARINDEX(N';FR_R0002_LongRunningOpenTransaction;', @DisabledRules) = 0
+        BEGIN
+            ;WITH OpenTxn AS
+            (
+                SELECT r.SessionId, r.SnapshotUtc, r.OpenTransactionCount
+                FROM dbo.FR_Request AS r
+                WHERE r.SnapshotUtc >= @DeltaStartUtc AND r.SnapshotUtc <= @ReportEndUtc
+                  AND r.OpenTransactionCount > 0
+            ),
+            Span AS
+            (
+                SELECT SessionId,
+                       MIN(SnapshotUtc) AS FirstUtc, MAX(SnapshotUtc) AS LastUtc,
+                       COUNT(DISTINCT SnapshotUtc) AS Observations,
+                       MAX(OpenTransactionCount) AS MaxOpenTran
+                FROM OpenTxn GROUP BY SessionId
+            )
+            INSERT INTO #fr_findings
+            (
+                Severity, Confidence, EvidenceType, Category, RuleId,
+                Title, Summary, Evidence, Recommendation,
+                SessionId, StartTimeUtc, EndTimeUtc, MoreInfo
+            )
+            SELECT TOP (@MaxFindings)
+                N'Medium', N'High', N'Observed', N'Blocking',
+                N'FR_R0002_LongRunningOpenTransaction',
+                N'Long-running open transaction observed',
+                N'A session held an open transaction across multiple snapshots spanning a long interval.',
+                LEFT(CONCAT(N'SessionId=', SessionId,
+                            N'; openTxnSpanSeconds=', DATEDIFF(second, FirstUtc, LastUtc),
+                            N'; observations=', Observations,
+                            N'; maxOpenTranCount=', MaxOpenTran,
+                            N'; thresholdSeconds=', @LongOpenTxnSeconds), 1900),
+                N'Consider reviewing the session''s open transaction only after validating it is not an expected long-running batch.',
+                SessionId, FirstUtc, LastUtc,
+                N'Persistence-based: no elapsed column is stored; span computed from FR_Request across snapshots.'
+            FROM Span
+            WHERE Observations >= 2
+              AND DATEDIFF(second, FirstUtc, LastUtc) >= @LongOpenTxnSeconds
+            ORDER BY DATEDIFF(second, FirstUtc, LastUtc) DESC, SessionId ASC;
+        END;
 
         DECLARE @BlockingStormThreshold int = 5;
         SELECT @BlockingStormThreshold = TRY_CONVERT(int, ConfigValue)
