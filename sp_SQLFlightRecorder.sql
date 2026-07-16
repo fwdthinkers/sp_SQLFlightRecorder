@@ -4309,6 +4309,12 @@ ORDER BY ag.name, ar.replica_server_name, drs.database_id;';
                 WHEN @StartTime IS NULL THEN DATEADD(hour, -1, @ReportEndUtc)
                 ELSE DATEADD(minute, DATEDIFF(minute, GETDATE(), SYSUTCDATETIME()), @StartTime)
             END;
+
+        -- Delta-anchor for cumulative-DMV rules (D-007). Defaults to the window
+        -- start; Group D (restart/window split, D-064) advances it to the first
+        -- post-restart snapshot so delta rules never span a counter reset.
+        DECLARE @DeltaStartUtc datetime2(3) = @ReportStartUtc;
+
         -- v0.4 display-time resolution (D-180). Storage + sort stay UTC.
         DECLARE @TzMode  nvarchar(10) = N'UTC';
         DECLARE @TzName  sysname = NULL;
@@ -4433,6 +4439,10 @@ ORDER BY ag.name, ar.replica_server_name, drs.database_id;';
             , StartTimeUtc datetime2(3) NULL
             , EndTimeUtc datetime2(3) NULL
             , MoreInfo nvarchar(1000) NULL
+            -- Internal only (D-074): carries query identity for query-scoped
+            -- rules so dedup separates distinct queries. NOT part of the
+            -- 16-column output contract (D-067); never selected in output.
+            , AnchorKey nvarchar(300) NULL
         );
 
         CREATE TABLE #fr_timeline
@@ -4904,7 +4914,7 @@ ORDER BY ag.name, ar.replica_server_name, drs.database_id;';
             (
                 Severity, Confidence, EvidenceType, Category, RuleId,
                 Title, Summary, Evidence, Recommendation,
-                DatabaseName, StartTimeUtc, EndTimeUtc, MoreInfo
+                DatabaseName, StartTimeUtc, EndTimeUtc, MoreInfo, AnchorKey
             )
             SELECT TOP (@MaxFindings)
                 N'High',
@@ -4920,7 +4930,8 @@ ORDER BY ag.name, ar.replica_server_name, drs.database_id;';
                 DatabaseName, @ReportStartUtc, @ReportEndUtc,
                 CASE WHEN @ProductMajorProbe = 13
                      THEN N'SQL 2016: runtime-stats-only comparison; Confidence intentionally reduced (D-107).'
-                     ELSE N'Compared latest captured plan vs best prior plan for the same query (Query Store).' END
+                     ELSE N'Compared latest captured plan vs best prior plan for the same query (Query Store).' END,
+                CONCAT(ISNULL(DatabaseName, N''), N':', CONVERT(nvarchar(20), QsQueryId))
             FROM Ranked
             WHERE rnLatest = 1
               AND PlanCount > 1
@@ -4955,7 +4966,7 @@ ORDER BY ag.name, ar.replica_server_name, drs.database_id;';
             (
                 Severity, Confidence, EvidenceType, Category, RuleId,
                 Title, Summary, Evidence, Recommendation,
-                DatabaseName, StartTimeUtc, EndTimeUtc, MoreInfo
+                DatabaseName, StartTimeUtc, EndTimeUtc, MoreInfo, AnchorKey
             )
             SELECT TOP (5)
                 N'Medium', N'High', N'Observed', N'QueryStore',
@@ -4967,7 +4978,8 @@ ORDER BY ag.name, ar.replica_server_name, drs.database_id;';
                             N'; avgLogicalReads=', AvgLogicalReads), 1900),
                 N'Consider reviewing this query for tuning opportunities only after validating it is representative of the incident.',
                 DatabaseName, @ReportStartUtc, @ReportEndUtc,
-                N'Aggregated from FR_QueryStoreTopN across the window (CPU-ranked).'
+                N'Aggregated from FR_QueryStoreTopN across the window (CPU-ranked).',
+                CONCAT(ISNULL(DatabaseName, N''), N':', CONVERT(nvarchar(20), QsQueryId))
             FROM Ranked
             WHERE rn <= 5 AND TotalCpuUs > 0
             ORDER BY TotalCpuUs DESC;
@@ -5215,7 +5227,7 @@ ORDER BY ag.name, ar.replica_server_name, drs.database_id;';
             (
                 Severity, Confidence, EvidenceType, Category, RuleId,
                 Title, Summary, Evidence, Recommendation,
-                DatabaseName, StartTimeUtc, EndTimeUtc, MoreInfo
+                DatabaseName, StartTimeUtc, EndTimeUtc, MoreInfo, AnchorKey
             )
             SELECT TOP (@MaxFindings)
                 N'Medium', N'High', N'Observed', N'QueryStore',
@@ -5227,7 +5239,8 @@ ORDER BY ag.name, ar.replica_server_name, drs.database_id;';
                             N'; Reason=', ISNULL(LastForceFailureReason, N'')), 1900),
                 N'Consider reviewing why the forced plan is failing only after validating the forcing is still intended. Do not force or unforce plans automatically.',
                 DatabaseName, @ReportStartUtc, @ReportEndUtc,
-                N'From FR_QueryStoreTopN forced-plan columns (deduped by db/query/plan).'
+                N'From FR_QueryStoreTopN forced-plan columns (deduped by db/query/plan).',
+                CONCAT(ISNULL(DatabaseName, N''), N':', CONVERT(nvarchar(20), QsQueryId), N':', CONVERT(nvarchar(20), QsPlanId))
             FROM Forced
             ORDER BY ForceFailureCount DESC;
         END;
@@ -5550,7 +5563,8 @@ ORDER BY ag.name, ar.replica_server_name, drs.database_id;';
                 f.FindingOrdinal,
                 ROW_NUMBER() OVER (
                     PARTITION BY f.Category, f.RuleId,
-                                 ISNULL(f.DatabaseName, N''), ISNULL(f.ObjectName, N''), ISNULL(f.SessionId, -1)
+                                 ISNULL(f.DatabaseName, N''), ISNULL(f.ObjectName, N''),
+                                 ISNULL(f.SessionId, -1), ISNULL(f.AnchorKey, N'')
                     ORDER BY
                         CASE f.Severity WHEN N'Critical' THEN 1 WHEN N'High' THEN 2
                                         WHEN N'Medium' THEN 3 WHEN N'Low' THEN 4 ELSE 5 END,
@@ -5647,6 +5661,59 @@ ORDER BY ag.name, ar.replica_server_name, drs.database_id;';
                   WHEN N'MEDIUM' THEN 3 WHEN N'HIGH' THEN 4
                   WHEN N'CRITICAL' THEN 5 ELSE 2 END;
 
+        -- =====================================================================
+        -- @MaxFindings final-output enforcement + overflow finding (D-087).
+        -- Applied after dedup/fold and the @MinSeverity filter, before output.
+        -- Critical and Coverage rows are never truncated (D-070/D-083); one
+        -- Informational Coverage row records the truncation. The lowest-ranked
+        -- non-protected rows (by the D-068 order) are dropped first.
+        -- =====================================================================
+        DECLARE @FindingTotal int = (SELECT COUNT(1) FROM #fr_findings);
+        IF @FindingTotal > @MaxFindings
+        BEGIN
+            DECLARE @ProtectedCount int =
+                (SELECT COUNT(1) FROM #fr_findings
+                 WHERE Severity = N'Critical' OR Category = N'Coverage');
+            -- Reserve one slot for the overflow row itself.
+            DECLARE @NonProtectedBudget int = @MaxFindings - @ProtectedCount - 1;
+            IF @NonProtectedBudget < 0 SET @NonProtectedBudget = 0;
+
+            ;WITH rankable AS
+            (
+                SELECT f.FindingOrdinal,
+                    ROW_NUMBER() OVER (
+                        ORDER BY
+                            CASE f.Severity WHEN N'Critical' THEN 1 WHEN N'High' THEN 2
+                                            WHEN N'Medium' THEN 3 WHEN N'Low' THEN 4 ELSE 5 END,
+                            CASE f.Confidence WHEN N'High' THEN 1 WHEN N'Medium' THEN 2
+                                              WHEN N'Low' THEN 3 ELSE 4 END,
+                            CASE f.EvidenceType WHEN N'Observed' THEN 1 WHEN N'Inferred' THEN 2 ELSE 3 END,
+                            f.StartTimeUtc ASC, f.RuleId ASC, f.FindingOrdinal ASC
+                    ) AS rnk
+                FROM #fr_findings AS f
+                WHERE f.Severity <> N'Critical' AND f.Category <> N'Coverage'
+            )
+            DELETE f
+            FROM #fr_findings AS f
+            INNER JOIN rankable AS r ON r.FindingOrdinal = f.FindingOrdinal
+            WHERE r.rnk > @NonProtectedBudget;
+
+            INSERT INTO #fr_findings
+            (Severity, Confidence, EvidenceType, Category, RuleId, Title, Summary, Evidence, Recommendation, StartTimeUtc, EndTimeUtc, MoreInfo)
+            VALUES
+            (
+                N'Informational', N'High', N'Observed', N'Coverage',
+                N'FR_R0026_CoverageAndCapabilitySummary',
+                N'Findings truncated to the @MaxFindings cap',
+                CONCAT(N'The report produced ', @FindingTotal, N' findings; output was capped at ', @MaxFindings, N'.'),
+                LEFT(CONCAT(N'TotalFindings=', @FindingTotal, N'; MaxFindings=', @MaxFindings,
+                            N'; Critical and Coverage findings are never truncated (D-070/D-083).'), 1900),
+                N'Raise @MaxFindings (max 2000), narrow the time window, or raise @MinSeverity to focus on higher-severity findings.',
+                @ReportStartUtc, @ReportEndUtc,
+                N'Overflow truncation per D-087.'
+            );
+        END;
+
         IF UPPER(@OutputFormat) = N'MARKDOWN'
         BEGIN
             DECLARE @ReportMarkdown nvarchar(max) = N'';
@@ -5684,10 +5751,17 @@ ORDER BY ag.name, ar.replica_server_name, drs.database_id;';
 
 
 
+            -- Same deterministic order as the result-set output (D-068).
             SELECT @ReportMarkdown = @ReportMarkdown +
                 N'- **' + Severity + N'** [' + RuleId + N'] ' + Title + N': ' + Summary + CHAR(13) + CHAR(10)
             FROM #fr_findings
-            ORDER BY FindingOrdinal;
+            ORDER BY
+                CASE Severity WHEN N'Critical' THEN 1 WHEN N'High' THEN 2
+                              WHEN N'Medium' THEN 3 WHEN N'Low' THEN 4 ELSE 5 END,
+                CASE Confidence WHEN N'High' THEN 1 WHEN N'Medium' THEN 2
+                                WHEN N'Low' THEN 3 ELSE 4 END,
+                CASE EvidenceType WHEN N'Observed' THEN 1 WHEN N'Inferred' THEN 2 ELSE 3 END,
+                StartTimeUtc ASC, RuleId ASC, FindingOrdinal ASC;
 
             SET @ReportMarkdown = @ReportMarkdown + CHAR(13) + CHAR(10) + N'## Timeline' + CHAR(13) + CHAR(10);
 
@@ -5753,8 +5827,21 @@ ORDER BY ag.name, ar.replica_server_name, drs.database_id;';
 
         IF UPPER(@OutputFormat) IN (N'DEFAULT', N'FINDINGSONLY')
         BEGIN
+            -- Deterministic order (D-068): Severity -> Confidence -> EvidenceType
+            -- -> StartTimeUtc -> RuleId, with the internal FindingOrdinal as the
+            -- final total-order tie-break. FindingOrdinal is re-sequenced as the
+            -- display rank so the output reads 1..N top-to-bottom; the 16-column
+            -- contract (D-067) is unchanged.
             SELECT
-                  FindingOrdinal
+                  ROW_NUMBER() OVER (
+                      ORDER BY
+                          CASE Severity WHEN N'Critical' THEN 1 WHEN N'High' THEN 2
+                                        WHEN N'Medium' THEN 3 WHEN N'Low' THEN 4 ELSE 5 END,
+                          CASE Confidence WHEN N'High' THEN 1 WHEN N'Medium' THEN 2
+                                          WHEN N'Low' THEN 3 ELSE 4 END,
+                          CASE EvidenceType WHEN N'Observed' THEN 1 WHEN N'Inferred' THEN 2 ELSE 3 END,
+                          StartTimeUtc ASC, RuleId ASC, FindingOrdinal ASC
+                  ) AS FindingOrdinal
                 , Severity
                 , Confidence
                 , EvidenceType
@@ -5772,14 +5859,12 @@ ORDER BY ag.name, ar.replica_server_name, drs.database_id;';
                 , MoreInfo
             FROM #fr_findings
             ORDER BY
-                CASE Severity
-                    WHEN N'Critical' THEN 1
-                    WHEN N'High' THEN 2
-                    WHEN N'Medium' THEN 3
-                    WHEN N'Low' THEN 4
-                    ELSE 5
-                END,
-                FindingOrdinal;
+                CASE Severity WHEN N'Critical' THEN 1 WHEN N'High' THEN 2
+                              WHEN N'Medium' THEN 3 WHEN N'Low' THEN 4 ELSE 5 END,
+                CASE Confidence WHEN N'High' THEN 1 WHEN N'Medium' THEN 2
+                                WHEN N'Low' THEN 3 ELSE 4 END,
+                CASE EvidenceType WHEN N'Observed' THEN 1 WHEN N'Inferred' THEN 2 ELSE 3 END,
+                StartTimeUtc ASC, RuleId ASC, FindingOrdinal ASC;
         END;
 
         IF UPPER(@OutputFormat) IN (N'DEFAULT', N'TIMELINEONLY')
