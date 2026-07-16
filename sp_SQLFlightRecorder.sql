@@ -19,8 +19,8 @@
 --   * Collect / CollectDebug / Report / Configure / Purge:
 --       implemented as the procedure evolves through the v0.1 roadmap
 --
--- Tool-Version:   0.4.1
--- Build-Date-Utc: 2026-07-15
+-- Tool-Version:   0.4.2
+-- Build-Date-Utc: 2026-07-16
 -- Design:         docs/design.md
 -- Decisions:      docs/decisions.md
 --
@@ -83,15 +83,15 @@ BEGIN
     -- =========================================================================
     -- Constants and version info
     -- =========================================================================
-    DECLARE @ToolVersion             nvarchar(30)  = N'0.4.1';
-    DECLARE @BuildDateUtc            datetime2(3)  = CONVERT(datetime2(3), '2026-07-15T00:00:00');
-    -- SchemaVersion stays 0.4.0: v0.4.1 changes no DDL (rule lifecycle flips
-    -- are seed data, not schema). Forward-only marker per D-038.
+    DECLARE @ToolVersion             nvarchar(30)  = N'0.4.2';
+    DECLARE @BuildDateUtc            datetime2(3)  = CONVERT(datetime2(3), '2026-07-16T00:00:00');
+    -- SchemaVersion stays 0.4.0: v0.4.1/v0.4.2 change no DDL (rule lifecycle
+    -- flips and new FR_Config seeds are data, not schema). Forward-only (D-038).
     DECLARE @SchemaVersion            nvarchar(20) = N'0.4.0';
     -- Rule-pack version is part of the Markdown header contract (D-085).
     -- It names the release that last changed rule logic or the rule catalog
-    -- (0.4.1 disabled FR_R0030-FR_R0034).
-    DECLARE @RulePackVersion         nvarchar(20)  = N'0.4.1';
+    -- (0.4.2 implemented FR_R0001/2/4/5/6 and the §7.13 folds).
+    DECLARE @RulePackVersion         nvarchar(20)  = N'0.4.2';
     DECLARE @SupportedSqlServerRange nvarchar(50)  = N'SQL Server 2012–2025';
     DECLARE @PartNumber              int           = 1;
     DECLARE @PartTotal               int           = 1;
@@ -2047,6 +2047,16 @@ END;
                 DELETE c FROM dbo.FR_PlanCacheSummary c
                     INNER JOIN dbo.FR_Snapshot s ON s.SnapshotId = c.SnapshotId
                     WHERE s.InstanceFingerprint = @DemoFingerprint;
+            -- v0.4.2 demo children (FR_R0001/2/4/5 sources) must be cleaned
+            -- before FR_Snapshot, or the delete below fails the FK.
+            IF OBJECT_ID(N'dbo.FR_Request', N'U') IS NOT NULL
+                DELETE c FROM dbo.FR_Request c
+                    INNER JOIN dbo.FR_Snapshot s ON s.SnapshotId = c.SnapshotId
+                    WHERE s.InstanceFingerprint = @DemoFingerprint;
+            IF OBJECT_ID(N'dbo.FR_FileStat', N'U') IS NOT NULL
+                DELETE c FROM dbo.FR_FileStat c
+                    INNER JOIN dbo.FR_Snapshot s ON s.SnapshotId = c.SnapshotId
+                    WHERE s.InstanceFingerprint = @DemoFingerprint;
 
             DELETE FROM dbo.FR_Snapshot WHERE InstanceFingerprint = @DemoFingerprint;
 
@@ -2115,6 +2125,35 @@ END;
                 VALUES
                     (@s1, @dt1, 20000, 512000, 12000, 96000, 1000000, 50000, 5000000),
                     (@s3, @dt3, 20500, 520000, 13000, 104000, 1060000, 53000, 5200000);
+
+            -- v0.4.2 demo rows for the completed v0.1-family rules. Kept modest
+            -- so they showcase individual findings (no restart, no storm, no
+            -- gap — those would perturb the QS/plan-cache demo above and are
+            -- covered by tests/fixtures/rules).
+            IF OBJECT_ID(N'dbo.FR_Request', N'U') IS NOT NULL
+                INSERT INTO dbo.FR_Request
+                    (SnapshotId, SnapshotUtc, SessionId, DatabaseId, BlockingSessionId,
+                     OpenTransactionCount, RequestedMemoryKb, GrantedMemoryKb)
+                VALUES
+                    -- FR_R0001: sessions 71,72 blocked by head 70 (below the storm threshold)
+                    (@s2, @dt2, 71, @demoDbId, 70, 0, NULL, NULL),
+                    (@s2, @dt2, 72, @demoDbId, 70, 0, NULL, NULL),
+                    (@s2, @dt2, 70, @demoDbId, 0, 1, NULL, NULL),
+                    -- FR_R0002: session 80 holds an open transaction across the window (span ~2 min)
+                    (@s1, @dt1, 80, @demoDbId, 0, 1, NULL, NULL),
+                    (@s3, @dt3, 80, @demoDbId, 0, 1, NULL, NULL),
+                    -- FR_R0005: session 90 requested a memory grant that was not granted
+                    (@s3, @dt3, 90, @demoDbId, 0, 0, 500000, NULL);
+
+            -- FR_R0004: one database file whose read+write stall per I/O rises
+            -- across the window (no baseline in demo, so Confidence is Low).
+            IF OBJECT_ID(N'dbo.FR_FileStat', N'U') IS NOT NULL
+                INSERT INTO dbo.FR_FileStat
+                    (SnapshotId, SnapshotUtc, DatabaseId, FileId, NumOfReads, NumOfBytesRead,
+                     IoStallReadMs, NumOfWrites, NumOfBytesWritten, IoStallWriteMs, SizeOnDiskBytes)
+                VALUES
+                    (@s1, @dt1, @demoDbId, 1, 1000, 8192000, 1000, 0, 0, 0, 0),
+                    (@s3, @dt3, @demoDbId, 1, 1100, 9011200, 6000, 0, 0, 0, 0);
 
             COMMIT TRAN;
 
