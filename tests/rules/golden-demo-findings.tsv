@@ -1,0 +1,11 @@
+1|High|High|Observed|Blocking|FR_R0001_ActiveBlockingChain
+2|High|High|Observed|Blocking|FR_R0013_DeadlocksObserved
+3|High|High|Observed|Memory|FR_R0005_MemoryGrantsPending
+4|High|Medium|Inferred|QueryStore|FR_R0015_QueryPlanRegression
+5|Medium|High|Observed|QueryStore|FR_R0016_TopCpuConsumerInWindow
+6|Medium|High|Observed|QueryStore|FR_R0016_TopCpuConsumerInWindow
+7|Medium|High|Observed|QueryStore|FR_R0018_FailedPlanForcing
+8|Medium|High|Observed|Blocking|FR_R0002_LongRunningOpenTransaction
+9|Medium|Medium|Inferred|PlanCache|FR_R0020_HighCompilationRate
+10|Medium|Low|Inferred|IO|FR_R0004_FileIoLatencySpike
+11|Informational|High|Observed|Coverage|FR_R0026_CoverageAndCapabilitySummary
