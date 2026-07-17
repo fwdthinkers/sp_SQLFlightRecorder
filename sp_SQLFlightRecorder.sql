@@ -19,8 +19,8 @@
 --   * Collect / CollectDebug / Report / Configure / Purge:
 --       implemented as the procedure evolves through the v0.1 roadmap
 --
--- Tool-Version:   0.4.2
--- Build-Date-Utc: 2026-07-16
+-- Tool-Version:   0.4.3
+-- Build-Date-Utc: 2026-07-17
 -- Design:         docs/design.md
 -- Decisions:      docs/decisions.md
 --
@@ -83,15 +83,15 @@ BEGIN
     -- =========================================================================
     -- Constants and version info
     -- =========================================================================
-    DECLARE @ToolVersion             nvarchar(30)  = N'0.4.2';
-    DECLARE @BuildDateUtc            datetime2(3)  = CONVERT(datetime2(3), '2026-07-16T00:00:00');
-    -- SchemaVersion stays 0.4.0: v0.4.1/v0.4.2 change no DDL (rule lifecycle
-    -- flips and new FR_Config seeds are data, not schema). Forward-only (D-038).
+    DECLARE @ToolVersion             nvarchar(30)  = N'0.4.3';
+    DECLARE @BuildDateUtc            datetime2(3)  = CONVERT(datetime2(3), '2026-07-17T00:00:00');
+    -- SchemaVersion stays 0.4.0: v0.4.1/v0.4.2/v0.4.3 change no DDL (rule
+    -- lifecycle flips and new FR_Config seeds are data). Forward-only (D-038).
     DECLARE @SchemaVersion            nvarchar(20) = N'0.4.0';
     -- Rule-pack version is part of the Markdown header contract (D-085).
     -- It names the release that last changed rule logic or the rule catalog
-    -- (0.4.2 implemented FR_R0001/2/4/5/6 and the §7.13 folds).
-    DECLARE @RulePackVersion         nvarchar(20)  = N'0.4.2';
+    -- (0.4.3 completed the FR_R0003 escalation before the v1.0 lock).
+    DECLARE @RulePackVersion         nvarchar(20)  = N'0.4.3';
     DECLARE @SupportedSqlServerRange nvarchar(50)  = N'SQL Server 2012–2025';
     DECLARE @PartNumber              int           = 1;
     DECLARE @PartTotal               int           = 1;

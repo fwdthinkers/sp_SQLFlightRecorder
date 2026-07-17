@@ -7,6 +7,29 @@ Per design decision D-175, entries tag the affected `RuleId`s and `@Mode`s so
 runbook owners can grep. Versioning follows the project-specific semver of
 D-171 (major = contract break; minor = additive; patch = fixes).
 
+## [0.4.3] - 2026-07-17
+
+Pre-v1.0 rule-maturation patch. Resolves the last documented rule-behavior gap
+before the v1.0 contract/wording lock. `SchemaVersion` stays `0.4.0` (no DDL).
+
+### Changed
+
+- **FR_R0003 TopWaitTypeSpike** (`@Mode = Report`): severity now escalates to
+  **High** when the top spiking wait is a hard-coded critical wait type (D-093:
+  `PAGEIOLATCH_*`, `WRITELOG`, `RESOURCE_SEMAPHORE`, `LCK_M_*`, `THREADPOOL`,
+  `SOS_SCHEDULER_YIELD`); **Medium** otherwise. This completes the §7.9 "Medium
+  (escalates High)" definition. Escalation is by wait class, not row count, so
+  D-069 holds; it uses the hard-coded list, not the `CriticalWaitTypes` config
+  key (honoring stays v1.1, D-105). The `FR_Rules` catalog severity remains the
+  Medium base (D-091). `InstallDemoData` does not seed `FR_Wait`, so the demo
+  golden is unchanged — the output contract is stable.
+
+### Added
+
+- FR_R0003 fixtures (critical→High, non-critical→Medium, no-delta→silent) and a
+  `.gitattributes` keeping `.sh`/`.tsv`/`.sql`/`.md` LF so a CRLF checkout cannot
+  break the byte-exact golden or bash scripts on Linux CI.
+
 ## [0.4.2] - 2026-07-16
 
 Promised-scope rule completion and report-contract stabilization. No new
