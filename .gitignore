@@ -1,0 +1,9 @@
+# Release bundle produced by scripts/build-release-artifact.sh (and release.yml).
+# The shipped artifact is the tracked sp_SQLFlightRecorder.sql; dist/ is a
+# byte-identical build copy plus checksum/notes and is never committed.
+dist/
+
+# Python bytecode from the build-pipeline tooling (linter + doc generators,
+# D-148). These never run on a user's SQL Server and are not part of a release.
+__pycache__/
+*.pyc

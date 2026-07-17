@@ -1,0 +1,146 @@
+# =============================================================================
+# Release workflow — sp_SQLFlightRecorder (D-173)
+# -----------------------------------------------------------------------------
+# Implements the tag half of the D-173 release process:
+#   RC branch → Tier-2 attestation issues → Tier-1 green → CHANGELOG entry
+#   → tag → *release.yml builds the artifact + regenerates the matrix*.
+#
+# Two ways in:
+#   * push a tag  v*           — the real release: gate, build, and publish a
+#                                GitHub Release with the artifact + checksum.
+#   * workflow_dispatch        — a DRY RUN: gate and build exactly the same
+#                                bundle, upload it as a workflow artifact for
+#                                inspection, but publish nothing. This is the
+#                                "release dry-run" required for v1.0.0-rc.
+#
+# Everything here is build-pipeline tooling (D-148); nothing runs on a user's
+# SQL Server. The shipped artifact is a single file (D-110/D-152), so "build"
+# is validate → byte-identical copy → checksum → CHANGELOG notes, done by
+# scripts/build-release-artifact.sh (locally runnable).
+#
+# Compat-matrix regeneration (scripts/gen-compat-matrix.py, D-165) is wired in
+# a following Group D commit.
+# =============================================================================
+
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to dry-run build (e.g. 1.0.0-rc.1). Empty = use the artifact Tool-Version header.'
+        required: false
+        default: ''
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    name: Release gate (lint + doc-coverage + fixtures/golden)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # For a tag push, the tag must match the artifact header before we spend
+      # time on containers — catches a mistagged release immediately.
+      - name: Verify tag matches artifact Tool-Version (tag pushes only)
+        if: github.event_name == 'push'
+        run: |
+          set -euo pipefail
+          HEADER=$(grep -m1 -E '^-- Tool-Version:' sp_SQLFlightRecorder.sql | awk '{print $3}')
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          if [[ "${HEADER}" != "${TAG_VERSION}" ]]; then
+            echo "::error::tag ${GITHUB_REF_NAME} (version ${TAG_VERSION}) does not match artifact Tool-Version ${HEADER}."
+            exit 1
+          fi
+          echo "Tag and header agree on ${HEADER}."
+
+      - name: Static analysis (linter + self-test)
+        run: |
+          python tests/static-analysis/lint.py sp_SQLFlightRecorder.sql
+          python tests/static-analysis/lint.py --self-test
+
+      - name: Doc coverage + generator staleness
+        run: |
+          bash scripts/check-doc-coverage.sh
+          python scripts/gen-rule-docs.py --check
+          python scripts/gen-mode-docs.py --check
+
+      - name: Rule fixtures + demo golden (SQL Server 2022)
+        run: bash tests/rules/run-rule-fixtures.sh mcr.microsoft.com/mssql/server:2022-latest
+
+  build:
+    name: Build release bundle
+    needs: gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Resolve version
+        id: resolve
+        env:
+          # Passed via env (not inlined as ${{ }}) to avoid script injection.
+          INPUT_VERSION: ${{ github.event.inputs.version }}
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_EVENT_NAME}" == "push" ]]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+          else
+            VERSION="${INPUT_VERSION}"
+          fi
+          if [[ -z "${VERSION}" ]]; then
+            VERSION=$(grep -m1 -E '^-- Tool-Version:' sp_SQLFlightRecorder.sql | awk '{print $3}')
+          fi
+          echo "VERSION=${VERSION}" >> "${GITHUB_ENV}"
+          echo "version=${VERSION}" >> "${GITHUB_OUTPUT}"
+          echo "Resolved release version: ${VERSION}"
+
+      - name: Build + validate the release bundle
+        run: bash scripts/build-release-artifact.sh --version "${VERSION}"
+
+      - name: Upload release bundle as a workflow artifact (always)
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-bundle-${{ steps.resolve.outputs.version }}
+          path: dist/
+          if-no-files-found: error
+
+      - name: Publish GitHub Release (tag pushes only)
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          PRERELEASE=""
+          case "${VERSION}" in *-*) PRERELEASE="--prerelease" ;; esac
+          gh release create "${GITHUB_REF_NAME}" \
+            dist/sp_SQLFlightRecorder.sql dist/SHA256SUMS \
+            --title "sp_SQLFlightRecorder ${VERSION}" \
+            --notes-file dist/RELEASE_NOTES.md \
+            --verify-tag ${PRERELEASE}
+          echo "Published release ${GITHUB_REF_NAME}."
+
+      - name: Dry-run summary (workflow_dispatch)
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          echo "DRY RUN: built and validated the release bundle for ${VERSION}."
+          echo "No GitHub Release was published; the bundle is attached to this run as 'release-bundle-${VERSION}'."
