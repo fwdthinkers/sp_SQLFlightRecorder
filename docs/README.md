@@ -2,8 +2,19 @@
 
 This is the map of the project's documentation and the coverage checklist for
 the v1.0.0 documentation-completeness gate (§11.6). Each row names where a topic
-is documented; **Status** is `present` or `planned` (planned pages are authored
-in v1.0.0-rc Groups B/C — see `docs/implementation-plan-v1.0.0-rc.md`).
+is documented; **Status** is `present`, `sample` (a v1.0.0-rc structure sample
+establishing the final template — the rest are produced from it), or `planned`
+(authored in v1.0.0-rc Groups B/C — see `docs/implementation-plan-v1.0.0-rc.md`).
+
+> **Structure samples (v1.0.0-rc):** the reusable templates are in place — a
+> rule page ([rules/FR_R0003.md](rules/FR_R0003.md) from
+> [rules/_template.md](rules/_template.md)), a mode page
+> ([modes/report.md](modes/report.md)), the failure-mode catalog
+> ([operations/troubleshooting.md](operations/troubleshooting.md)), the
+> security/threat-model draft
+> ([security-threat-model-draft.md](security-threat-model-draft.md)), the
+> security/support/governance skeletons (SECURITY/SUPPORT/CONTRIBUTING/
+> CODE_OF_CONDUCT/CODEOWNERS), and two issue templates (bug, false-positive).
 
 ## Start here
 - [README.md](../README.md) — what the tool is, 30-second install, headline use.

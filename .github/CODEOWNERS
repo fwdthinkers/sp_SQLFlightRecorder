@@ -1,0 +1,22 @@
+# CODEOWNERS — sp_SQLFlightRecorder
+# Per D-163 (route by area) and D-185 (at v1.0 launch all paths route to a
+# single @core-maintainers team; topic-specific teams are added when trusted
+# maintainers with that focus exist).
+#
+# NOTE: the @core-maintainers team must exist in the GitHub org for these rules
+# to take effect. Until then, GitHub treats unknown owners as no-op.
+
+# Default owner for everything.
+*                                   @forward-thinkers-lab/core-maintainers
+
+# The shipped artifact requires the two-reviewer rule (D-158); routing it
+# explicitly keeps the safety-critical file visible to the core team.
+/sp_SQLFlightRecorder.sql           @forward-thinkers-lab/core-maintainers
+
+# Safety-critical build-pipeline guardrails.
+/tests/static-analysis/             @forward-thinkers-lab/core-maintainers
+/.github/workflows/                 @forward-thinkers-lab/core-maintainers
+
+# When topic teams exist (D-185), split e.g.:
+#   /docs/rules/          @forward-thinkers-lab/rule-pack-maintainers
+#   /docs/compatibility/  @forward-thinkers-lab/compat-maintainers
