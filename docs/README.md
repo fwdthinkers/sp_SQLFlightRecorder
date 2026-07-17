@@ -71,9 +71,10 @@ toggles, display, internal), incl. the v0.4.2 tunables `LongOpenTxnSeconds` and
 Closed key set (D-127), incl. `PlanAnalysisSupport = 0`.
 
 ## Compatibility → [compatibility/matrix.md](compatibility/matrix.md) (D-165) — **present**
-Tier-1 verified (2017/2019/2022/2025 Linux) + editions verified
-(Developer/Standard/Express) + Tier-2 pending attestation (2012/2014/2016
-Windows, Azure SQL MI/DB).
+Six Tier-1 verified targets (2017/2019/2022/2025 Developer + 2022
+Express/Standard, with EngineEdition) + Tier-2 pending attestation (2012/2014/2016
+Windows, Azure SQL MI/DB). Tier-2 process:
+[compatibility/tier2-attestation.md](compatibility/tier2-attestation.md) — **present**.
 
 ## Operations
 - [operations/troubleshooting.md](operations/troubleshooting.md) — failure-mode
@@ -110,6 +111,9 @@ pages.
 ## Tests
 - [tests/rules/](../tests/rules/) — rule fixtures + demo golden (D-160, D-122).
 - [tests/static-analysis/](../tests/static-analysis/) — linter + fixtures (D-144).
+- [tests/upgrade/](../tests/upgrade/) — upgrade-path validation (D-038).
+- [tests/perf/](../tests/perf/) — cost + soak harnesses (D-143, D-145).
+- [tests/compat/](../tests/compat/) — Tier-2 attestation evidence helpers (D-164).
 - [tests/sp_SQLFlightRecorderManualScenarios.sql](../tests/sp_SQLFlightRecorderManualScenarios.sql)
   — manual scenarios.
 
