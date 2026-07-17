@@ -22,8 +22,14 @@
 # Per D-148, external tooling (Python here) is permitted in the build pipeline
 # only; nothing from this workflow ever runs on a user's SQL Server.
 #
-# Not yet implemented here (tracked for later releases per the design):
-#   cost-regression test (D-143), golden output tests (D-122), soak (D-145).
+# Also enforced (fast, ubuntu-only gates that fence the expensive matrix):
+#   * static-analysis — linter + self-test.
+#   * doc-coverage    — a doc page/entry exists for every mode, rule, and
+#                       config key derived from the artifact (§11.6, D-169),
+#                       plus the doc generators are in sync (no stale pages).
+#
+# Not yet implemented here (tracked for the remaining Group D commits):
+#   golden output tests (D-122), cost-regression (D-143), soak (D-145).
 # =============================================================================
 
 name: ci-tier1
@@ -62,9 +68,31 @@ jobs:
       - name: Run linter self-tests
         run: python tests/static-analysis/lint.py --self-test
 
+  doc-coverage:
+    name: Doc coverage (modes / rules / config + generator staleness)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Assert a doc page/entry exists for every mode, rule, and config key
+        run: bash scripts/check-doc-coverage.sh
+
+      - name: Assert generated rule docs are in sync with the artifact
+        run: python scripts/gen-rule-docs.py --check
+
+      - name: Assert generated mode docs are in sync with the artifact
+        run: python scripts/gen-mode-docs.py --check
+
   tier1:
     name: Tier 1 — ${{ matrix.label }}
-    needs: static-analysis
+    needs: [static-analysis, doc-coverage]
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
