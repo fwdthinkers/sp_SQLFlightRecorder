@@ -1,0 +1,13 @@
+# Keep line endings deterministic across platforms.
+# Shell scripts and test data must stay LF so they run on Linux CI / in Docker
+# and so byte-exact golden comparisons are not broken by a CRLF checkout.
+*.sh            text eol=lf
+*.tsv           text eol=lf
+*.py            text eol=lf
+tests/**        text eol=lf
+scripts/**      text eol=lf
+
+# The shipped artifact and docs: normalize to LF in the repo.
+*.sql           text eol=lf
+*.md            text eol=lf
+*.yml           text eol=lf

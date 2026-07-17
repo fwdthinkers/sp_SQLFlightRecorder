@@ -54,6 +54,16 @@ assert(){ # assert <name> <actual> <expected>
 }
 two_snaps="DECLARE @t1 datetime2(3)=DATEADD(minute,-3,SYSUTCDATETIME()), @t2 datetime2(3)=SYSUTCDATETIME(); INSERT dbo.FR_Snapshot(SnapshotUtc,InstanceFingerprint) VALUES(@t1,N'FX'),(@t2,N'FX'); DECLARE @s1 bigint; SELECT @s1=MIN(SnapshotId) FROM dbo.FR_Snapshot;"
 
+echo "== FR_R0003 TopWaitTypeSpike (severity escalation, D-093) =="
+# rulesev <file> <ruleprefix> -> Severity column of that rule's finding
+rulesev(){ awk -F'|' -v r="$2" '$6==r{print $2; exit}' "$1"; }
+reset; q "${two_snaps} INSERT dbo.FR_Wait(SnapshotId,SnapshotUtc,WaitType,WaitingTasksCount,WaitTimeMs,MaxWaitTimeMs,SignalWaitTimeMs) VALUES (@s1,@t1,N'THREADPOOL',1,100,10,5),(@s1+1,@t2,N'THREADPOOL',5,5000,10,5);" >/dev/null
+report > /tmp/fx.out; assert "positive High: critical wait (THREADPOOL) escalates" "$(rulesev /tmp/fx.out FR_R0003_TopWaitTypeSpike)" "High"
+reset; q "${two_snaps} INSERT dbo.FR_Wait(SnapshotId,SnapshotUtc,WaitType,WaitingTasksCount,WaitTimeMs,MaxWaitTimeMs,SignalWaitTimeMs) VALUES (@s1,@t1,N'ASYNC_NETWORK_IO',1,100,10,5),(@s1+1,@t2,N'ASYNC_NETWORK_IO',5,5000,10,5);" >/dev/null
+report > /tmp/fx.out; assert "positive Medium: non-critical wait stays Medium" "$(rulesev /tmp/fx.out FR_R0003_TopWaitTypeSpike)" "Medium"
+reset; q "${two_snaps} INSERT dbo.FR_Wait(SnapshotId,SnapshotUtc,WaitType,WaitingTasksCount,WaitTimeMs,MaxWaitTimeMs,SignalWaitTimeMs) VALUES (@s1,@t1,N'THREADPOOL',5,5000,10,5),(@s1+1,@t2,N'THREADPOOL',1,100,10,5);" >/dev/null
+report > /tmp/fx.out; assert "negative: no positive wait delta -> silent" "$(rulecnt /tmp/fx.out FR_R0003_TopWaitTypeSpike)" 0
+
 echo "== FR_R0001 ActiveBlockingChain =="
 reset; q "${two_snaps} INSERT dbo.FR_Request(SnapshotId,SnapshotUtc,SessionId,DatabaseId,BlockingSessionId,OpenTransactionCount) VALUES (@s1,@t1,51,5,55,0),(@s1,@t1,52,5,55,0),(@s1,@t1,55,5,0,1);" >/dev/null
 report > /tmp/fx.out; assert "positive: lead blocker fires" "$(rulecnt /tmp/fx.out FR_R0001_ActiveBlockingChain)" 1
@@ -107,11 +117,14 @@ echo "== golden: InstallDemoData findings (deterministic sort, D-068/D-122) =="
 q "DELETE dbo.FR_Request; DELETE dbo.FR_Wait; DELETE dbo.FR_FileStat; DELETE dbo.FR_InstanceSnapshot; DELETE dbo.FR_QueryStoreTopN; DELETE dbo.FR_Deadlock; DELETE dbo.FR_PlanCacheSummary; DELETE dbo.FR_Snapshot;" >/dev/null
 q "EXEC dbo.sp_SQLFlightRecorder @Mode=N'Configure', @ConfigKey=N'DisabledRules', @ConfigValue=N'';" >/dev/null
 q "EXEC dbo.sp_SQLFlightRecorder @Mode=N'InstallDemoData';" >/dev/null
-report | awk -F'|' 'NF>=6 && $1 ~ /^[0-9]+$/ {print $1"|"$2"|"$3"|"$4"|"$5"|"$6}' > /tmp/golden-actual.tsv
-if diff -q "${SCRIPT_DIR}/golden-demo-findings.tsv" /tmp/golden-actual.tsv >/dev/null 2>&1; then
+report | awk -F'|' 'NF>=6 && $1 ~ /^[0-9]+$/ {print $1"|"$2"|"$3"|"$4"|"$5"|"$6}' | tr -d '\r' > /tmp/golden-actual.tsv
+# Normalize line endings on both sides so a CRLF checkout of the golden (Windows
+# git autocrlf) does not read as a diff.
+tr -d '\r' < "${SCRIPT_DIR}/golden-demo-findings.tsv" > /tmp/golden-expected.tsv
+if diff -q /tmp/golden-expected.tsv /tmp/golden-actual.tsv >/dev/null 2>&1; then
   echo "  PASS  golden demo findings match ($(wc -l < /tmp/golden-actual.tsv | tr -d ' ') rows)"; PASS=$((PASS+1))
 else
-  echo "  FAIL  golden demo findings differ:"; diff "${SCRIPT_DIR}/golden-demo-findings.tsv" /tmp/golden-actual.tsv | sed 's/^/    /'; FAIL=$((FAIL+1))
+  echo "  FAIL  golden demo findings differ:"; diff /tmp/golden-expected.tsv /tmp/golden-actual.tsv | sed 's/^/    /'; FAIL=$((FAIL+1))
 fi
 
 echo ""

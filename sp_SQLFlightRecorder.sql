@@ -4640,18 +4640,37 @@ ORDER BY ag.name, ar.replica_server_name, drs.database_id;';
                     StartTimeUtc, EndTimeUtc, MoreInfo
                 )
                 SELECT
-                    N'Medium',
+                    -- §7.9: Medium, escalates High. Escalation is by wait class,
+                    -- not row count (so D-069 is preserved): a spike in a
+                    -- hard-coded critical wait type (D-093) is High; any other
+                    -- wait spike is Medium. This uses the hard-coded list, not
+                    -- the CriticalWaitTypes config key (honored from v1.1, D-105).
+                    CASE WHEN WaitType LIKE N'PAGEIOLATCH[_]%'
+                              OR WaitType = N'WRITELOG'
+                              OR WaitType = N'RESOURCE_SEMAPHORE'
+                              OR WaitType LIKE N'LCK[_]M[_]%'
+                              OR WaitType = N'THREADPOOL'
+                              OR WaitType = N'SOS_SCHEDULER_YIELD'
+                         THEN N'High' ELSE N'Medium' END,
                     N'Medium',
                     N'Inferred',
                     N'Waits',
                     N'FR_R0003_TopWaitTypeSpike',
                     N'Top wait type increased during the window',
                     CONCAT(N'Wait type ', WaitType, N' had the largest observed wait-time delta.'),
-                    CONCAT(N'DeltaWaitMs=', DeltaWaitMs),
+                    LEFT(CONCAT(N'WaitType=', WaitType, N'; DeltaWaitMs=', DeltaWaitMs,
+                                N'; Class=',
+                                CASE WHEN WaitType LIKE N'PAGEIOLATCH[_]%'
+                                          OR WaitType = N'WRITELOG'
+                                          OR WaitType = N'RESOURCE_SEMAPHORE'
+                                          OR WaitType LIKE N'LCK[_]M[_]%'
+                                          OR WaitType = N'THREADPOOL'
+                                          OR WaitType = N'SOS_SCHEDULER_YIELD'
+                                     THEN N'Critical (escalated High)' ELSE N'Non-critical (Medium)' END), 1900),
                     N'Consider correlating this wait type with workload, blocking, IO, memory, and application changes before taking action.',
                     @ReportStartUtc,
                     @ReportEndUtc,
-                    N'Computed from cumulative FR_Wait snapshots.'
+                    N'Computed from cumulative FR_Wait snapshots. Severity escalates to High for critical wait types (D-093).'
                 FROM WaitDelta;
             END;
         END;
