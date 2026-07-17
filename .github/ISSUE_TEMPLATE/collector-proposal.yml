@@ -1,0 +1,55 @@
+# New-collector proposal (D-156). Blank issues disabled (see config.yml).
+name: Collector proposal
+description: Propose a new diagnostic collector.
+labels: ["collector-proposal", "core"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Collectors run inside the Collect budget on production instances, so the
+        bar is safety first. New collectors ship in a minor release and must be
+        bounded by construction. Please confirm the constraints below.
+  - type: input
+    id: name
+    attributes:
+      label: Proposed collector name
+      description: e.g. WaitStatsBySession
+    validations:
+      required: true
+  - type: textarea
+    id: data
+    attributes:
+      label: What it captures and why
+      description: The diagnostic value, and the FR_* table(s) it would populate.
+    validations:
+      required: true
+  - type: textarea
+    id: source
+    attributes:
+      label: Data source and bounding strategy
+      description: Which DMV(s)/catalog views, and how it is bounded — explicit TOP(n) ORDER BY or a documented small-DMV allow-list (D-137). Must not use forbidden DMVs (D-136) or shred plan XML (D-015/D-046).
+    validations:
+      required: true
+  - type: input
+    id: availability
+    attributes:
+      label: Version / edition / platform availability
+      description: Where the source exists (2012+? Azure SQL DB? Linux?) and how it degrades where it does not.
+    validations:
+      required: true
+  - type: input
+    id: cost
+    attributes:
+      label: Expected cost
+      description: Rough per-snapshot cost; it must fit the Collect budget (median 2-8 s, cap 30 s, D-043).
+    validations:
+      required: true
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Constraints acknowledged
+      options:
+        - label: Bounded by explicit TOP(n) ORDER BY or the small-DMV allow-list (D-137); no forbidden DMVs (D-136).
+          required: true
+        - label: No plan-XML shredding; no permanent server/security changes; opt-in if sensitive (D-020/D-051).
+          required: true

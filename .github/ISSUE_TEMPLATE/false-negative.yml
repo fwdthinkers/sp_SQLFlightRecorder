@@ -1,0 +1,55 @@
+# False-negative report (D-156). Blank issues disabled (see config.yml).
+name: False negative
+description: A rule should have fired but did not.
+labels: ["false-negative", "rule-pack", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this when a **real situation existed but no finding was produced**.
+        If a rule fired when it should not have, use the false-positive template.
+        **Do not paste real query text or secrets.**
+  - type: input
+    id: rule-id
+    attributes:
+      label: Rule that should have fired
+      description: Expected RuleId, e.g. FR_R0004_FileIoLatencySpike. See docs/rules/.
+    validations:
+      required: true
+  - type: input
+    id: tool-version
+    attributes:
+      label: Tool version
+      description: Output of `EXEC dbo.sp_SQLFlightRecorder @Mode = N'About';`
+    validations:
+      required: true
+  - type: textarea
+    id: situation
+    attributes:
+      label: The situation
+      description: What actually happened on the instance that you believe the rule should have caught.
+    validations:
+      required: true
+  - type: textarea
+    id: why-missed
+    attributes:
+      label: Why you believe it was missed
+      description: Consider the rule's documented false-negative risks (cadence, row caps, gating, ignore list) before filing.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction (synthetic if possible)
+      description: Ideally seed FR_* rows that should trigger the rule (see tests/rules/).
+    validations:
+      required: false
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I read the rule's documented false-negative risks in docs/rules/<RuleId>.md.
+          required: true
+        - label: I removed any real query text / secrets from this report.
+          required: true

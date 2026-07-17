@@ -86,12 +86,30 @@ here. Status: **planned**.
   forever" promises (§11.8). Status: **planned**.
 
 ## Security & governance
-- [SECURITY.md](../SECURITY.md) + `docs/design.md` §12 threat model (Q-041).
-  Status: **planned**.
-- `docs/design.md` §13 appendices (Q-042). Status: **planned**.
-- [CONTRIBUTING.md](../CONTRIBUTING.md), [SUPPORT.md](../SUPPORT.md),
-  [CODE_OF_CONDUCT.md](../CODE_OF_CONDUCT.md); `docs/contributing/`
-  (overview, coding-style D-153, safety-checklist D-176). Status: **planned**.
+- [SECURITY.md](../SECURITY.md) — **present** (contacts are `TODO`, RC blocker).
+  Threat model draft: [security-threat-model-draft.md](security-threat-model-draft.md)
+  — **present** (folds into `docs/design.md` §12/§13, Q-041/Q-042, in Group F).
+- [CONTRIBUTING.md](../CONTRIBUTING.md) · [SUPPORT.md](../SUPPORT.md) ·
+  [CODE_OF_CONDUCT.md](../CODE_OF_CONDUCT.md) — **present** (conduct contact is
+  `TODO`, RC blocker).
+- `docs/contributing/`: [overview](contributing/overview.md) ·
+  [coding-style](contributing/coding-style.md) (D-153) ·
+  [safety-checklist](contributing/safety-checklist.md) (D-176) — **present**.
+- [.github/CODEOWNERS](../.github/CODEOWNERS) (D-163/185) — **present** (needs the
+  `@core-maintainers` org team to take effect).
+
+## Issue templates (8, D-156) → `.github/ISSUE_TEMPLATE/`
+bug, false-positive, false-negative, rule-proposal, collector-proposal,
+version-compat (doubles as the Tier-2 attestation vehicle, D-164),
+perf-regression, configuration. **Present** (blank issues disabled via
+`config.yml`).
+
+## Historical documents (not current instructions)
+[docs/parts/](parts/) and the v0.1 [docs/implementation-plan.md](implementation-plan.md)
+describe the build as it was during v0.1 (when the artifact lived under `src/`).
+They are preserved as accurate period records and are **not** current
+instructions — for current usage see [user-guide.md](user-guide.md) and the mode
+pages.
 
 ## Tests
 - [tests/rules/](../tests/rules/) — rule fixtures + demo golden (D-160, D-122).

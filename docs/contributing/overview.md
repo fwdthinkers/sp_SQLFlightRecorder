@@ -1,0 +1,27 @@
+# Contributing — overview
+
+This page orients a new contributor; [CONTRIBUTING.md](../../CONTRIBUTING.md) at
+the repo root is the authoritative process. The project is deliberately small
+and safety-first (design §1, §9); most rejections are about *staying boring and
+safe*, not code quality.
+
+## The shape of the project
+- One shipped file: `sp_SQLFlightRecorder.sql` (single-script model, D-110/D-152).
+- Authoritative context: [docs/design.md](../design.md),
+  [docs/decisions.md](../decisions.md). Disputes resolve by quoting them (D-178).
+- Phased roadmap (design §11) with **binding** exclusion lists per phase.
+
+## How work flows
+1. Open an issue with the matching template (blank issues are disabled).
+2. Branch from `main`; one implementation-plan part per PR.
+3. Run the linter + self-test, and the Docker matrix/fixtures if you have Docker.
+4. Fill the PR template's charter-compliance checklist (D-157).
+5. Review: two reviewers for the artifact, one for docs; maintainer for
+   safety-checklist items (D-158). The
+   [safety checklist](safety-checklist.md) is pasted into reviews when relevant.
+
+## Reading order for a first-timer
+1. [README.md](../../README.md) → [docs/user-guide.md](../user-guide.md).
+2. [coding-style.md](coding-style.md) and [safety-checklist.md](safety-checklist.md).
+3. The area you want to touch: [docs/rules/](../rules/) for rules,
+   [docs/modes/](../modes/) for modes.

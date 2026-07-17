@@ -27,26 +27,29 @@ security posture.
 | Shipped artifact (`sp_SQLFlightRecorder.sql`) | Integrity-critical | A tampered artifact runs with the installer's permissions. |
 | Caller permissions | — | `VIEW SERVER STATE` required; sysadmin discouraged (D-118). |
 
-### 12.3 Threat actors and trust boundaries *(representative)*
-- **Insider DBA with `VIEW SERVER STATE`.** In-scope for *least privilege*: the
-  tool never requires sysadmin for its default feature set (D-118) and makes no
-  permanent server/security changes by default (charter pillar, D-003/D-021).
-- **Non-DBA with read access to the repository database.** Can read `FR_*`
-  including `FR_QueryText`. Mitigation: **grant `SELECT` on `FR_*` to a scoped
-  role, not `public`** (see 12.5).
-- **Supply-chain / artifact tampering.** The single-file model (D-110/D-152)
-  makes the artifact easy to review and hash before install; the CI static
-  analysis (D-136/D-144) rejects forbidden DMVs/plan shredding.
-- **Out of scope:** network attackers against SQL Server itself, OS-level
-  compromise, and Azure control-plane threats — these are the platform's remit.
+### 12.3 Threat actors and trust boundaries
+| Actor | Capability | In-scope concern | Posture |
+|---|---|---|---|
+| Installer / operating DBA | Can install and run all modes; holds `VIEW SERVER STATE` | That the tool over-reaches or makes permanent changes | Least privilege: sysadmin is discouraged (D-118); no permanent server/security changes by default (D-003/D-021); opt-in for anything sensitive. |
+| Non-DBA with read access to the repository DB | Can `SELECT` from `FR_*` | Exposure of query text / error-log text | The repository can hold sensitive strings; restrict `SELECT` on `FR_*` to a scoped role, not `public` (12.5). |
+| Contributor / supply chain | Submits changes to the artifact | A malicious or unsafe change reaching users | Single-file, human-reviewable artifact (D-110/D-152); CI static analysis rejects forbidden DMVs / plan shredding (D-136/D-144); two-reviewer rule for the artifact (D-158). |
+| Scheduler / automation identity | Runs `Collect` on a schedule | Excess privilege on the job account | Collect needs only `VIEW SERVER STATE`; the optional Agent job is opt-in (D-005). |
 
-### 12.4 Security posture (already enforced) *(representative)*
-- No permanent security/config changes by default; every sensitive collector is
-  opt-in (`xp_readerrorlog` D-020/D-060; buffer pool D-051; Agent job D-005;
-  `@IncludeQueryPlans` reserved/disabled D-015/D-046/D-082/D-136).
-- Plans are never shredded; the forbidden-DMV list is CI-enforced (D-136/D-144).
-- `READ UNCOMMITTED` session-wide with no `NOLOCK` hints in output (D-017);
-  bounded reads only (D-137); `LOCK_TIMEOUT`/`DEADLOCK_PRIORITY LOW` (D-133/134).
+**Trust boundaries.** The tool trusts the SQL Server instance it runs in and the
+account that installs it. It does **not** attempt to defend against a compromised
+instance, OS, or cloud control-plane — those are the platform's remit and are out
+of scope. The security-relevant boundary is between the `FR_*` repository (which
+may hold sensitive data) and whoever can read that database.
+
+### 12.4 Controls (threat → control → decision)
+| Risk | Control | Decision |
+|---|---|---|
+| Plan-cache OOM / stalls from plan shredding | No plan APPLY DMVs; no plan-XML parsing; `@IncludeQueryPlans` is a reserved no-op | D-015/046/082/136 |
+| Unbounded / lock-heavy reads | Every external SELECT bounded by `TOP(n) ORDER BY` or a small-DMV allow-list; forbidden-DMV list CI-enforced | D-136/137/144 |
+| Blocking user workload | `READ UNCOMMITTED`, `LOCK_TIMEOUT`, `DEADLOCK_PRIORITY LOW`; diagnostic always loses | D-017/133/134 |
+| Permanent server changes | Nothing permanent by default; error-log scrape, buffer pool, Agent job, CHECKDB capture all opt-in | D-003/005/020/051/060 |
+| Sensitive data at rest | Bounded fields, no `NVARCHAR(MAX)` on hot rows; retention configurable; full `Uninstall` | D-040/183 |
+| Unsafe recommendations | Wording rules forbid `KILL`/force-plan/NOLOCK/shrink; drill-down queries are read-only | D-076/086 |
 
 ### 12.5 Data-sensitivity handling & recommendations
 - Treat `FR_QueryText` and `FR_ErrorLog` as potentially sensitive.
@@ -65,14 +68,30 @@ See [`SECURITY.md`](../SECURITY.md).
 
 ## §13 — Appendices (Q-042)
 
-- **A. Glossary** — Findings vs Timeline vs Coverage; Observed / Inferred /
-  Possible / Needs-Validation; Tier 1/2/3; headline vs contributor rule;
-  capability snapshot.
-- **B. References** — Microsoft DMV docs per collector; community wait-stats /
-  Query Store references; Keep a Changelog 1.1.0.
-- **C. Master Charter** — literal quotation so the design doc is self-contained.
-- **D. Failure-mode catalog** — canonical reprint of
-  [`docs/operations/troubleshooting.md`](operations/troubleshooting.md) (D-147).
+### A. Glossary (starter)
+| Term | Meaning |
+|---|---|
+| Finding | A prioritized observation with Severity/Confidence/EvidenceType (Findings result set). |
+| Timeline | Chronological events for the window (Timeline result set). |
+| Coverage finding | A finding about data completeness (gaps, skipped collectors), not an incident. |
+| Observed vs Inferred | Evidence type: directly captured vs. reasoned from a signal. |
+| Tier 1 / 2 / 3 | Automated CI / manual attestation / community reports (D-120/121/166). |
+| Headline vs contributor rule | A rule that folds others' findings into its `MoreInfo` vs. the folded rule (§7.13). |
+| Capability snapshot | The closed key set describing the engine, persisted per run (D-127). |
+
+### B. References (starter)
+- Microsoft Learn: the DMVs each collector reads (`sys.dm_os_wait_stats`,
+  `sys.dm_io_virtual_file_stats`, `sys.dm_exec_requests`, Query Store views).
+- Community: Paul Randal on wait statistics; Query Store guidance.
+- Keep a Changelog 1.1.0 (CHANGELOG format, D-175).
+
+### C. Master Charter
+Literal quotation of the original charter, so the design doc is self-contained
+(to be inserted at fold-in time).
+
+### D. Failure-mode catalog
+Canonical reprint of [`docs/operations/troubleshooting.md`](operations/troubleshooting.md)
+(D-147).
 
 ---
 

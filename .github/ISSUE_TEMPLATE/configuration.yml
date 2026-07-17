@@ -1,0 +1,43 @@
+# Configuration issue / request (D-156, the "config" template). Named
+# configuration.yml because config.yml is reserved for the chooser config.
+# Blank issues disabled (see config.yml).
+name: Configuration issue or request
+description: A problem with, or a request about, an FR_Config key or its behavior.
+labels: ["config", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this for a config key that behaves unexpectedly, or to request that a
+        threshold be tunable. See [docs/configuration.md](../../docs/configuration.md)
+        for the current keys. Note: some keys are defined but honored in a later
+        release (e.g. CriticalWaitTypes, D-105) — that is documented behavior.
+  - type: input
+    id: tool-version
+    attributes:
+      label: Tool version
+      description: Output of `EXEC dbo.sp_SQLFlightRecorder @Mode = N'About';`
+    validations:
+      required: true
+  - type: input
+    id: config-key
+    attributes:
+      label: Config key
+      description: The FR_Config key involved, if any.
+      placeholder: e.g. LongOpenTxnSeconds
+    validations:
+      required: false
+  - type: dropdown
+    id: kind
+    attributes:
+      label: This is
+      options: ["A bug (a key does not behave as documented)", "A request (make something tunable)"]
+    validations:
+      required: true
+  - type: textarea
+    id: detail
+    attributes:
+      label: Detail
+      description: What you set, what you expected, and what happened. For a request, the workload that motivates it.
+    validations:
+      required: true

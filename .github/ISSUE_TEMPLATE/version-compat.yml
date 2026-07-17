@@ -1,0 +1,62 @@
+# Version-compatibility report / Tier-2 attestation (D-156, D-121, D-164).
+# Blank issues disabled (see config.yml). This template doubles as the Tier-2
+# attestation vehicle for targets that cannot be containerized in CI
+# (2012/2014/2016 Windows, Azure SQL MI, Azure SQL DB).
+name: Version compatibility / Tier-2 attestation
+description: Report install/run results on a specific SQL Server version, edition, or platform.
+labels: ["version-compat", "compatibility"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this to report how the tool behaved on a target the automated Tier-1
+        matrix does not cover, or to file a compatibility bug. Attestations feed
+        the compatibility matrix (D-165). **Do not paste real query text.**
+  - type: input
+    id: tool-version
+    attributes:
+      label: Tool version
+      description: Output of `EXEC dbo.sp_SQLFlightRecorder @Mode = N'About';`
+    validations:
+      required: true
+  - type: input
+    id: target
+    attributes:
+      label: Target
+      description: SQL Server version, edition, and platform.
+      placeholder: e.g. SQL Server 2014 SP3 Standard, Windows; or Azure SQL MI; or Azure SQL DB
+    validations:
+      required: true
+  - type: dropdown
+    id: kind
+    attributes:
+      label: This report is
+      options: ["A passing attestation (it worked)", "A compatibility bug (something failed)"]
+    validations:
+      required: true
+  - type: textarea
+    id: results
+    attributes:
+      label: Lifecycle results
+      description: Install → Collect ×2 → Report → Purge @WhatIf → Uninstall. Note any degraded/skipped collectors and the FR_R0026 coverage output.
+      placeholder: |
+        Install: Success
+        Collect: Success (AlwaysOnState skipped — no HADR; QueryStore skipped — none enabled)
+        Report: 2 result sets OK
+        Uninstall: clean
+    validations:
+      required: true
+  - type: input
+    id: capability
+    attributes:
+      label: Capability snapshot (optional)
+      description: The Status capability result-set values (EngineEdition, Platform, HasQueryStoreSupport, etc.).
+    validations:
+      required: false
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I removed any real query text / secrets from this report.
+          required: true

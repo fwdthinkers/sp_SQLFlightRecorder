@@ -1,0 +1,55 @@
+# Performance-regression report (D-156, D-143). Blank issues disabled.
+name: Performance regression
+description: Collect or Report is slower / heavier than the operating envelope.
+labels: ["perf-regression", "core"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The operating envelope (D-131): Collect median 2-8 s / hard cap 30 s;
+        Report ≤ 3 s median / cap 60 s. Report deviations here. **Do not paste
+        real query text.**
+  - type: input
+    id: tool-version
+    attributes:
+      label: Tool version
+      description: Output of `EXEC dbo.sp_SQLFlightRecorder @Mode = N'About';`
+    validations:
+      required: true
+  - type: input
+    id: target
+    attributes:
+      label: SQL Server version / edition / platform
+    validations:
+      required: true
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Which mode regressed
+      options: [Collect, Report, Purge, Other]
+    validations:
+      required: true
+  - type: textarea
+    id: measurement
+    attributes:
+      label: Observed timing / overhead
+      description: Wall-clock durations, and how measured. For Collect, include which collector dominated (from FR_RunLogStep StartUtc/EndUtc).
+      placeholder: |
+        Collect median 22 s over 10 runs; QueryStore step ~14 s.
+        Report 41 s on a 24-hour window.
+    validations:
+      required: true
+  - type: textarea
+    id: workload
+    attributes:
+      label: Workload / repository size
+      description: Instance load, user DB count, and FR_* row counts (from Status repository-size result set).
+    validations:
+      required: true
+  - type: textarea
+    id: config
+    attributes:
+      label: Relevant config
+      description: MaxRowsPerCollector, retention, and any opt-in collectors enabled.
+    validations:
+      required: false
