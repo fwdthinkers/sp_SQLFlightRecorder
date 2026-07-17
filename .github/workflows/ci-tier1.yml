@@ -99,6 +99,9 @@ jobs:
       - name: Assert generated mode docs are in sync with the artifact
         run: python scripts/gen-mode-docs.py --check
 
+      - name: Assert the compatibility matrix is in sync with its generator
+        run: python scripts/gen-compat-matrix.py --check
+
   tier1:
     name: Tier 1 — ${{ matrix.label }}
     needs: [static-analysis, doc-coverage]
