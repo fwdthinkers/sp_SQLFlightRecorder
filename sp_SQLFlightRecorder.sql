@@ -6409,11 +6409,15 @@ ORDER BY ag.name, ar.replica_server_name, drs.database_id;';
     END;
 
     -- =========================================================================
-    -- Remaining deferred modes
+    -- Defensive default (unreachable in normal operation). Every documented mode
+    -- has a handler above that RETURNs, and the closed-set @Mode validation near
+    -- the top of the procedure rejects anything else. Reaching here would mean a
+    -- mode passed validation but lost its handler — an internal inconsistency.
     -- =========================================================================
     SELECT
-        N'NotYetImplemented' AS Status,
-        CONCAT(@ModeNormalized, N' is deferred beyond this simplified build.') AS Message,
+        N'Error' AS Status,
+        N'UnhandledMode' AS ErrorCode,
+        CONCAT(N'Internal: mode ''', @ModeNormalized, N''' passed validation but has no handler. Please report this.') AS Message,
         @ToolVersion AS ToolVersion;
 
 END;

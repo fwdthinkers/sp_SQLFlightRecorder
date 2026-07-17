@@ -67,7 +67,7 @@ either be tracked as an issue or scheduled into a later implementation-plan part
 ---
 
 <!-- Reviewers: two-reviewer rule (D-158) applies for changes to any of:
-  - src/sp_SQLFlightRecorder.sql
+  - sp_SQLFlightRecorder.sql
   - tests/static-analysis/forbidden_dmvs.txt
   - tests/static-analysis/allow_list_small_dmvs.txt
   - docs/design.md, docs/decisions.md
