@@ -1,0 +1,59 @@
+# Compatibility matrix
+
+Supported engine range: **SQL Server 2012 through 2025**, on-prem and cloud, with
+capability-driven degradation (D-108). Synapse, Fabric, Big Data Clusters, and
+Stretch are out of scope.
+
+> **Verification tiers.** **Tier 1** = automated CI on Linux containers, blocking
+> (D-120). **Tier 2** = manual attestation for targets that cannot be
+> containerized for free, not merge-blocking (D-121/D-164). **Tier 3** =
+> community reports (non-binding, D-166). A target's status is only as strong as
+> the tier that verified it.
+
+## Tier 1 — automated (verified green)
+Validated on every release through v0.4.1 / v0.4.2 / v0.4.3 (six-target Docker
+matrix, FAIL=0) and enforced per-push by `ci-tier1`:
+
+| Version | Platform | Status |
+|---|---|---|
+| SQL Server 2017 | Linux | ✅ Verified (Tier 1) |
+| SQL Server 2019 | Linux | ✅ Verified (Tier 1) |
+| SQL Server 2022 | Linux | ✅ Verified (Tier 1) |
+| SQL Server 2025 | Linux | ✅ Verified (Tier 1) |
+
+## Editions (verified)
+| Edition | EngineEdition | Status | Notes |
+|---|---|---|---|
+| Developer | 3 | ✅ Verified | Full feature set; `PAGE` compression. |
+| Standard | 2 | ✅ Verified | `PAGE` compression on 2016+. |
+| Express | 4 | ✅ Verified | No compression (cascades off, D-034); no SQL Agent — job creation skipped with a status row (D-116). |
+| Enterprise | 3 | ⚙ Same engine as Developer | Engine behavior identical to Developer (EngineEdition 3); not separately containerized. |
+
+## Tier 2 — manual attestation (pending)
+These cannot be containerized in CI; status comes from community attestations
+filed via the **version-compat** issue template (D-164). Until an attestation
+arrives, status is **Unverified** — it is not a claim of breakage, only of
+untested.
+
+| Target | Status |
+|---|---|
+| SQL Server 2012 (Windows) | ⏳ Pending attestation |
+| SQL Server 2014 (Windows) | ⏳ Pending attestation |
+| SQL Server 2016 (Windows) | ⏳ Pending attestation |
+| Azure SQL Managed Instance | ⏳ Pending attestation |
+| Azure SQL Database | ⏳ Pending attestation (heavy degradation expected: per-DB install, no Agent/msdb/error log — D-109) |
+
+**v1.0 gate:** at least **4 of 5** Tier-2 targets attested (§11.6). The staleness
+policy (D-164) moves a target to *Unverified* after 3 minors without an
+attestation and opens a deprecation discussion after 6; the process is on an
+18-month post-1.0 review (D-190).
+
+## How to contribute an attestation
+Open a **Version compatibility / Tier-2 attestation** issue with your Install →
+Collect → Report → Uninstall results and the capability snapshot. See
+[.github/ISSUE_TEMPLATE/version-compat.yml](../../.github/ISSUE_TEMPLATE/version-compat.yml).
+
+---
+*This page is maintained by hand during v1.0.0-rc; a generator
+(`scripts/gen-compat-matrix.py`, D-165) that emits it from CI results + Tier-2
+attestations is planned in Group D.*
