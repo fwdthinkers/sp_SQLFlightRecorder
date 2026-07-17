@@ -25,21 +25,17 @@ OUT = Path(__file__).resolve().parents[1] / "docs" / "compatibility" / "matrix.m
 VALIDATED_THROUGH = "v0.4.1 / v0.4.2 / v0.4.3"
 
 # Tier 1 — automated CI on Linux containers (D-120), blocking.
+# Tier 1 — verified by automated Linux containers. `verification` distinguishes
+# the hosted per-push gate (ci-tier1, the four Developer targets) from the local
+# six-target Docker matrix (run-local-tier1.sh) run before a release, which adds
+# the 2022 Express and Standard editions. EngineEdition = SERVERPROPERTY('EngineEdition').
 TIER1 = [
-    ("SQL Server 2017", "Linux", "✅ Verified (Tier 1)"),
-    ("SQL Server 2019", "Linux", "✅ Verified (Tier 1)"),
-    ("SQL Server 2022", "Linux", "✅ Verified (Tier 1)"),
-    ("SQL Server 2025", "Linux", "✅ Verified (Tier 1)"),
-]
-
-# Editions and their EngineEdition value (SERVERPROPERTY('EngineEdition')).
-EDITIONS = [
-    ("Developer", "3", "✅ Verified", "Full feature set; `PAGE` compression."),
-    ("Standard", "2", "✅ Verified", "`PAGE` compression on 2016+."),
-    ("Express", "4", "✅ Verified",
-     "No compression (cascades off, D-034); no SQL Agent — job creation skipped with a status row (D-116)."),
-    ("Enterprise", "3", "⚙ Same engine as Developer",
-     "Engine behavior identical to Developer (EngineEdition 3); not separately containerized."),
+    ("SQL Server 2017", "Developer", "3", "Linux", "ci-tier1 + local matrix"),
+    ("SQL Server 2019", "Developer", "3", "Linux", "ci-tier1 + local matrix"),
+    ("SQL Server 2022", "Developer", "3", "Linux", "ci-tier1 + local matrix"),
+    ("SQL Server 2022", "Express",   "4", "Linux", "local matrix"),
+    ("SQL Server 2022", "Standard",  "2", "Linux", "local matrix"),
+    ("SQL Server 2025", "Developer", "3", "Linux", "ci-tier1 + local matrix"),
 ]
 
 # Tier 2 — manual attestation (D-121/D-164); Unverified until attested.
@@ -73,20 +69,32 @@ Stretch are out of scope.
 > community reports (non-binding, D-166). A target's status is only as strong as
 > the tier that verified it.
 
-## Tier 1 — automated (verified green)
-Validated on every release through {VALIDATED_THROUGH} (six-target Docker
-matrix, FAIL=0) and enforced per-push by `ci-tier1`:
+## Tier 1 — verified (automated Linux containers)
+The hosted `ci-tier1` workflow verifies the four Developer targets on every
+push; the six-target Docker matrix (`run-local-tier1.sh`) additionally covers
+the 2022 Express and Standard editions before each release (FAIL=0 through
+{VALIDATED_THROUGH}). The v1.0.0-rc artifact was re-verified on the 2022
+Developer, Express, and Standard editions, and its upgrade path from every
+tagged release was validated (`tests/upgrade/run-upgrade.sh`).
 
-{table(["Version", "Platform", "Status"], TIER1)}
+{table(["Version", "Edition", "EngineEdition", "Platform", "Verified by"], TIER1)}
 
-## Editions (verified)
-{table(["Edition", "EngineEdition", "Status", "Notes"], EDITIONS)}
+**Other editions.** `Standard` (EngineEdition 2) and `Express` (EngineEdition 4)
+are verified above on 2022; Express cascades compression off (D-034) and has no
+SQL Agent, so job creation is skipped with a status row (D-116). **Enterprise**
+reports `EngineEdition = 3`, the same value as Developer, and the tool branches
+on capabilities and EngineEdition — never on edition name — so Developer
+coverage is *expected* to carry to Enterprise. Enterprise is not separately
+containerized, so it is not independently verified here; this is a compatibility
+expectation, not a verified-equivalence claim.
 
 ## Tier 2 — manual attestation (pending)
-These cannot be containerized in CI; status comes from community attestations
-filed via the **version-compat** issue template (D-164). Until an attestation
-arrives, status is **Unverified** — it is not a claim of breakage, only of
-untested.
+These cannot be containerized in CI; status comes from attestations filed via
+the **version-compat** issue template (D-164) — see
+[tier2-attestation.md](tier2-attestation.md) for the process. Until an
+attestation arrives, status is **Unverified** — not a claim of breakage, only of
+untested. Azure targets are listed here as pending; no Azure equivalence is
+claimed until a real attestation lands.
 
 {table(["Target", "Status"], TIER2)}
 
@@ -98,6 +106,7 @@ attestation and opens a deprecation discussion after 6; the process is on an
 ## How to contribute an attestation
 Open a **Version compatibility / Tier-2 attestation** issue with your Install →
 Collect → Report → Uninstall results and the capability snapshot. See
+[tier2-attestation.md](tier2-attestation.md) and
 [.github/ISSUE_TEMPLATE/version-compat.yml](../../.github/ISSUE_TEMPLATE/version-compat.yml).
 
 ---
