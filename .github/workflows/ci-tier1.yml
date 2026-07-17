@@ -28,8 +28,17 @@
 #                       config key derived from the artifact (§11.6, D-169),
 #                       plus the doc generators are in sync (no stale pages).
 #
+# And the rule-fixtures / demo-golden gate (D-122, D-160):
+#   * rule-fixtures   — runs tests/rules/run-rule-fixtures.sh (positive/negative
+#                       rule fixtures + the byte-exact InstallDemoData golden).
+#     The harness is version-independent (it seeds FR_* rows directly), so a
+#     single hosted target is a sound gate: we run it on SQL Server 2022 only,
+#     to avoid quadrupling container minutes. Local release validation still
+#     runs it on oldest + newest — at minimum 2017 and 2022 — before tagging
+#     (see docs/contributing/overview.md).
+#
 # Not yet implemented here (tracked for the remaining Group D commits):
-#   golden output tests (D-122), cost-regression (D-143), soak (D-145).
+#   cost-regression (D-143), soak (D-145).
 # =============================================================================
 
 name: ci-tier1
@@ -278,3 +287,22 @@ jobs:
       - name: Stop container
         if: always()
         run: docker rm -f mssql || true
+
+  rule-fixtures:
+    name: Rule fixtures + demo golden (SQL 2022)
+    needs: [static-analysis, doc-coverage]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      # run-rule-fixtures.sh is self-contained: it starts and tears down its own
+      # SQL Server container, installs the procedure, seeds FR_* rows directly,
+      # and asserts positive/negative rule fixtures plus the byte-exact
+      # InstallDemoData golden. Because the fixtures seed rows rather than drive
+      # a live workload, results are engine-version-independent — so 2022 alone
+      # is a sound hosted gate (D-122/D-160). See the header note on local
+      # release validation across 2017 + 2022.
+      - name: Run rule fixtures + demo golden byte-diff (SQL Server 2022)
+        run: bash tests/rules/run-rule-fixtures.sh mcr.microsoft.com/mssql/server:2022-latest
