@@ -7,6 +7,49 @@ Per design decision D-175, entries tag the affected `RuleId`s and `@Mode`s so
 runbook owners can grep. Versioning follows the project-specific semver of
 D-171 (major = contract break; minor = additive; patch = fixes).
 
+## [1.0.0-rc.1] - 2026-07-21
+
+First release candidate for v1.0.0. This is a **documentation, CI/release-process,
+and version-metadata** stabilization on top of `0.4.3`. It changes **no schema,
+output contract, rule ID, rule logic, collector, or mode**: `SchemaVersion` stays
+`0.4.0`, and `RulePackVersion` stays `0.4.3` because no rule logic or catalog
+entry changed since 0.4.3 (the rule-pack version names the last rule change, not
+the tool release — D-085). Upgrades from 0.4.1 / 0.4.2 / 0.4.3 are validated and
+migration-free.
+
+### Changed
+
+- `ToolVersion` is now `1.0.0-rc.1` (surfaced by `About`, `Help`, `Status`, and
+  the Markdown report header; build date 2026-07-21). No behavior change.
+
+### Added
+
+- **Documentation completeness** (§11.6): a page for every mode, rule, and
+  config key, enforced by a CI doc-coverage gate (`scripts/check-doc-coverage.sh`)
+  plus rule/mode/compat-matrix generators.
+- **CI / release wiring**: rule fixtures + demo golden in CI; a dry-runnable
+  release workflow (`release.yml`) that builds a byte-identical artifact with a
+  checksum and attaches the compatibility matrix; out-of-band cost/soak harnesses
+  (non-blocking).
+- **Compatibility**: six Tier-1 verified targets (2017/2019/2022/2025 Developer +
+  2022 Express/Standard) and a documented Tier-2 attestation process for
+  2012/2014/2016 Windows + Azure MI/DB (pending attestation).
+- **Upgrade-path validation** harness (`tests/upgrade/run-upgrade.sh`).
+- **Security / support / governance** docs: threat-model, support policy,
+  contributing guides, CODEOWNERS, and eight issue templates.
+
+### Notes
+
+- The **D-076 / D-189 wording lock** was reviewed with no changes required: every
+  rule recommendation is advisory and evidence-gated ("consider … only after
+  validating"), with explicit guards against reflexive action; no unsafe advice
+  is present (no kill / force / `NOLOCK` / shrink; no unqualified root-cause
+  claims). See `docs/wording-lock-review.md`.
+- **Must resolve before final v1.0.0** (and preferably before public RC): the
+  security and conduct contact addresses (placeholders in `SECURITY.md` /
+  `CODE_OF_CONDUCT.md`), the `@core-maintainers` CODEOWNERS team, and the
+  historical `v0.4.0` upgrade artifact (no public `v0.4.0` tag exists).
+
 ## [0.4.3] - 2026-07-17
 
 Pre-v1.0 rule-maturation patch. Resolves the last documented rule-behavior gap
