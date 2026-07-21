@@ -11,15 +11,15 @@ establishing the final template — the rest are produced from it), or `planned`
 > [rules/_template.md](rules/_template.md)), a mode page
 > ([modes/report.md](modes/report.md)), the failure-mode catalog
 > ([operations/troubleshooting.md](operations/troubleshooting.md)), the
-> security/threat-model draft
-> ([security-threat-model-draft.md](security-threat-model-draft.md)), the
+> security/threat model (now folded into [design.md](design.md) §12/§13), the
 > security/support/governance skeletons (SECURITY/SUPPORT/CONTRIBUTING/
 > CODE_OF_CONDUCT/CODEOWNERS), and two issue templates (bug, false-positive).
 
 ## Start here
 - [README.md](../README.md) — what the tool is, 30-second install, headline use.
 - [docs/user-guide.md](user-guide.md) — full operational guide.
-- [docs/design.md](design.md) — consolidated design (§1–§11; §12/§13 planned).
+- [docs/design.md](design.md) — consolidated design (§1–§13; §12/§13 security
+  & appendices folded in for v1.0).
 - [docs/decisions.md](decisions.md) — decision log D-001…D-190.
 - [CHANGELOG.md](../CHANGELOG.md) — release history (Keep a Changelog, D-175).
 
@@ -79,13 +79,15 @@ Windows, Azure SQL MI/DB). Tier-2 process:
 ## Operations
 - [operations/troubleshooting.md](operations/troubleshooting.md) — failure-mode
   catalog (D-147). **present** (living; more entries added through RC).
-- `compatibility/support-policy.md` — "1.0 is forever" promises (§11.8).
-  **planned** (Group F).
+- [compatibility/support-policy.md](compatibility/support-policy.md) — "1.0 is
+  forever" promises (§11.8). **present**.
 
 ## Security & governance
 - [SECURITY.md](../SECURITY.md) — **present** (contacts are `TODO`, RC blocker).
-  Threat model draft: [security-threat-model-draft.md](security-threat-model-draft.md)
-  — **present** (folds into `docs/design.md` §12/§13, Q-041/Q-042, in Group F).
+  Security & threat model: [design.md §12/§13](design.md#12-security-and-threat-model-q-041)
+  — **present** (folded from the RC staging draft; Q-041/Q-042).
+- [docs/wording-lock-review.md](wording-lock-review.md) — §6.7 wording lock
+  (D-076/D-189) — **present** (reviewed; two-maintainer sign-off pending).
 - [CONTRIBUTING.md](../CONTRIBUTING.md) · [SUPPORT.md](../SUPPORT.md) ·
   [CODE_OF_CONDUCT.md](../CODE_OF_CONDUCT.md) — **present** (conduct contact is
   `TODO`, RC blocker).

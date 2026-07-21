@@ -45,4 +45,4 @@ control-plane; and behaviors that are documented design decisions (see
 
 Data-sensitivity note: `FR_QueryText` and the opt-in `FR_ErrorLog` may contain
 sensitive strings. Restrict `SELECT` on `FR_*` to a scoped role, not `public`.
-See the threat model in [docs/security-threat-model-draft.md](docs/security-threat-model-draft.md).
+See the threat model in [docs/design.md §12](docs/design.md#12-security-and-threat-model-q-041).
