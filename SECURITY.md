@@ -17,9 +17,10 @@ runtime service, "patching" means installing an updated `sp_SQLFlightRecorder.sq
 Please report suspected vulnerabilities **privately** — do not open a public
 issue for a security problem.
 
-- Preferred: GitHub private vulnerability reporting (Security → *Report a
-  vulnerability*) on this repository.
-- Alternative: email `TODO: security contact` <!-- set before v1.0.0 GA -->.
+- Preferred (**if enabled** on this repository): GitHub private vulnerability
+  reporting (Security → *Report a vulnerability*). If that option is not
+  available, use the email below.
+- Email: `TODO: security contact` <!-- set before v1.0.0 GA -->.
 
 Please include: the version/commit, a description, reproduction steps if you
 have them, and the impact you observed. Do not include real production query
