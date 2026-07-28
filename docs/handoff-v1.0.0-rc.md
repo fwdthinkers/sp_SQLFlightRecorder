@@ -91,16 +91,24 @@ underlying items are still open:
 2. **Conduct contact** — configure a dedicated one. `CODE_OF_CONDUCT.md`
    currently routes reports to the owner/maintainers via available GitHub
    channels and says no dedicated address is configured yet.
-3. **CODEOWNERS owner** — `@forward-thinkers-lab/core-maintainers` is unverified
-   and may resolve to nothing (GitHub ignores unresolvable owners silently, so
-   the rules are likely a no-op). Create and grant the team, or replace it with
-   real individual handles. See the header of `.github/CODEOWNERS`.
-4. Two-maintainer §6.7 wording sign-off (D-076/D-158/D-189) — the systematic
+3. Two-maintainer §6.7 wording sign-off (D-076/D-158/D-189) — the systematic
    review is in [wording-lock-review.md](wording-lock-review.md); the human
    sign-off remains.
-5. ≥ 4 of 5 Tier-2 attestations (§11.6).
-6. Optional: `tests/upgrade/artifacts/v0.4.0.sql` to validate the v0.4.0 upgrade
+4. ≥ 4 of 5 Tier-2 attestations (§11.6).
+5. Optional: `tests/upgrade/artifacts/v0.4.0.sql` to validate the v0.4.0 upgrade
    path. Not a public promise, so not an RC blocker.
+
+**Resolved 2026-07-28 (was item 3):** CODEOWNERS. `forward-thinkers-lab` is a
+GitHub **user account**, not an organization, so `@org/team` syntax could never
+resolve. Owners are now `@forward-thinkers-lab` — a valid, resolving owner
+(**D-191**, superseding D-185's routing target; D-185's topic-team intent is
+retained for a future org move).
+
+**Future / process note, not a v1.0 gate:** if the project moves under an
+organization, configure a visible maintainer team with write access and update
+`.github/CODEOWNERS` to route to it. Also note GitHub does not request a review
+from a PR's own author, so CODEOWNERS alone does not enforce the two-reviewer
+rule (D-158) on owner-authored PRs.
 
 ## How to release (owner-authorized only)
 1. (Optional) dry-run the release build: `bash scripts/build-release-artifact.sh

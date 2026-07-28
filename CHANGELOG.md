@@ -46,13 +46,17 @@ migration-free.
   is present (no kill / force / `NOLOCK` / shrink; no unqualified root-cause
   claims). See `docs/wording-lock-review.md`.
 - **Must resolve before final v1.0.0:** a dedicated private security contact or
-  GitHub private vulnerability reporting; a dedicated conduct contact; a valid
-  CODEOWNERS maintainer owner or team (`@forward-thinkers-lab/core-maintainers`
-  is unverified and may resolve to nothing); the two-maintainer wording
-  sign-off; ≥ 4 of 5 Tier-2 attestations; and, optionally, the historical
-  `v0.4.0` upgrade artifact (no public `v0.4.0` tag exists). `SECURITY.md` and
-  `CODE_OF_CONDUCT.md` describe the channels that exist today rather than
-  promising contacts that do not — no placeholder addresses are published.
+  GitHub private vulnerability reporting; a dedicated conduct contact; the
+  two-maintainer wording sign-off; ≥ 4 of 5 Tier-2 attestations; and,
+  optionally, the historical `v0.4.0` upgrade artifact (no public `v0.4.0` tag
+  exists). `SECURITY.md` and `CODE_OF_CONDUCT.md` describe the channels that
+  exist today rather than promising contacts that do not — no placeholder
+  addresses are published.
+- **CODEOWNERS** routes to the repository owner account `@forward-thinkers-lab`.
+  The repository is owned by a user account, not an organization, so GitHub team
+  syntax cannot resolve here; D-185's `@core-maintainers` team routing is
+  superseded by **D-191** and reactivated only if the project moves under an
+  organization.
 
 ## [0.4.3] - 2026-07-17
 

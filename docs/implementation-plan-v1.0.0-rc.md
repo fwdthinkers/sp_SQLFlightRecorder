@@ -100,7 +100,9 @@ PRs.**
 - `docs/operations/troubleshooting.md` — failure-mode catalog (D-147); referenced
   from README.
 - 8 issue templates `.github/ISSUE_TEMPLATE/*.yml` (D-156) + `.github/CODEOWNERS`
-  → `@core-maintainers` (D-185).
+  → `@core-maintainers` (D-185). *Amended 2026-07-28:* the repo is a user
+  account, not an org, so CODEOWNERS routes to `@forward-thinkers-lab` instead
+  (D-191 supersedes D-185's routing target).
 - **Validation:** markdown link-check; doc audit 0 gaps.
 - **Risk:** §12 is genuinely new analysis (design-lock review did no threat
   modeling); dedicate a review pass. **Code change:** none.

@@ -603,7 +603,8 @@ Rule retirement requires a maintainer proposal, ≥30-day discussion, deprecatio
 ### 10.6 CODEOWNERS
 
 - `CODEOWNERS` routes by area: core, rule pack, compatibility, docs (**D-163**).
-- At v1.0 launch, all paths route to a single `@core-maintainers` team; topic-specific teams created when trusted maintainers with that focus exist (**D-185**, resolved Q-038).
+- At v1.0 launch, all paths route to a single default owner; topic-specific teams created when trusted maintainers with that focus exist (**D-185**, resolved Q-038).
+- That single owner is the repository owner account `@forward-thinkers-lab`, not an `@org/team`: the repository is owned by a GitHub user account, where team syntax cannot resolve. D-185's team routing is reactivated if the project moves under an organization (**D-191**, supersedes D-185's routing target). Because GitHub does not request a review from a PR's own author, `CODEOWNERS` alone does not enforce the two-reviewer rule (**D-158**) on owner-authored PRs.
 
 ### 10.7 Compatibility test process
 

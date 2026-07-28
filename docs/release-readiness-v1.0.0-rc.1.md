@@ -19,7 +19,7 @@ longer a *publication* blocker for the RC, only a final-v1.0 blocker.
 |---|---|---|---|
 | 1 | Six-target Tier-1 matrix FAIL=0; fixtures/golden green, wired into CI | ✅ | `ci-tier1` runs 2017/2019/2022/2025 Developer + a rule-fixtures job on 2022; six-target matrix FAIL=0 through 0.4.3; fixtures + golden **19/19** re-run on the rc.1 artifact. |
 | 2 | Doc completeness (modes/rules/config/capabilities) + compat matrix; doc-coverage gate green | ✅ | 12 modes / 31 rules / 36 config keys documented; `check-doc-coverage.sh` + three generators `--check` green in CI. |
-| 3 | §12 + §13 + SECURITY/SUPPORT/CoC/CONTRIBUTING + failure-mode catalog + 8 issue templates + CODEOWNERS present | ✅ | design.md §12/§13 folded in; governance docs + 8 templates + CODEOWNERS present (contacts/team tracked below). |
+| 3 | §12 + §13 + SECURITY/SUPPORT/CoC/CONTRIBUTING + failure-mode catalog + 8 issue templates + CODEOWNERS present | ✅ | design.md §12/§13 folded in; governance docs + 8 templates present; CODEOWNERS routes to a resolving owner (D-191). Contact items tracked below. |
 | 4 | `release.yml` dry-runs; upgrade paths validated | ✅¹ | Release build dry-run for `1.0.0-rc.1`: byte-identical artifact + `SHA256SUMS` + release notes; CHANGELOG gate passed. Upgrades **0.4.1/0.4.2/0.4.3 → rc.1** validated (`run-upgrade.sh`, 21/0). |
 | 5 | Tier-2 process live; wording-lock pass; ToolVersion `1.0.0-rc.1`; CHANGELOG | ✅ | Tier-2 attestation process documented; §6.7 wording lock reviewed (no changes needed); version bumped; CHANGELOG `1.0.0-rc.1` entry present. |
 
@@ -49,19 +49,27 @@ the pushed branch are not recorded in this document — check `ci-tier1` on
 2. **Conduct contact** — configure a dedicated one. `CODE_OF_CONDUCT.md` routes
    reports to the owner/maintainers through available GitHub channels and says
    plainly that no dedicated address is configured. No address is invented.
-3. **CODEOWNERS maintainer owner/team** — `@forward-thinkers-lab/core-maintainers`
-   is **unverified**; it requires an org (not a user account), a team of that
-   name, and repo write access. GitHub ignores unresolvable owners silently, so
-   the rules should be assumed a no-op. Create and grant the team, or replace it
-   with real individual handles. Branch protection is the reliable route if
-   two-reviewer enforcement is needed sooner. Documented in the CODEOWNERS
-   header.
-4. **Two-maintainer wording sign-off** (D-076/D-158/D-189) — the systematic
+3. **Two-maintainer wording sign-off** (D-076/D-158/D-189) — the systematic
    review is recorded in `wording-lock-review.md`; the human sign-off remains.
-5. **Tier-2 attestations** — ≥ 4 of 5 targets before final v1.0.0 (§11.6).
-6. **`v0.4.0` upgrade artifact** — optional; supply
+4. **Tier-2 attestations** — ≥ 4 of 5 targets before final v1.0.0 (§11.6).
+5. **`v0.4.0` upgrade artifact** — optional; supply
    `tests/upgrade/artifacts/v0.4.0.sql` to validate that path. Not a public
    promise, so not an RC blocker (Group F decision).
+
+**Resolved 2026-07-28 — no longer a blocker:** CODEOWNERS. The owner was
+confirmed to be a GitHub **user account**, not an organization, so `@org/team`
+syntax could never resolve here. Owners are now the repository owner account
+`@forward-thinkers-lab`, which resolves and takes effect as written (D-191,
+superseding D-185's routing target).
+
+## Future / process note (not a v1.0 gate)
+If the repository moves under an organization, configure a visible maintainer
+team with write access to this repository and update `.github/CODEOWNERS` to
+route to it, restoring D-185's topic-team split. Separately, note that GitHub
+does not request a review from a PR's own author, so `CODEOWNERS` alone does not
+enforce the two-reviewer rule (D-158) on owner-authored PRs; that still relies
+on a second human reviewer, or on branch protection if it is ever needed
+mechanically.
 
 ## Release dry-run (local, this cycle)
 ```
@@ -78,7 +86,8 @@ publishes. Re-run 2026-07-28: same 344,857-byte artifact, same SHA256
 
 ## Recommendation
 Tag-ready as `v1.0.0-rc.1` on the owner's go-ahead. The public `TODO`
-placeholders that previously argued for delaying a public RC are gone; the
-underlying contact and CODEOWNERS items remain final-v1.0 gates, as do the
-wording sign-off and Tier-2 attestations. Before tagging, confirm `ci-tier1` is
-green on the pushed branch — this document does not record remote CI state.
+placeholders that previously argued for delaying a public RC are gone, and the
+CODEOWNERS ambiguity is resolved. The two contact items, the wording sign-off
+and the Tier-2 attestations remain final-v1.0 gates. Before tagging, confirm
+`ci-tier1` is green on the pushed branch — this document does not record remote
+CI state.

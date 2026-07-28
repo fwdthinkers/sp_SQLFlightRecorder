@@ -1,37 +1,35 @@
 # CODEOWNERS — sp_SQLFlightRecorder
-# Per D-163 (route by area) and D-185 (at v1.0 launch all paths route to a
-# single @core-maintainers team; topic-specific teams are added when trusted
-# maintainers with that focus exist).
+# Per D-163 (route by area) and D-185 as amended by D-191.
 #
-# STATUS — NOT YET IN EFFECT (blocker for final v1.0.0).
-# The owner below, @forward-thinkers-lab/core-maintainers, is the *intended*
-# routing target. It has NOT been confirmed to exist. Team-syntax owners require
-# (a) `forward-thinkers-lab` to be a GitHub organization, not a user account,
-# (b) a team named `core-maintainers` within it, and (c) that team having write
-# access to this repository. GitHub silently ignores an owner that fails any of
-# these — no review is requested and no rule is enforced. Assume these rules are
-# a no-op until a maintainer verifies otherwise.
+# The owner below is the repository owner account, @forward-thinkers-lab. This
+# repository is owned by a user account, not an organization, so GitHub team
+# syntax (@org/team) cannot resolve here — a user account has no teams. The
+# owner account is a valid CODEOWNERS owner and these rules take effect as
+# written.
 #
-# Before final v1.0.0 (D-185), either create and grant that team, or replace
-# every owner below with real individual @handles. Do not treat the entries in
-# this file as active review protection until then; if two-reviewer enforcement
-# is needed sooner, configure it as a branch protection rule, which does not
-# depend on CODEOWNERS resolving.
+# D-185 originally called for a single @core-maintainers team at v1.0 launch.
+# That presumed an organization. If the project later moves under one, change
+# the owners below to a team such as @org/core-maintainers, give that team write
+# access to the repository, and split by area as sketched at the foot of this
+# file (D-185's topic-team intent, preserved by D-191).
 #
-# The path routing is left active rather than commented out so that it takes
-# effect automatically once the team exists.
+# Note that a repository owner's own pull requests are not review-blocked by
+# CODEOWNERS — GitHub does not request a review from the PR author. The
+# two-reviewer rule for the artifact (D-158) therefore depends on a second
+# human reviewer being available, not on this file alone.
 
 # Default owner for everything.
-*                                   @forward-thinkers-lab/core-maintainers
+*                                   @forward-thinkers-lab
 
 # The shipped artifact requires the two-reviewer rule (D-158); routing it
-# explicitly keeps the safety-critical file visible to the core team.
-/sp_SQLFlightRecorder.sql           @forward-thinkers-lab/core-maintainers
+# explicitly keeps the safety-critical file visible to the owner.
+/sp_SQLFlightRecorder.sql           @forward-thinkers-lab
 
 # Safety-critical build-pipeline guardrails.
-/tests/static-analysis/             @forward-thinkers-lab/core-maintainers
-/.github/workflows/                 @forward-thinkers-lab/core-maintainers
+/tests/static-analysis/             @forward-thinkers-lab
+/.github/workflows/                 @forward-thinkers-lab
 
-# When topic teams exist (D-185), split e.g.:
-#   /docs/rules/          @forward-thinkers-lab/rule-pack-maintainers
-#   /docs/compatibility/  @forward-thinkers-lab/compat-maintainers
+# If the project moves to an organization with topic teams (D-185/D-191), split
+# e.g.:
+#   /docs/rules/          @org/rule-pack-maintainers
+#   /docs/compatibility/  @org/compat-maintainers

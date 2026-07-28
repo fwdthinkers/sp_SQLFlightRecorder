@@ -98,10 +98,10 @@ Windows, Azure SQL MI/DB). Tier-2 process:
 - `docs/contributing/`: [overview](contributing/overview.md) ·
   [coding-style](contributing/coding-style.md) (D-153) ·
   [safety-checklist](contributing/safety-checklist.md) (D-176) — **present**.
-- [.github/CODEOWNERS](../.github/CODEOWNERS) (D-163/185) — **present but
-  assume inactive**: `@forward-thinkers-lab/core-maintainers` is unverified and
-  GitHub ignores unresolvable owners silently. Final-v1.0 blocker; see the file
-  header.
+- [.github/CODEOWNERS](../.github/CODEOWNERS) (D-163/D-185 as amended by D-191)
+  — **present and resolving**: owners are the repository owner account
+  `@forward-thinkers-lab`. The repo is a user account, not an org, so team
+  syntax is not usable here; revisit if it moves under an organization.
 
 ## Issue templates (8, D-156) → `.github/ISSUE_TEMPLATE/`
 bug, false-positive, false-negative, rule-proposal, collector-proposal,
