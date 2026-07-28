@@ -85,19 +85,23 @@ Windows, Azure SQL MI/DB). Tier-2 process:
   forever" promises (§11.8). **present**.
 
 ## Security & governance
-- [SECURITY.md](../SECURITY.md) — **present** (contacts are `TODO`, RC blocker).
+- [SECURITY.md](../SECURITY.md) — **present** (no dedicated private security
+  contact yet; the doc says so plainly — final-v1.0 blocker, not an RC blocker).
   Security & threat model: [design.md §12/§13](design.md#12-security-and-threat-model-q-041)
   — **present** (folded from the RC staging draft; Q-041/Q-042).
 - [docs/wording-lock-review.md](wording-lock-review.md) — §6.7 wording lock
   (D-076/D-189) — **present** (reviewed; two-maintainer sign-off pending).
 - [CONTRIBUTING.md](../CONTRIBUTING.md) · [SUPPORT.md](../SUPPORT.md) ·
-  [CODE_OF_CONDUCT.md](../CODE_OF_CONDUCT.md) — **present** (conduct contact is
-  `TODO`, RC blocker).
+  [CODE_OF_CONDUCT.md](../CODE_OF_CONDUCT.md) — **present** (no dedicated
+  conduct contact yet; reports route to the owner/maintainers via available
+  GitHub channels — final-v1.0 blocker, not an RC blocker).
 - `docs/contributing/`: [overview](contributing/overview.md) ·
   [coding-style](contributing/coding-style.md) (D-153) ·
   [safety-checklist](contributing/safety-checklist.md) (D-176) — **present**.
-- [.github/CODEOWNERS](../.github/CODEOWNERS) (D-163/185) — **present** (needs the
-  `@core-maintainers` org team to take effect).
+- [.github/CODEOWNERS](../.github/CODEOWNERS) (D-163/185) — **present but
+  assume inactive**: `@forward-thinkers-lab/core-maintainers` is unverified and
+  GitHub ignores unresolvable owners silently. Final-v1.0 blocker; see the file
+  header.
 
 ## Issue templates (8, D-156) → `.github/ISSUE_TEMPLATE/`
 bug, false-positive, false-negative, rule-proposal, collector-proposal,

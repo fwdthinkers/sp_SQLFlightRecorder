@@ -25,9 +25,18 @@ setting.
 ## Enforcement
 
 Instances of abusive, harassing, or otherwise unacceptable behavior may be
-reported to the maintainers at `TODO: conduct contact` <!-- set before v1.0.0 GA -->.
+reported to the repository owner and maintainers through the GitHub maintainer
+channels currently available for this repository — for example by contacting a
+maintainer directly. A dedicated conduct contact address is not yet configured.
+
+When raising a conduct concern, please do not include private or sensitive
+information — yours or anyone else's — in a public issue or discussion.
+
 All complaints will be reviewed and investigated promptly and fairly. Maintainers
 are obligated to respect the privacy and security of the reporter.
+
+> **Tracked before final v1.0.0:** configuring a dedicated conduct contact is a
+> release blocker for v1.0.0.
 
 ## Attribution
 

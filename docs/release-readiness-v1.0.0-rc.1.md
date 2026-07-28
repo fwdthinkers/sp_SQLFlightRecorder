@@ -1,13 +1,18 @@
 # Release readiness — v1.0.0-rc.1
 
-**Date:** 2026-07-21 · **Branch:** `v1.0.0-rc` (not pushed / not tagged) ·
+**Date:** 2026-07-21 · updated 2026-07-28 (branch state + blocker list) ·
+**Branch:** `v1.0.0-rc`, **pushed** 2026-07-21 and tracking `origin/v1.0.0-rc`;
+**not tagged, not published** — no `v1.0.0-rc.1` tag and no GitHub Release
+exist. HEAD before the 2026-07-28 documentation-cleanup commit was `504492e`. ·
 **Artifact:** `ToolVersion 1.0.0-rc.1`, `SchemaVersion 0.4.0`,
 `RulePackVersion 0.4.3`.
 
 **Posture:** All five RC-tag criteria are met. The RC is technically ready to
-tag. A short list of items is **tracked for resolution before final v1.0.0**
-(and, for the contact addresses, preferably before a public RC) — none require a
-code/behavior change.
+tag. A short list of items is **tracked for resolution before final v1.0.0** —
+none require a code/behavior change. As of 2026-07-28 no public-facing `TODO`
+placeholder remains in `SECURITY.md` or `CODE_OF_CONDUCT.md`; both now describe
+the channel that actually exists, so the absence of a dedicated contact is no
+longer a *publication* blocker for the RC, only a final-v1.0 blocker.
 
 ## RC-tag criteria (from `implementation-plan-v1.0.0-rc.md`)
 | # | Criterion | Status | Evidence |
@@ -18,9 +23,12 @@ code/behavior change.
 | 4 | `release.yml` dry-runs; upgrade paths validated | ✅¹ | Release build dry-run for `1.0.0-rc.1`: byte-identical artifact + `SHA256SUMS` + release notes; CHANGELOG gate passed. Upgrades **0.4.1/0.4.2/0.4.3 → rc.1** validated (`run-upgrade.sh`, 21/0). |
 | 5 | Tier-2 process live; wording-lock pass; ToolVersion `1.0.0-rc.1`; CHANGELOG | ✅ | Tier-2 attestation process documented; §6.7 wording lock reviewed (no changes needed); version bumped; CHANGELOG `1.0.0-rc.1` entry present. |
 
-¹ `release.yml` itself runs on GitHub Actions (tag push / `workflow_dispatch`);
-it was **not** triggered here because this branch is intentionally unpushed. The
-build half was dry-run locally via `scripts/build-release-artifact.sh`.
+¹ `release.yml` itself runs on GitHub Actions (tag push / `workflow_dispatch`).
+It has **not** been triggered: the branch is pushed, but no tag has been created
+and no `workflow_dispatch` dry-run has been recorded here. The build half was
+dry-run locally via `scripts/build-release-artifact.sh`. Remote CI results for
+the pushed branch are not recorded in this document — check `ci-tier1` on
+`origin/v1.0.0-rc` before tagging.
 
 ## Verified vs pending
 - **Upgrades:** 0.4.1 / 0.4.2 / 0.4.3 → rc.1 verified (install-over Success,
@@ -31,16 +39,27 @@ build half was dry-run locally via `scripts/build-release-artifact.sh`.
   live, no target marked Verified without evidence.
 
 ## Tracked before final v1.0.0 (not code changes)
-1. **Security & conduct contacts** — `TODO` placeholders in `SECURITY.md` /
-   `CODE_OF_CONDUCT.md`. Must resolve before final v1.0.0; preferably before a
-   public RC if the owner can provide them. (`SECURITY.md` uses cautious
-   "if enabled" wording for private reporting — no false commitment.)
-2. **`@core-maintainers` CODEOWNERS team** — must exist as an org/team or be
-   replaced with real maintainer handles before final v1.0.0.
-3. **Two-maintainer wording sign-off** (D-076/D-158/D-189) — the systematic
+1. **Private security contact** — configure a dedicated one, **or** enable
+   GitHub private vulnerability reporting on the repository. `SECURITY.md`
+   states the honest current position: private vulnerability reporting is the
+   preferred channel *if enabled*; if it is not, the project has no dedicated
+   private security contact yet, reporters are told to withhold specifics until
+   a private channel exists, and non-sensitive hardening suggestions may be
+   opened as normal issues. No address is invented.
+2. **Conduct contact** — configure a dedicated one. `CODE_OF_CONDUCT.md` routes
+   reports to the owner/maintainers through available GitHub channels and says
+   plainly that no dedicated address is configured. No address is invented.
+3. **CODEOWNERS maintainer owner/team** — `@forward-thinkers-lab/core-maintainers`
+   is **unverified**; it requires an org (not a user account), a team of that
+   name, and repo write access. GitHub ignores unresolvable owners silently, so
+   the rules should be assumed a no-op. Create and grant the team, or replace it
+   with real individual handles. Branch protection is the reliable route if
+   two-reviewer enforcement is needed sooner. Documented in the CODEOWNERS
+   header.
+4. **Two-maintainer wording sign-off** (D-076/D-158/D-189) — the systematic
    review is recorded in `wording-lock-review.md`; the human sign-off remains.
-4. **Tier-2 attestations** — ≥ 4 of 5 targets before final v1.0.0 (§11.6).
-5. **`v0.4.0` upgrade artifact** — optional; supply
+5. **Tier-2 attestations** — ≥ 4 of 5 targets before final v1.0.0 (§11.6).
+6. **`v0.4.0` upgrade artifact** — optional; supply
    `tests/upgrade/artifacts/v0.4.0.sql` to validate that path. Not a public
    promise, so not an RC blocker (Group F decision).
 
@@ -53,9 +72,13 @@ scripts/build-release-artifact.sh --version 1.0.0-rc.1
   Build OK.
 ```
 The full workflow (gate → build → publish, or `workflow_dispatch` dry-run) runs
-in CI once the branch is pushed; nothing here pushes, tags, or publishes.
+in CI on a tag push or manual dispatch. Nothing in this document tags or
+publishes. Re-run 2026-07-28: same 344,857-byte artifact, same SHA256
+`2ae4c475…`.
 
 ## Recommendation
-Tag-ready as `v1.0.0-rc.1` on the owner's go-ahead. Resolving the contact
-placeholders and the CODEOWNERS team is advisable before a *public* RC; the
-remaining items are final-v1.0 gates.
+Tag-ready as `v1.0.0-rc.1` on the owner's go-ahead. The public `TODO`
+placeholders that previously argued for delaying a public RC are gone; the
+underlying contact and CODEOWNERS items remain final-v1.0 gates, as do the
+wording sign-off and Tier-2 attestations. Before tagging, confirm `ci-tier1` is
+green on the pushed branch — this document does not record remote CI state.

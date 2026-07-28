@@ -45,10 +45,14 @@ migration-free.
   validating"), with explicit guards against reflexive action; no unsafe advice
   is present (no kill / force / `NOLOCK` / shrink; no unqualified root-cause
   claims). See `docs/wording-lock-review.md`.
-- **Must resolve before final v1.0.0** (and preferably before public RC): the
-  security and conduct contact addresses (placeholders in `SECURITY.md` /
-  `CODE_OF_CONDUCT.md`), the `@core-maintainers` CODEOWNERS team, and the
-  historical `v0.4.0` upgrade artifact (no public `v0.4.0` tag exists).
+- **Must resolve before final v1.0.0:** a dedicated private security contact or
+  GitHub private vulnerability reporting; a dedicated conduct contact; a valid
+  CODEOWNERS maintainer owner or team (`@forward-thinkers-lab/core-maintainers`
+  is unverified and may resolve to nothing); the two-maintainer wording
+  sign-off; ≥ 4 of 5 Tier-2 attestations; and, optionally, the historical
+  `v0.4.0` upgrade artifact (no public `v0.4.0` tag exists). `SECURITY.md` and
+  `CODE_OF_CONDUCT.md` describe the channels that exist today rather than
+  promising contacts that do not — no placeholder addresses are published.
 
 ## [0.4.3] - 2026-07-17
 

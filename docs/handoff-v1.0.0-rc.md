@@ -7,17 +7,17 @@ duplicating them.
 ## Snapshot
 | | |
 |---|---|
-| Branch | `v1.0.0-rc` (cut from `b9d4cd3` = the `v0.4.3` tag) |
-| HEAD | `730af8f` — "Group F (4/4): release dry-run + RC readiness report" |
+| Branch | `v1.0.0-rc` (cut from `b9d4cd3` = the `v0.4.3` tag), tracking `origin/v1.0.0-rc` |
+| HEAD | `504492e` — "handoff document for the completed RC branch" (before this cleanup commit) |
 | Artifact version | `ToolVersion 1.0.0-rc.1`, `SchemaVersion 0.4.0`, `RulePackVersion 0.4.3` |
 | Working tree | clean |
-| Pushed? | **No** — `origin/v1.0.0-rc` does not exist |
+| Pushed? | **Yes** — pushed 2026-07-21; `origin/v1.0.0-rc` exists and is in sync |
 | Tagged? | **No** `v1.0.0-rc.1` tag — tags are only `v0.4.1`, `v0.4.2`, `v0.4.3` |
-| Published? | No |
+| Published? | **No** — no GitHub Release, prerelease or otherwise |
 | Status | **Tag-ready**; see [release-readiness-v1.0.0-rc.1.md](release-readiness-v1.0.0-rc.1.md) |
 
-**Standing rule:** the owner authorizes every push, merge, tag, and publish.
-Nothing on this branch has been pushed.
+**Standing rule:** the owner authorizes every push, merge, tag, and publish. The
+branch is pushed; nothing has been merged, tagged, or published.
 
 ## What this RC is
 A **documentation, CI/release-process, and version-metadata** stabilization on
@@ -27,7 +27,10 @@ the version metadata (Group F commit 1); everything else is docs, tests, CI, and
 release tooling. Scope authority: `docs/decisions.md` (append-only, D-178) and
 `docs/design.md`.
 
-## RC commit inventory (18 commits, `b9d4cd3..HEAD`)
+## RC commit inventory (18 group commits, `b9d4cd3..730af8f`)
+Followed by `504492e` (this handoff doc) and one pre-RC documentation-cleanup
+commit (stale pushed-state corrections + removal of the public `TODO` contact
+placeholders). Neither touches the artifact.
 - **Group A** `6872151` — doc inventory + stale-reference cleanup (also the one
   earlier artifact reword: unreachable fallthrough → `UnhandledMode` default).
 - Samples `af1cacb` — documentation structure samples (approved before mass docs).
@@ -77,23 +80,35 @@ Run on the completed RC branch:
 - **Tier 2 pending attestation:** 2012/2014/2016 Windows + Azure MI/DB.
 
 ## Tracked before FINAL v1.0.0 (none are code changes)
-1. Security & conduct contacts — `TODO` placeholders in `SECURITY.md` /
-   `CODE_OF_CONDUCT.md`. Resolve before GA; preferably before a public RC.
-   (`SECURITY.md` uses cautious "if enabled" wording — no false commitment.)
-2. `@core-maintainers` CODEOWNERS team must exist (or be replaced with real
-   handles) before GA.
-3. Two-maintainer §6.7 wording sign-off (D-076/D-158/D-189) — the systematic
+No public-facing `TODO` placeholders remain — `SECURITY.md` and
+`CODE_OF_CONDUCT.md` now state the current channel honestly instead. The
+underlying items are still open:
+
+1. **Private security contact** — configure a dedicated one, or enable GitHub
+   private vulnerability reporting. `SECURITY.md` currently says, without
+   inventing an address, that the preferred channel is private vulnerability
+   reporting *if enabled*, and that no dedicated contact exists otherwise.
+2. **Conduct contact** — configure a dedicated one. `CODE_OF_CONDUCT.md`
+   currently routes reports to the owner/maintainers via available GitHub
+   channels and says no dedicated address is configured yet.
+3. **CODEOWNERS owner** — `@forward-thinkers-lab/core-maintainers` is unverified
+   and may resolve to nothing (GitHub ignores unresolvable owners silently, so
+   the rules are likely a no-op). Create and grant the team, or replace it with
+   real individual handles. See the header of `.github/CODEOWNERS`.
+4. Two-maintainer §6.7 wording sign-off (D-076/D-158/D-189) — the systematic
    review is in [wording-lock-review.md](wording-lock-review.md); the human
    sign-off remains.
-4. ≥ 4 of 5 Tier-2 attestations (§11.6).
-5. Optional: `tests/upgrade/artifacts/v0.4.0.sql` to validate the v0.4.0 upgrade
+5. ≥ 4 of 5 Tier-2 attestations (§11.6).
+6. Optional: `tests/upgrade/artifacts/v0.4.0.sql` to validate the v0.4.0 upgrade
    path. Not a public promise, so not an RC blocker.
 
 ## How to release (owner-authorized only)
 1. (Optional) dry-run the release build: `bash scripts/build-release-artifact.sh
    --version 1.0.0-rc.1` — inspect `dist/` (git-ignored).
-2. Push the branch: `git push -u origin v1.0.0-rc`. This triggers `ci-tier1`
-   (static-analysis + doc-coverage + 4-target matrix + rule-fixtures).
+2. Push the branch — **already done** (2026-07-21). Re-push after any further
+   commits: `git push origin v1.0.0-rc`. Each push triggers `ci-tier1`
+   (static-analysis + doc-coverage + 4-target matrix + rule-fixtures); confirm
+   it is green before tagging.
 3. (Optional) run `release.yml` via `workflow_dispatch` for a full dry-run (gate
    + build; publishes nothing).
 4. Tag and push: `git tag -a v1.0.0-rc.1 -m "…"` then `git push origin

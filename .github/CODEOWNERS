@@ -3,8 +3,23 @@
 # single @core-maintainers team; topic-specific teams are added when trusted
 # maintainers with that focus exist).
 #
-# NOTE: the @core-maintainers team must exist in the GitHub org for these rules
-# to take effect. Until then, GitHub treats unknown owners as no-op.
+# STATUS — NOT YET IN EFFECT (blocker for final v1.0.0).
+# The owner below, @forward-thinkers-lab/core-maintainers, is the *intended*
+# routing target. It has NOT been confirmed to exist. Team-syntax owners require
+# (a) `forward-thinkers-lab` to be a GitHub organization, not a user account,
+# (b) a team named `core-maintainers` within it, and (c) that team having write
+# access to this repository. GitHub silently ignores an owner that fails any of
+# these — no review is requested and no rule is enforced. Assume these rules are
+# a no-op until a maintainer verifies otherwise.
+#
+# Before final v1.0.0 (D-185), either create and grant that team, or replace
+# every owner below with real individual @handles. Do not treat the entries in
+# this file as active review protection until then; if two-reviewer enforcement
+# is needed sooner, configure it as a branch protection rule, which does not
+# depend on CODEOWNERS resolving.
+#
+# The path routing is left active rather than commented out so that it takes
+# effect automatically once the team exists.
 
 # Default owner for everything.
 *                                   @forward-thinkers-lab/core-maintainers

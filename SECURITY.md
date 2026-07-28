@@ -17,14 +17,29 @@ runtime service, "patching" means installing an updated `sp_SQLFlightRecorder.sq
 Please report suspected vulnerabilities **privately** — do not open a public
 issue for a security problem.
 
-- Preferred (**if enabled** on this repository): GitHub private vulnerability
-  reporting (Security → *Report a vulnerability*). If that option is not
-  available, use the email below.
-- Email: `TODO: security contact` <!-- set before v1.0.0 GA -->.
+- **If GitHub private vulnerability reporting is enabled** on this repository
+  (Security → *Report a vulnerability*), that is the preferred channel. It
+  opens a private security advisory visible only to maintainers.
+- **If it is not enabled**, this project does not yet have a dedicated private
+  security contact. In that case, please do not publish the details. Open a
+  normal issue stating only that you have a security concern and asking a
+  maintainer to arrange a private channel — withhold the specifics until one
+  exists.
 
-Please include: the version/commit, a description, reproduction steps if you
-have them, and the impact you observed. Do not include real production query
-text or secrets in your report.
+Never post secrets, credentials, exploit details, or sensitive production data
+in a public issue or discussion.
+
+Non-sensitive **security hardening suggestions** — defence-in-depth improvements
+that do not describe an exploitable weakness — are welcome as normal public
+issues.
+
+Once you have a private channel, please include: the version/commit, a
+description, reproduction steps if you have them, and the impact you observed.
+Do not include real production query text or secrets in your report.
+
+> **Tracked before final v1.0.0:** configuring a dedicated private security
+> contact, or enabling GitHub private vulnerability reporting, is a release
+> blocker for v1.0.0.
 
 ## What to expect
 
