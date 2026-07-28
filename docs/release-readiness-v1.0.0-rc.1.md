@@ -1,18 +1,35 @@
 # Release readiness — v1.0.0-rc.1
 
-**Date:** 2026-07-21 · updated 2026-07-28 (branch state + blocker list) ·
-**Branch:** `v1.0.0-rc`, **pushed** 2026-07-21 and tracking `origin/v1.0.0-rc`;
-**not tagged, not published** — no `v1.0.0-rc.1` tag and no GitHub Release
-exist. HEAD before the 2026-07-28 documentation-cleanup commit was `504492e`. ·
-**Artifact:** `ToolVersion 1.0.0-rc.1`, `SchemaVersion 0.4.0`,
+**Date:** 2026-07-21 · updated 2026-07-28 (branch state, blocker list, release
+outcome) · **Artifact:** `ToolVersion 1.0.0-rc.1`, `SchemaVersion 0.4.0`,
 `RulePackVersion 0.4.3`.
 
-**Posture:** All five RC-tag criteria are met. The RC is technically ready to
-tag. A short list of items is **tracked for resolution before final v1.0.0** —
-none require a code/behavior change. As of 2026-07-28 no public-facing `TODO`
-placeholder remains in `SECURITY.md` or `CODE_OF_CONDUCT.md`; both now describe
-the channel that actually exists, so the absence of a dedicated contact is no
-longer a *publication* blocker for the RC, only a final-v1.0 blocker.
+> ## ✅ RELEASED — 2026-07-28
+> `v1.0.0-rc.1` is **tagged and published as a GitHub prerelease**. This
+> document is now a record of the readiness assessment that preceded it, not a
+> pending checklist.
+>
+> | | |
+> |---|---|
+> | Tag | `v1.0.0-rc.1`, annotated, on `1f6d056` |
+> | Branch | `v1.0.0-rc` (tagged from the RC branch per D-173; **not** merged to `main`) |
+> | Release workflow | `release.yml` passed |
+> | Release | Published as a **prerelease** (auto-marked by the `-rc.1` suffix) |
+> | Merged to `main`? | **No** — not required by the release plan |
+>
+> Attribution of evidence: the tag and its target are verified locally (annotated
+> tag object on `1f6d056`). The workflow result and the published release are as
+> **reported by the owner** — this environment has no GitHub credentials, so
+> `git fetch`/`ls-remote` and the Actions API could not be queried to confirm
+> them independently. The published artifact's checksum has therefore **not**
+> been compared against the local build (`2ae4c475…`); see the follow-up below.
+
+**Posture:** All five RC-tag criteria were met at tag time. A short list of items
+remains **tracked for resolution before final v1.0.0** — none require a
+code/behavior change. No public-facing `TODO` placeholder remains in
+`SECURITY.md` or `CODE_OF_CONDUCT.md`; both describe the channel that actually
+exists, so the absence of a dedicated contact was not a publication blocker for
+the RC, only a final-v1.0 blocker.
 
 ## RC-tag criteria (from `implementation-plan-v1.0.0-rc.md`)
 | # | Criterion | Status | Evidence |
@@ -23,12 +40,9 @@ longer a *publication* blocker for the RC, only a final-v1.0 blocker.
 | 4 | `release.yml` dry-runs; upgrade paths validated | ✅¹ | Release build dry-run for `1.0.0-rc.1`: byte-identical artifact + `SHA256SUMS` + release notes; CHANGELOG gate passed. Upgrades **0.4.1/0.4.2/0.4.3 → rc.1** validated (`run-upgrade.sh`, 21/0). |
 | 5 | Tier-2 process live; wording-lock pass; ToolVersion `1.0.0-rc.1`; CHANGELOG | ✅ | Tier-2 attestation process documented; §6.7 wording lock reviewed (no changes needed); version bumped; CHANGELOG `1.0.0-rc.1` entry present. |
 
-¹ `release.yml` itself runs on GitHub Actions (tag push / `workflow_dispatch`).
-It has **not** been triggered: the branch is pushed, but no tag has been created
-and no `workflow_dispatch` dry-run has been recorded here. The build half was
-dry-run locally via `scripts/build-release-artifact.sh`. Remote CI results for
-the pushed branch are not recorded in this document — check `ci-tier1` on
-`origin/v1.0.0-rc` before tagging.
+¹ Assessed before the release. `release.yml` has since run for real on the
+`v1.0.0-rc.1` tag push and passed (owner-reported), executing the gate → build →
+publish path it had only been dry-run against locally.
 
 ## Verified vs pending
 - **Upgrades:** 0.4.1 / 0.4.2 / 0.4.3 → rc.1 verified (install-over Success,
@@ -79,15 +93,27 @@ scripts/build-release-artifact.sh --version 1.0.0-rc.1
   SHA256SUMS + RELEASE_NOTES.md (the CHANGELOG 1.0.0-rc.1 section)
   Build OK.
 ```
-The full workflow (gate → build → publish, or `workflow_dispatch` dry-run) runs
-in CI on a tag push or manual dispatch. Nothing in this document tags or
-publishes. Re-run 2026-07-28: same 344,857-byte artifact, same SHA256
-`2ae4c475…`.
+Re-run 2026-07-28 immediately before tagging: same 344,857-byte artifact, same
+SHA256 `2ae4c475…`. The real workflow then ran on the tag push and published the
+prerelease.
 
-## Recommendation
-Tag-ready as `v1.0.0-rc.1` on the owner's go-ahead. The public `TODO`
-placeholders that previously argued for delaying a public RC are gone, and the
-CODEOWNERS ambiguity is resolved. The two contact items, the wording sign-off
-and the Tier-2 attestations remain final-v1.0 gates. Before tagging, confirm
-`ci-tier1` is green on the pushed branch — this document does not record remote
-CI state.
+## Outcome
+Released as `v1.0.0-rc.1` (prerelease) on 2026-07-28. The two contact items, the
+wording sign-off and the Tier-2 attestations remain final-v1.0 gates.
+
+## Post-release follow-ups
+1. **Verify the published artifact's checksum.** Download the release asset and
+   confirm it matches the local reproducible build, SHA256
+   `2ae4c475264468dd3b60805a896114725f7cecddc3a4fc2f5c15ab3183c0d750`
+   (344,857 bytes). Not yet done — no credentials in the authoring environment.
+2. **Open the Tier-2 attestation issues for this RC.** D-164 specifies an
+   attestation issue each RC, and `compatibility/tier2-attestation.md` describes
+   it as auto-opened, but **no workflow implements it** — `release.yml` does not
+   create issues. It is a manual maintainer step today. These issues feed the
+   "≥ 4 of 5 attestations" final-v1.0 gate, so the RC cycle only prompts
+   re-attestation if someone opens them.
+3. **CHANGELOG date.** The `1.0.0-rc.1` entry is dated `2026-07-21` (when the
+   version was prepared); the actual tag and publish date was `2026-07-28`. Left
+   as-is deliberately: that section was extracted verbatim into the published
+   release notes, and editing it now would make the repository disagree with the
+   published release. Worth dating the final `1.0.0` entry on its release day.

@@ -71,8 +71,13 @@ snapshot.
 | **Stale** | Previously Verified, but no re-attestation for 3 minor releases — downgraded to *Unverified* (see below). |
 
 ## Staleness and re-attestation (D-164, D-190)
-- A fresh Tier-2 attestation issue is **auto-opened each RC** (D-164), so every
+- A fresh Tier-2 attestation issue is opened **each RC** (D-164), so every
   release cycle prompts re-attestation.
+  - **Implementation status (2026-07-28):** this is a **manual maintainer step**
+    today. D-164 describes it as auto-opening, but no workflow creates the
+    issues — `release.yml` builds and publishes only. Until that is automated,
+    a maintainer must open them by hand after each RC (use the `version-compat`
+    issue template, D-164), or the cycle silently fails to prompt anyone.
 - **Missing for 3 minors** → the target moves to **Unverified** (Stale).
 - **Missing for 6 minors** → a **deprecation discussion** is opened for that
   target.

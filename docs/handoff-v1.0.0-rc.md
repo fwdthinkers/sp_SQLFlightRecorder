@@ -8,16 +8,17 @@ duplicating them.
 | | |
 |---|---|
 | Branch | `v1.0.0-rc` (cut from `b9d4cd3` = the `v0.4.3` tag), tracking `origin/v1.0.0-rc` |
-| HEAD | `504492e` — "handoff document for the completed RC branch" (before this cleanup commit) |
+| HEAD | `1f6d056` — "resolve CODEOWNERS ambiguity — route to `@forward-thinkers-lab` (D-191)" |
 | Artifact version | `ToolVersion 1.0.0-rc.1`, `SchemaVersion 0.4.0`, `RulePackVersion 0.4.3` |
 | Working tree | clean |
-| Pushed? | **Yes** — pushed 2026-07-21; `origin/v1.0.0-rc` exists and is in sync |
-| Tagged? | **No** `v1.0.0-rc.1` tag — tags are only `v0.4.1`, `v0.4.2`, `v0.4.3` |
-| Published? | **No** — no GitHub Release, prerelease or otherwise |
-| Status | **Tag-ready**; see [release-readiness-v1.0.0-rc.1.md](release-readiness-v1.0.0-rc.1.md) |
+| Pushed? | **Yes** — `origin/v1.0.0-rc` = `1f6d056` |
+| Tagged? | **Yes** — annotated `v1.0.0-rc.1` on `1f6d056` (2026-07-28) |
+| Published? | **Yes** — GitHub **prerelease** `v1.0.0-rc.1`; `release.yml` passed |
+| Merged to `main`? | **No** — tagging from the RC branch is what the plan calls for (D-173); no merge required |
+| Status | **RC shipped.** Next milestone is final `v1.0.0`; see [release-readiness-v1.0.0-rc.1.md](release-readiness-v1.0.0-rc.1.md) |
 
 **Standing rule:** the owner authorizes every push, merge, tag, and publish. The
-branch is pushed; nothing has been merged, tagged, or published.
+RC is tagged and published; the branch has **not** been merged to `main`.
 
 ## What this RC is
 A **documentation, CI/release-process, and version-metadata** stabilization on
@@ -28,9 +29,11 @@ release tooling. Scope authority: `docs/decisions.md` (append-only, D-178) and
 `docs/design.md`.
 
 ## RC commit inventory (18 group commits, `b9d4cd3..730af8f`)
-Followed by `504492e` (this handoff doc) and one pre-RC documentation-cleanup
-commit (stale pushed-state corrections + removal of the public `TODO` contact
-placeholders). Neither touches the artifact.
+Followed by `504492e` (this handoff doc) and two pre-RC documentation-cleanup
+commits: `89b1693` (stale pushed-state corrections + removal of the public
+`TODO` contact placeholders) and `1f6d056` (CODEOWNERS → `@forward-thinkers-lab`,
+D-191) — the tagged commit. A post-release bookkeeping commit follows. None of
+them touch the artifact.
 - **Group A** `6872151` — doc inventory + stale-reference cleanup (also the one
   earlier artifact reword: unreachable fallthrough → `UnhandledMode` default).
 - Samples `af1cacb` — documentation structure samples (approved before mass docs).
@@ -60,7 +63,7 @@ placeholders). Neither touches the artifact.
   via `.gitattributes`; `.gitignore` covers `dist/` + Python caches; `.claude/`
   excluded via `.git/info/exclude` (local, never committed).
 
-## Validation status (all green, 2026-07-21)
+## Validation status (all green, 2026-07-21; local wave re-run green 2026-07-28 on `1f6d056` immediately before tagging)
 Run on the completed RC branch:
 - `check-doc-coverage.sh` — 12 modes / 31 rules / 36 config keys; no orphans.
 - `lint.py sp_SQLFlightRecorder.sql` + `--self-test` (11 fixtures).
@@ -110,23 +113,37 @@ organization, configure a visible maintainer team with write access and update
 from a PR's own author, so CODEOWNERS alone does not enforce the two-reviewer
 rule (D-158) on owner-authored PRs.
 
-## How to release (owner-authorized only)
-1. (Optional) dry-run the release build: `bash scripts/build-release-artifact.sh
-   --version 1.0.0-rc.1` — inspect `dist/` (git-ignored).
-2. Push the branch — **already done** (2026-07-21). Re-push after any further
-   commits: `git push origin v1.0.0-rc`. Each push triggers `ci-tier1`
-   (static-analysis + doc-coverage + 4-target matrix + rule-fixtures); confirm
-   it is green before tagging.
+## Release process (D-173) — executed for rc.1 on 2026-07-28
+Kept as the template for the next release. Steps 1–4 are **done** for
+`v1.0.0-rc.1`.
+1. Dry-run the release build: `bash scripts/build-release-artifact.sh --version
+   <version>` — inspect `dist/` (git-ignored).
+2. Push the branch. Each push triggers `ci-tier1` (static-analysis +
+   doc-coverage + 4-target matrix + rule-fixtures); confirm green before tagging.
 3. (Optional) run `release.yml` via `workflow_dispatch` for a full dry-run (gate
-   + build; publishes nothing).
-4. Tag and push: `git tag -a v1.0.0-rc.1 -m "…"` then `git push origin
-   v1.0.0-rc.1`. The tag push runs `release.yml`: gate → build byte-identical
-   artifact + `SHA256SUMS` + compat-matrix snapshot → publish a **prerelease**
-   GitHub Release (the `-rc.1` suffix auto-marks prerelease).
+   + build; publishes nothing). Skipped for rc.1 — CI was green and the build
+   had been dry-run locally.
+4. Tag from the RC branch and push the tag: `git tag -a v<version> -m "…"` then
+   `git push --no-follow-tags origin refs/tags/v<version>`. The tag push runs
+   `release.yml`: gate → build byte-identical artifact + `SHA256SUMS` +
+   compat-matrix snapshot → publish the GitHub Release. A version containing a
+   hyphen is auto-marked **prerelease**.
    - `release.yml` asserts the tag equals the artifact `Tool-Version` header, so
-     the tag must be `v1.0.0-rc.1`.
-5. Before **final** `v1.0.0`: resolve the tracked items above, bump `ToolVersion`
-   → `1.0.0`, add a CHANGELOG `1.0.0` entry, run this validation wave again.
+     the tag must match exactly.
+   - No merge to `main` is involved; the workflow triggers on `tags: v*`.
+
+## Post-RC state and next steps
+`v1.0.0-rc.1` shipped. Outstanding work, in rough order:
+1. **Verify the published asset's SHA256** against the local reproducible build
+   `2ae4c475…` (344,857 bytes).
+2. **Open the Tier-2 attestation issues for this RC.** D-164 requires one per RC
+   and `compatibility/tier2-attestation.md` calls it auto-opened, but **nothing
+   implements that** — `release.yml` creates no issues, so it is a manual step.
+   This feeds the "≥ 4 of 5" final-v1.0 gate.
+3. Collect RC feedback; fix anything it surfaces on this branch.
+4. Before **final** `v1.0.0`: resolve the tracked items above, bump `ToolVersion`
+   → `1.0.0`, add a CHANGELOG `1.0.0` entry dated on the day it ships, and run
+   the validation wave again.
 
 ## Repo map
 - Artifact: `sp_SQLFlightRecorder.sql` (repo root).
