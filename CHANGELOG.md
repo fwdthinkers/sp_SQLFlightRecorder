@@ -13,6 +13,12 @@ Process and documentation only. No artifact change.
 
 ### Changed
 
+- **Security reporting now has a dedicated private contact.** `SECURITY.md`
+  directs vulnerability reports to
+  `sqlflightrecorder-security@forwardthinkersconsulting.com`. GitHub private
+  vulnerability reporting is **not** enabled on this repository, and the policy
+  says so rather than pointing reporters at a *Report a vulnerability* button
+  that is not available to them.
 - **Tier-2 attestation is no longer a v1.0.0 release gate** (**D-192**). The
   earlier §11.6 rule required at least 4 of 5 Tier-2 targets attested before
   final v1.0.0; final v1.0.0 may now ship with those targets **Unverified**.

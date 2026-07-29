@@ -28,8 +28,9 @@ outcome) · **Artifact:** `ToolVersion 1.0.0-rc.1`, `SchemaVersion 0.4.0`,
 remains **tracked for resolution before final v1.0.0** — none require a
 code/behavior change. No public-facing `TODO` placeholder remains in
 `SECURITY.md` or `CODE_OF_CONDUCT.md`; both describe the channel that actually
-exists, so the absence of a dedicated contact was not a publication blocker for
-the RC, only a final-v1.0 blocker.
+exists. `SECURITY.md` now names a dedicated private security address
+(2026-07-29); `CODE_OF_CONDUCT.md` still has no dedicated contact and routes
+through available GitHub maintainer channels.
 
 ## RC-tag criteria (from `implementation-plan-v1.0.0-rc.md`)
 | # | Criterion | Status | Evidence |
@@ -53,25 +54,18 @@ publish path it had only been dry-run against locally.
   live, no target marked Verified without evidence.
 
 ## Tracked before final v1.0.0 (not code changes)
-1. **Private security contact** — configure a dedicated one, **or** enable
-   GitHub private vulnerability reporting on the repository. `SECURITY.md`
-   states the honest current position: private vulnerability reporting is the
-   preferred channel *if enabled*; if it is not, the project has no dedicated
-   private security contact yet, reporters are told to withhold specifics until
-   a private channel exists, and non-sensitive hardening suggestions may be
-   opened as normal issues. No address is invented.
-2. **Conduct contact** — configure a dedicated one. `CODE_OF_CONDUCT.md` routes
+1. **Conduct contact** — configure a dedicated one. `CODE_OF_CONDUCT.md` routes
    reports to the owner/maintainers through available GitHub channels and says
    plainly that no dedicated address is configured. No address is invented.
-3. **Two-maintainer wording sign-off** (D-076/D-158/D-189) — the systematic
+2. **Two-maintainer wording sign-off** (D-076/D-158/D-189) — the systematic
    review is recorded in `wording-lock-review.md`; the human sign-off remains.
-4. **Release process dry-run twice** (§11.6, D-173) — the `workflow_dispatch`
+3. **Release process dry-run twice** (§11.6, D-173) — the `workflow_dispatch`
    dry-run of `release.yml` has never been run; only local build dry-runs plus
    the one real rc.1 tag run.
-5. **Hotfix process rehearsed** (§11.6, D-174) — branch from latest tag, minimal
+4. **Hotfix process rehearsed** (§11.6, D-174) — branch from latest tag, minimal
    fix + regression test, Tier 1 green, forward-merge. Not yet rehearsed; now
    possible for the first time, since `v1.0.0-rc.1` exists to branch from.
-6. **`v0.4.0` upgrade artifact** — optional; supply
+5. **`v0.4.0` upgrade artifact** — optional; supply
    `tests/upgrade/artifacts/v0.4.0.sql` to validate that path. Not a public
    promise, so not a blocker (Group F decision).
 
@@ -82,6 +76,13 @@ verified and Tier-2 pending/unverified must stay visibly separate, and no
 unattested target (2012/2014/2016 or Azure) may be described as verified.
 Attestations remain wanted as post-1.0 work; the five prepared issues are still
 worth opening.
+
+**Resolved 2026-07-29 — no longer a blocker:** private security contact.
+`SECURITY.md` now names a dedicated address,
+`sqlflightrecorder-security@forwardthinkersconsulting.com`, as the private
+reporting channel. GitHub private vulnerability reporting is **not** exposed in
+this repository's settings, so the doc says so plainly and does not send
+reporters looking for a *Report a vulnerability* button that is not there.
 
 **Resolved 2026-07-28 — no longer a blocker:** CODEOWNERS. The owner was
 confirmed to be a GitHub **user account**, not an organization, so `@org/team`
@@ -111,10 +112,10 @@ SHA256 `2ae4c475…`. The real workflow then ran on the tag push and published t
 prerelease.
 
 ## Outcome
-Released as `v1.0.0-rc.1` (prerelease) on 2026-07-28. The two contact items and
-the wording sign-off remain final-v1.0 gates, joined by the two §11.6 process
-gates (release dry-run ×2, hotfix rehearsal). Tier-2 attestations are **no
-longer** a gate — see D-192 above.
+Released as `v1.0.0-rc.1` (prerelease) on 2026-07-28. Remaining final-v1.0 gates:
+the **conduct** contact, the wording sign-off, and the two §11.6 process gates
+(release dry-run ×2, hotfix rehearsal). The **security** contact is resolved
+(2026-07-29). Tier-2 attestations are **no longer** a gate — see D-192 above.
 
 ## Post-release follow-ups
 1. **Verify the published artifact's checksum.** Download the release asset and

@@ -87,22 +87,24 @@ No public-facing `TODO` placeholders remain — `SECURITY.md` and
 `CODE_OF_CONDUCT.md` now state the current channel honestly instead. The
 underlying items are still open:
 
-1. **Private security contact** — configure a dedicated one, or enable GitHub
-   private vulnerability reporting. `SECURITY.md` currently says, without
-   inventing an address, that the preferred channel is private vulnerability
-   reporting *if enabled*, and that no dedicated contact exists otherwise.
-2. **Conduct contact** — configure a dedicated one. `CODE_OF_CONDUCT.md`
+1. **Conduct contact** — configure a dedicated one. `CODE_OF_CONDUCT.md`
    currently routes reports to the owner/maintainers via available GitHub
    channels and says no dedicated address is configured yet.
-3. Two-maintainer §6.7 wording sign-off (D-076/D-158/D-189) — the systematic
+2. Two-maintainer §6.7 wording sign-off (D-076/D-158/D-189) — the systematic
    review is in [wording-lock-review.md](wording-lock-review.md); the human
    sign-off remains.
-4. Release process dry-run twice (§11.6, D-173) — the `workflow_dispatch`
+3. Release process dry-run twice (§11.6, D-173) — the `workflow_dispatch`
    dry-run has never run.
-5. Hotfix process rehearsed (§11.6, D-174) — now possible, since `v1.0.0-rc.1`
+4. Hotfix process rehearsed (§11.6, D-174) — now possible, since `v1.0.0-rc.1`
    exists to branch from.
-6. Optional: `tests/upgrade/artifacts/v0.4.0.sql` to validate the v0.4.0 upgrade
+5. Optional: `tests/upgrade/artifacts/v0.4.0.sql` to validate the v0.4.0 upgrade
    path. Not a public promise, so not a blocker.
+
+**Resolved 2026-07-29 — private security contact.** `SECURITY.md` names
+`sqlflightrecorder-security@forwardthinkersconsulting.com` as the dedicated
+private reporting channel. GitHub private vulnerability reporting is **not**
+exposed in this repository's settings; the doc states that rather than pointing
+reporters at a button that does not exist.
 
 **Removed as a gate 2026-07-29 — Tier-2 attestations (D-192).** v1.0.0 may ship
 with Tier-2 targets *Unverified*. What replaces the ≥ 4-of-5 count is a wording

@@ -85,8 +85,9 @@ Windows, Azure SQL MI/DB). Tier-2 process:
   forever" promises (§11.8). **present**.
 
 ## Security & governance
-- [SECURITY.md](../SECURITY.md) — **present** (no dedicated private security
-  contact yet; the doc says so plainly — final-v1.0 blocker, not an RC blocker).
+- [SECURITY.md](../SECURITY.md) — **present**; private reporting goes to the
+  dedicated address `sqlflightrecorder-security@forwardthinkersconsulting.com`
+  (GitHub private vulnerability reporting is not enabled on this repo).
   Security & threat model: [design.md §12/§13](design.md#12-security-and-threat-model-q-041)
   — **present** (folded from the RC staging draft; Q-041/Q-042).
 - [docs/wording-lock-review.md](wording-lock-review.md) — §6.7 wording lock
