@@ -46,13 +46,25 @@ body:
         Uninstall: clean
     validations:
       required: true
-  - type: input
+  - type: textarea
     id: capability
     attributes:
-      label: Capability snapshot (optional)
-      description: The Status capability result-set values (EngineEdition, Platform, HasQueryStoreSupport, etc.).
+      label: Capability snapshot
+      description: |
+        The `Status` capability result set — EngineEdition, ProductMajorVersion, Platform,
+        HasQueryStoreSupport, HasAgent, and the rest. **Required for a Tier-2 attestation:**
+        this is what pins *which* target the evidence is for, so an attestation without it
+        cannot be recorded in the compatibility matrix.
+        Filing a compatibility bug and the run failed before `Status` could be captured?
+        Write "not available" and say what failed.
+      placeholder: |
+        EngineEdition:         2
+        ProductMajorVersion:   12
+        Platform:              Windows
+        HasQueryStoreSupport:  0
+        HasAgent:              1
     validations:
-      required: false
+      required: true
   - type: checkboxes
     id: checks
     attributes:

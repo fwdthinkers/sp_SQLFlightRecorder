@@ -31,7 +31,7 @@ set -uo pipefail
 export MSYS_NO_PATHCONV=1
 
 IMAGE="${1:-mcr.microsoft.com/mssql/server:2022-latest}"
-SOURCES="0.4.0 0.4.1 0.4.2 0.4.3"
+SOURCES="0.4.0 0.4.1 0.4.2 0.4.3 1.0.0-rc.1"
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 REPO_ROOT="$( cd "${SCRIPT_DIR}/../.." && pwd )"
 CURRENT_SQL="${REPO_ROOT}/sp_SQLFlightRecorder.sql"
@@ -109,7 +109,10 @@ for v in ${SOURCES}; do
     echo "    ERROR  tag v${v} exists but sp_SQLFlightRecorder.sql could not be extracted from it."
     FAIL=$((FAIL+1)); continue
   fi
-  DBN="FRUP_$(echo "${v}" | tr -d '.')"
+  # Strip every non-alphanumeric character, not just dots: prerelease versions
+  # carry a hyphen (1.0.0-rc.1) and a hyphen is not legal in an unquoted
+  # identifier, so CREATE DATABASE FRUP_100-rc1 would be a syntax error.
+  DBN="FRUP_$(echo "${v}" | tr -cd '[:alnum:]')"
   [ -n "$(command -v cygpath 2>/dev/null)" ] && OLD_HOST="$(cygpath -m "${OLD}")" || OLD_HOST="${OLD}"
 
   master "IF DB_ID('${DBN}') IS NOT NULL BEGIN ALTER DATABASE ${DBN} SET SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE ${DBN}; END; CREATE DATABASE ${DBN};" >/dev/null
