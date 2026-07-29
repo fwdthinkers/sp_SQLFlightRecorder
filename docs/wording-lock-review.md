@@ -68,8 +68,12 @@ off*; it does not weaken what §6.7 requires of the wording.
 |---|---|
 | Review recorded | 2026-07-21 (this document); re-confirmed against the unchanged artifact 2026-07-29 |
 | Artifact reviewed | `ToolVersion 1.0.0-rc.1`, SHA256 `2ae4c475…` |
-| Reviewer | Ysaias Portes / @forward-thinkers-lab, 2026-07-29|
+| Reviewer | Ysaias Portes / @forward-thinkers-lab, 2026-07-29 |
 | Status | ✅ **Owner sign-off complete** |
 
-The sign-off line above is deliberately blank. It is the owner's to complete —
-recording it on their behalf would defeat its only purpose.
+**Scope of this sign-off against the shipped `1.0.0` artifact.** The signature
+above was given on the `1.0.0-rc.1` artifact. The `1.0.0` artifact differs from
+it **only in version metadata** — `ToolVersion`, the build date, and three
+comment lines — with no change to any recommendation, finding, or message
+string. Verified by diff. The wording reviewed above is therefore the wording
+that ships in `1.0.0`, and the sign-off carries over unaltered.

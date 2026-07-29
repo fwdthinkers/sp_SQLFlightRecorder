@@ -7,12 +7,35 @@ Per design decision D-175, entries tag the affected `RuleId`s and `@Mode`s so
 runbook owners can grep. Versioning follows the project-specific semver of
 D-171 (major = contract break; minor = additive; patch = fixes).
 
-## [Unreleased]
+## [1.0.0] - 2026-07-29
 
-Process and documentation only. No artifact change.
+**First stable release.** The v1.x contract starts here: rule IDs, output
+columns, and the forward-only schema are now "1.0 is forever" promises — see
+[docs/compatibility/support-policy.md](docs/compatibility/support-policy.md).
+
+Relative to `1.0.0-rc.1` the **only artifact change is version metadata**:
+`ToolVersion` `1.0.0-rc.1` → `1.0.0` and the build date. Everything else in this
+entry is documentation and process. `SchemaVersion` stays `0.4.0` (no DDL,
+forward-only, D-038) and `RulePackVersion` stays `0.4.3` — it names the release
+that last changed rule logic or the rule catalog, not the tool release (D-085),
+and no rule has changed since 0.4.3.
+
+**Compatibility, stated by tier.** Tier-1 **verified** in automated CI: SQL
+Server 2017 / 2019 / 2022 / 2025 Developer, plus 2022 Express and Standard.
+Tier-2 **Unverified** — no attestation received, meaning untested, not "works"
+and not "broken": SQL Server 2012 / 2014 / 2016 (Windows), Azure SQL Managed
+Instance, Azure SQL Database. The two tiers are separate claims; see
+[docs/compatibility/matrix.md](docs/compatibility/matrix.md) before relying on a
+Tier-2 target.
+
+**Upgrades** from 0.4.1 / 0.4.2 / 0.4.3 / 1.0.0-rc.1 are validated and
+migration-free (`tests/upgrade/run-upgrade.sh`). `v0.4.0` has no public tag and
+is untested — not faked, not claimed.
 
 ### Changed
 
+- `ToolVersion` is now `1.0.0` (surfaced by `About`, `Help`, `Status`, and the
+  Markdown report header; build date 2026-07-29). **No behavior change.**
 - **Security reporting now has a dedicated private contact.** `SECURITY.md`
   directs vulnerability reports to
   `sqlflightrecorder-security@forwardthinkersconsulting.com`. GitHub private
@@ -53,6 +76,10 @@ Process and documentation only. No artifact change.
   RC-to-final upgrade path is covered. Fixed a latent bug it exposed: database
   names were built by stripping dots only, so a prerelease version's hyphen
   produced an illegal identifier.
+- The **hotfix process (D-174) was rehearsed** before this release: branch from
+  the latest tag, minimal fix, validation, forward-merge. Recorded with its
+  limits in `docs/release-readiness-v1.0.0-rc.1.md` — the rehearsal used a
+  docs-only fix, so it did not exercise the regression-test leg.
 
 ## [1.0.0-rc.1] - 2026-07-21
 

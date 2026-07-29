@@ -8,17 +8,16 @@ duplicating them.
 | | |
 |---|---|
 | Branch | `v1.0.0-rc` (cut from `b9d4cd3` = the `v0.4.3` tag), tracking `origin/v1.0.0-rc` |
-| HEAD | `1f6d056` — "resolve CODEOWNERS ambiguity — route to `@forward-thinkers-lab` (D-191)" |
-| Artifact version | `ToolVersion 1.0.0-rc.1`, `SchemaVersion 0.4.0`, `RulePackVersion 0.4.3` |
+| Artifact version | `ToolVersion 1.0.0` (build date 2026-07-29), `SchemaVersion 0.4.0`, `RulePackVersion 0.4.3` |
 | Working tree | clean |
-| Pushed? | **Yes** — `origin/v1.0.0-rc` = `1f6d056` |
-| Tagged? | **Yes** — annotated `v1.0.0-rc.1` on `1f6d056` (2026-07-28) |
-| Published? | **Yes** — GitHub **prerelease** `v1.0.0-rc.1`; `release.yml` passed |
+| Tags | `v1.0.0-rc.1` on `1f6d056` (annotated, 2026-07-28). **No `v1.0.0` tag.** |
+| Published | GitHub **prerelease** `v1.0.0-rc.1` only. **No `v1.0.0` release.** |
 | Merged to `main`? | **No** — tagging from the RC branch is what the plan calls for (D-173); no merge required |
-| Status | **RC shipped.** Next milestone is final `v1.0.0`; see [release-readiness-v1.0.0-rc.1.md](release-readiness-v1.0.0-rc.1.md) |
+| Status | **Final `v1.0.0` prepared, not released.** One gate open: the `workflow_dispatch` release dry-run. See [release-readiness-v1.0.0-rc.1.md](release-readiness-v1.0.0-rc.1.md) |
 
-**Standing rule:** the owner authorizes every push, merge, tag, and publish. The
-RC is tagged and published; the branch has **not** been merged to `main`.
+**Standing rule:** the owner authorizes every push, merge, tag, and publish.
+`v1.0.0` is **not** tagged, **not** published, and the branch is **not** merged
+to `main`.
 
 ## What this RC is
 A **documentation, CI/release-process, and version-metadata** stabilization on
@@ -87,17 +86,21 @@ No public-facing `TODO` placeholders remain — `SECURITY.md` and
 `CODE_OF_CONDUCT.md` now state the current channel honestly instead. The
 underlying items are still open:
 
-1. **Owner wording sign-off signature** — D-193 makes owner sign-off sufficient,
-   so the rule is settled; the line in
-   [wording-lock-review.md](wording-lock-review.md) is still blank and marked
-   *Awaiting owner sign-off*. Left blank deliberately.
-2. **Release process dry-run twice** (§11.6, D-173) — the `workflow_dispatch`
-   dry-run of `release.yml` has never run. Last unmet process gate.
-3. Optional and set aside: `tests/upgrade/artifacts/v0.4.0.sql`.
+**None remain.** Every §11.6 gate is met or formally removed. The only optional
+item still open is `tests/upgrade/artifacts/v0.4.0.sql`, which the owner has set
+aside.
 
-Then the v1.0.0 mechanics: bump `ToolVersion` → `1.0.0`, CHANGELOG `1.0.0` entry
-dated on its ship day, re-run validation + upgrade harness (which then exercises
-the real rc.1 → 1.0.0 path), confirm `ci-tier1`, tag.
+The v1.0.0 mechanics are **done**: `ToolVersion` is `1.0.0` (build date
+2026-07-29), the CHANGELOG has a `[1.0.0] - 2026-07-29` entry, validation plus
+the upgrade harness are green — including the genuine rc.1 → 1.0.0 path — and
+the release process has now been dry-run twice (D-173): the real rc.1 tag run,
+and `release` #2 via `workflow_dispatch` on 2026-07-29 (Success, 54s, published
+nothing). What remains is push → `ci-tier1` green on the `1.0.0` artifact → tag
+`v1.0.0` on the owner's authorization.
+
+Shipping knowingly unverified, both recorded and neither claimed as passing:
+Tier-2 targets are *Unverified* (D-192), and there is no cost or soak evidence
+(D-194).
 
 **Resolved 2026-07-29:** conduct path documented as the designated v1.0.0 route
 (owner via GitHub maintainer channels; no address invented; single-maintainer

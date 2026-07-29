@@ -23,7 +23,8 @@ establishing the final template — the rest are produced from it), or `planned`
 - [docs/decisions.md](decisions.md) — decision log D-001…D-190.
 - [CHANGELOG.md](../CHANGELOG.md) — release history (Keep a Changelog, D-175).
 - [docs/handoff-v1.0.0-rc.md](handoff-v1.0.0-rc.md) — **resume here**: full
-  v1.0.0-rc.1 state, commit inventory, release steps, and open items.
+  current state (artifact bumped to `1.0.0`, not yet tagged or released), commit
+  inventory, release steps, and open items.
 
 ## Modes (12) → `docs/modes/<mode>.md`
 All **present**. `report.md` is the hand-authored style flagship; the other 11

@@ -19,8 +19,8 @@
 --   * Collect / CollectDebug / Report / Configure / Purge:
 --       implemented as the procedure evolves through the v0.1 roadmap
 --
--- Tool-Version:   1.0.0-rc.1
--- Build-Date-Utc: 2026-07-21
+-- Tool-Version:   1.0.0
+-- Build-Date-Utc: 2026-07-29
 -- Design:         docs/design.md
 -- Decisions:      docs/decisions.md
 --
@@ -83,17 +83,17 @@ BEGIN
     -- =========================================================================
     -- Constants and version info
     -- =========================================================================
-    DECLARE @ToolVersion             nvarchar(30)  = N'1.0.0-rc.1';
-    DECLARE @BuildDateUtc            datetime2(3)  = CONVERT(datetime2(3), '2026-07-21T00:00:00');
-    -- SchemaVersion stays 0.4.0: v0.4.1/v0.4.2/v0.4.3 and 1.0.0-rc.1 change no
-    -- DDL (rule lifecycle flips and new FR_Config seeds are data). Forward-only (D-038).
+    DECLARE @ToolVersion             nvarchar(30)  = N'1.0.0';
+    DECLARE @BuildDateUtc            datetime2(3)  = CONVERT(datetime2(3), '2026-07-29T00:00:00');
+    -- SchemaVersion stays 0.4.0: v0.4.1/v0.4.2/v0.4.3, 1.0.0-rc.1 and 1.0.0 change
+    -- no DDL (rule lifecycle flips and new FR_Config seeds are data). Forward-only (D-038).
     DECLARE @SchemaVersion            nvarchar(20) = N'0.4.0';
     -- Rule-pack version is part of the Markdown header contract (D-085).
     -- It names the release that last changed rule logic or the rule catalog
     -- (0.4.3 completed the FR_R0003 escalation before the v1.0 lock). 1.0.0-rc.1
-    -- is a docs/process/version-metadata release that changes no rule logic or
-    -- catalog, so the rule-pack version intentionally stays 0.4.3 (not tracked
-    -- to ToolVersion — it names the last rule change, D-085).
+    -- and 1.0.0 are docs/process/version-metadata releases that change no rule
+    -- logic or catalog, so the rule-pack version intentionally stays 0.4.3 (not
+    -- tracked to ToolVersion — it names the last rule change, D-085).
     DECLARE @RulePackVersion         nvarchar(20)  = N'0.4.3';
     DECLARE @SupportedSqlServerRange nvarchar(50)  = N'SQL Server 2012–2025';
     DECLARE @PartNumber              int           = 1;

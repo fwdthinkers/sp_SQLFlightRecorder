@@ -34,10 +34,10 @@ Requires Docker and a git work tree (preflight fails loudly otherwise). One
 container, one database per source version.
 
 ## Results — point-in-time record, not live status
-Recorded 2026-07-29 against target 2022 with the artifact at
-`ToolVersion 1.0.0-rc.1`. This table is the record of **one past run**: nothing
-refreshes it automatically, and it does not necessarily describe the artifact
-currently in the working tree. Re-run the harness (above) for current results.
+Recorded 2026-07-29 against target 2022, upgrading **to the `ToolVersion 1.0.0`
+artifact**. This table is the record of **one past run**: nothing refreshes it
+automatically, and it does not necessarily describe the artifact currently in
+the working tree. Re-run the harness (above) for current results.
 
 | Source | Result |
 |---|---|
@@ -45,14 +45,13 @@ currently in the working tree. Re-run the harness (above) for current results.
 | v0.4.1 | ✅ all checks pass |
 | v0.4.2 | ✅ all checks pass |
 | v0.4.3 | ✅ all checks pass |
-| v1.0.0-rc.1 | ✅ all checks pass |
+| v1.0.0-rc.1 | ✅ all checks pass — **the genuine RC → final upgrade** |
 
 `28 passed, 0 failed, 1 unavailable`. The upgrade path from every tagged release
-to the current artifact is clean and migration-free; `v0.4.0` remains pending its
-historical artifact.
+to `1.0.0` is clean and migration-free; `v0.4.0` remains pending its historical
+artifact.
 
-**Read the `v1.0.0-rc.1` row precisely.** The harness upgrades a *tagged*
-artifact to the *working-tree* artifact, and the working tree is itself
-`1.0.0-rc.1`, so that row currently demonstrates install-over **idempotency**
-(rc.1 → rc.1), not the rc.1 → 1.0.0 upgrade. The genuine RC-to-final path is
-exercised the first time this runs after `ToolVersion` is bumped to `1.0.0`.
+The `v1.0.0-rc.1` row is now a real cross-version upgrade: the harness installs
+the tagged rc.1 artifact and then installs the working-tree artifact over it,
+and the working tree is `1.0.0`. In the previous run — when the working tree was
+still rc.1 — that same row only demonstrated install-over idempotency.

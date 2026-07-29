@@ -46,23 +46,19 @@ through available GitHub maintainer channels.
 publish path it had only been dry-run against locally.
 
 ## Verified vs pending
-- **Upgrades:** 0.4.1 / 0.4.2 / 0.4.3 → rc.1 verified (install-over Success,
-  SchemaVersion stays 0.4.0, no DDL migration, no data dropped, Report works).
-  **v0.4.0 pending** — no public `v0.4.0` tag exists; not faked, not claimed.
+- **Upgrades → `1.0.0` (re-run 2026-07-29, target 2022): 28 passed, 0 failed, 1
+  unavailable.** 0.4.1 / 0.4.2 / 0.4.3 / **1.0.0-rc.1** → 1.0.0 all verified:
+  install-over Success, SchemaVersion stays 0.4.0, no DDL migration, no `FR_*`
+  table dropped, rows preserved, all config keys present, Report works. The
+  rc.1 row is now a genuine cross-version upgrade, not idempotency — the
+  working-tree artifact is `1.0.0`. **v0.4.0 unavailable** — no public `v0.4.0`
+  tag exists; not faked, not claimed, and set aside by the owner.
 - **Tier 1 (verified):** 2017/2019/2022/2025 Developer + 2022 Express/Standard.
 - **Tier 2 (pending attestation):** 2012/2014/2016 Windows + Azure MI/DB — process
   live, no target marked Verified without evidence.
 
 ## Tracked before final v1.0.0 (not code changes)
-1. **Owner wording sign-off not yet recorded.** D-193 makes owner sign-off
-   sufficient, so the *rule* is resolved — but the signature itself is still
-   blank. `wording-lock-review.md` now carries a sign-off block marked
-   **Awaiting owner sign-off**; it is left blank deliberately, since filling it
-   in on the owner's behalf would defeat its purpose.
-2. **Release process dry-run twice** (§11.6, D-173) — the `workflow_dispatch`
-   dry-run of `release.yml` has never been run; only local build dry-runs plus
-   the one real rc.1 tag run. This is the last unmet *process* gate.
-3. **`v0.4.0` upgrade artifact** — optional; supply
+1. **`v0.4.0` upgrade artifact** — optional; supply
    `tests/upgrade/artifacts/v0.4.0.sql` to validate that path. Not a public
    promise, so not a blocker (Group F decision) — and explicitly set aside by
    the owner.
@@ -80,10 +76,28 @@ address was invented. It also states plainly that a single-maintainer project
 cannot review a report *about* that maintainer independently, and points to
 GitHub's own abuse reporting as an independent route.
 
-**Resolved 2026-07-29 — two-maintainer wording sign-off rule (D-193).** Owner
-sign-off is sufficient for v1.0.0; two-maintainer review resumes automatically
-once a second maintainer exists or the project moves to an organization. The
-outstanding part is only the signature — item 1 above.
+**Resolved 2026-07-29 — wording sign-off, rule and signature.** D-193 makes
+owner sign-off sufficient for v1.0.0 (two-maintainer review resumes
+automatically once a second maintainer exists or the project moves to an
+organization), and the owner's signature is now recorded in
+`wording-lock-review.md`. It was given against the `1.0.0-rc.1` artifact; the
+`1.0.0` artifact differs only in version metadata, so it carries over — noted
+in that document.
+
+**Resolved 2026-07-29 — release process dry-run twice (§11.6, D-173).** Both
+runs of the real workflow are now on record:
+
+| # | Run | Event | Branch | Result |
+|---|---|---|---|---|
+| 1 | `release` #1 | tag push `v1.0.0-rc.1` | — | Success — gate → build → published the prerelease (2026-07-28) |
+| 2 | `release` #2 | `workflow_dispatch` (manual) | `v1.0.0-rc` | **Success**, 54s — gate → build, published nothing (2026-07-29) |
+
+Owner-reported; this environment has no GitHub credentials and cannot query the
+Actions API. Note what run #2 built: the branch as pushed (`d158335`), which
+still carries the **`1.0.0-rc.1`** artifact — the `1.0.0` bump was not yet
+committed. So it validates the workflow path, not the `1.0.0` artifact. The
+`1.0.0` artifact's build is covered by the local dry-run below, and by
+`ci-tier1` once this commit is pushed.
 
 **Resolved 2026-07-29 — hotfix rehearsal (D-174).** Performed; evidence below.
 
@@ -132,18 +146,38 @@ Re-run 2026-07-28 immediately before tagging: same 344,857-byte artifact, same
 SHA256 `2ae4c475…`. The real workflow then ran on the tag push and published the
 prerelease.
 
-## Outcome
-Released as `v1.0.0-rc.1` (prerelease) on 2026-07-28. **Final `v1.0.0` is not
-released and no date is claimed.**
+**Final `1.0.0` build dry-run, 2026-07-29:**
+```
+scripts/build-release-artifact.sh --version 1.0.0
+  Built dist/sp_SQLFlightRecorder.sql (344863 bytes)
+  SHA256: dfb46a5428cce98291bcf30ca27a17fb0c0d5242e2d7be97ccfbc74e6a0e2989
+  Release notes: 74 line(s)   (the CHANGELOG [1.0.0] section)
+  Build OK.
+```
+The checksum necessarily differs from rc.1 — the artifact's version metadata
+changed, which is the point of the bump. The diff against the tagged rc.1
+artifact is version metadata and three comment lines only; no recommendation,
+finding, or message string is touched.
 
-As of 2026-07-29 two things stand between here and a final tag: the **owner's
-wording sign-off signature** (the rule is resolved by D-193; the line is still
-blank) and the **`workflow_dispatch` release dry-run** (§11.6 wants two; only
-local build dry-runs plus the one real rc.1 tag run have happened). Everything
-else that was a gate is resolved or formally removed: security contact and
-conduct path documented, hotfix rehearsed (D-174), Tier-2 attestations removed
-as a gate (D-192), cost/soak removed as a gate (D-194), `v0.4.0` artifact set
-aside by the owner.
+## Outcome
+Released as `v1.0.0-rc.1` (prerelease) on 2026-07-28.
+
+**Final `v1.0.0` is prepared but NOT released.** As of 2026-07-29 the artifact
+is bumped to `ToolVersion 1.0.0` (build date 2026-07-29), the CHANGELOG carries
+a `[1.0.0] - 2026-07-29` entry, and the full validation wave plus the upgrade
+harness are green — but **no `v1.0.0` tag exists, no release is published, and
+`v1.0.0-rc` has not been merged to `main`.** No release date is claimed.
+
+**Every §11.6 gate is now met or formally removed:** security contact, conduct
+path, wording sign-off (rule **and** owner signature), release process dry-run
+twice (D-173), hotfix rehearsed (D-174), Tier-2 removed as a gate (D-192),
+cost/soak removed as a gate (D-194), `v0.4.0` set aside by the owner.
+
+What remains is not a gate but a sequence: push this commit, confirm `ci-tier1`
+green on the `1.0.0` artifact, then tag `v1.0.0` on the owner's authorization.
+Two things ship knowingly unverified — Tier-2 targets are *Unverified*, and
+there is no cost or soak evidence. Both are recorded above and in the release
+notes; neither is claimed as passing.
 
 ## Hotfix rehearsal (D-174) — performed 2026-07-29
 Rehearsed end to end without publishing anything.
