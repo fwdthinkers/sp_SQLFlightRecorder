@@ -1,24 +1,28 @@
 # Status mode
 
-`Status` reports repository installation state and metadata.
+Reports installation state, configuration, the rule catalog, recent runs, repository footprint, and the capability snapshot.
 
-## Result sets (always returned in this order)
+## Safety
 
-1. **InstallationSummary** (1 row)
-   - `DatabaseName`, `SchemaVersion`, `InstalledOnUtc`, `InstalledBy`, `TableCount`, `IsInstalled`, `Message`
-2. **Configuration** (`FR_Config`, ordered by `ConfigKey`)
-3. **RuleCatalog** (`FR_Rules`, ordered by `RuleId`)
-4. **RepositorySize** (one row per existing Part 3 `FR_*` table)
-   - `TableName`, `RowCount`, `ReservedKb`, `DataKb`, `IndexKb`
-5. **RunLogSummary** (1 row)
-   - `LastRunUtc`, `LastRunMode`, `LastRunStatus`, `RunsLast24h`, `ErrorsLast24h`
-6. **CapabilitySnapshot** (shape-only placeholder in Part 3)
-   - `KeyName`, `KeyValue`
+Read-only; reads only `FR_*` and allow-listed catalogs. Returns multiple result sets (Status is exempt from the two-result-set rule, which applies to Report).
 
-If the tool is not installed (`FR_Config` missing), `InstallationSummary` reports `IsInstalled = 0` and the other result sets are returned as empty shape-compatible sets.
+## Parameters
 
-## Example
+| Parameter | Meaning |
+|---|---|
+| `(none)` | Status takes no tuning parameters. |
+
+## Result set(s)
+
+Six result sets: installation summary; configuration; rule catalog; recent runs; repository size; capability snapshot.
+
+## Examples
 
 ```sql
 EXEC dbo.sp_SQLFlightRecorder @Mode = N'Status';
 ```
+
+## Common failure modes
+
+On a not-installed database, result sets return empty shells (stable shape). See [operations/troubleshooting.md](../operations/troubleshooting.md).
+

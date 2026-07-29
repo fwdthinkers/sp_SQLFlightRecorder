@@ -1,12 +1,12 @@
 # Decision Log — SQL Server DBA Flight Recorder
 
-Complete, append-only decision log. Every decision ID from D-001 through D-190 appears below with its source section and status.
+Complete, append-only decision log. Every decision ID from D-001 through D-194 appears below with its source section and status.
 
 **Status legend:**
 - **Locked** — Final; only changeable in a major release per project versioning (D-171, D-126).
 - **Tentative** — Decision is committed but explicitly subject to revision based on user feedback (typically a default value or threshold).
 - **Deferred** — Decision identifies an item that has been moved to a later release; the target version is named.
-- **Superseded** — Replaced by a later decision; the superseding D-### is named. (None currently.)
+- **Superseded** — Replaced by a later decision; the superseding D-### is named. (Currently: D-185, routing target only, by D-191.)
 - **At Risk** — Locked, but the design lock review (`docs/design-lock-review.md`) flagged a residual risk that depends on post-launch validation. The decision stands; the risk is tracked.
 
 ---
@@ -239,7 +239,7 @@ Complete, append-only decision log. Every decision ID from D-001 through D-190 a
 | D-182 | §11.4 | Deferred to v0.2/v0.3 | Q-007 → Demo data mode not required for v0.1; roadmap as `@Mode = 'InstallDemoData'`, writing into `FRDemo`-isolated schema, never enabled by default | Contributors need a way to exercise rules without a real incident; not blocking for first ship | v0.1 contributors must hand-build fixtures from `tests/fixtures/` |
 | D-183 | §2.1 | Locked | Q-011 → `Uninstall` drops all `FR_*` objects by default; `@PreserveRunLog=1` opt-in renames `FR_RunLog*` to `FR_RunLog_Archive_<timestamp>` | Charter: fully removable with no permanent artifacts; audit use case satisfied without polluting default | Two more tables to consider during purge; rename collision risk handled with timestamp |
 | D-184 | §11.3 | Deferred to v0.2 | Q-013 → `FR_v_*` view layer deferred until v0.2, after Section 6 contracts have shipped and survived one release | Shipping views in v0.1 risks freezing them before we know how DBAs query the repo ad-hoc | v0.1 power users query base tables directly |
-| D-185 | §10.6 | Locked | Q-038 → At v1.0 launch, all `CODEOWNERS` paths route to single `@core-maintainers` team; topic-specific teams created when trusted maintainers with that focus exist | No bootstrapping problem from routing PRs to teams that don't have members | All early reviews fall on the core team |
+| D-185 | §10.6 | Superseded by D-191 (routing target only; topic-team intent retained) | Q-038 → At v1.0 launch, all `CODEOWNERS` paths route to single `@core-maintainers` team; topic-specific teams created when trusted maintainers with that focus exist | No bootstrapping problem from routing PRs to teams that don't have members | All early reviews fall on the core team |
 | D-186 | §10.4 | Locked | Q-039 → "Boring code" rejection is appealable to a second maintainer; safety/compatibility/performance objections remain non-appealable | Style judgement is reviewer-subjective; safety isn't | Some boring-vs-clever debates take two maintainers' time |
 | D-187 | §10.14 | Locked | Q-040 → Minimum local contributor environment is SSMS or Azure Data Studio + a writable SQL Server instance; Docker/CI parity recommended but not required for PR submission | DBA contributors are the target audience; many don't run Docker on workstations | First-pass CI failures may take an extra cycle when a maintainer relays results |
 
@@ -255,15 +255,26 @@ These three decisions were created by the design lock / compliance review (see `
 
 ---
 
+## v1.0.0-rc amendments
+
+| ID | Source | Status | Decision | Rationale | Tradeoff accepted |
+|---|---|---|---|---|---|
+| D-191 | §10.6 (supersedes the routing target of D-185) | Locked | `CODEOWNERS` owners are the repository owner account `@forward-thinkers-lab`, not an `@org/team`. Confirmed 2026-07-28: this repository is owned by a **GitHub user account, not an organization**, so team syntax cannot resolve and D-185's `@core-maintainers` routing was unachievable as written. D-185's *intent* — single default owner at v1.0, topic teams only when trusted maintainers with that focus exist — is retained and reactivated verbatim if the project later moves under an organization. | An owner that cannot resolve is silently ignored by GitHub: the rules read as review protection while enforcing nothing. A valid owner that actually resolves is safer than an aspirational one. | CODEOWNERS cannot request a review from the repository owner on their own PR, so it does not by itself enforce the two-reviewer rule (D-158); that still depends on a second human reviewer. Revisit if the project moves to an org. |
+| D-192 | §11.6 (supersedes the "Tier 2 attestation complete for at least 4 of 5 targets" clause of §11.6) | Locked | Final `v1.0.0` **may ship with Tier-2 targets Unverified**. The ≥ 4-of-5 attestation count is no longer a release gate. In exchange, every compatibility claim must state its tier explicitly and keep the two separate: **Tier-1 verified** (automated CI evidence) versus **Tier-2 pending / unverified** (no attestation received). SQL Server 2012 / 2014 / 2016 and the Azure targets must never be described as verified, tested, supported-as-tested, or equivalent to Tier 1 until a real attestation is recorded in the matrix. Attestation collection continues as ordinary post-1.0 work under D-164's cadence and D-190's 18-month review; D-121, D-164 and D-190 are otherwise unchanged. | Owner decision, 2026-07-29. The three Windows targets need out-of-support SQL builds on dedicated hardware and the Azure targets need paid services; none are available. Holding v1.0 indefinitely for attestations that may never arrive serves no user. Shipping with an honest "untested" label is more truthful than either faking verification or blocking the release forever. | v1.0 ships without independent evidence on five targets. Users on 2012/2014/2016 or Azure get a documented *Unverified* status and must validate in their own environment. The compatibility matrix and release notes now carry the whole burden of not overstating — a wording slip there is the main risk this decision creates. |
+| D-193 | §6.7, §10.4 (supersedes D-158's two-reviewer requirement and D-189's second-reviewer eligibility rule, **as applied to the v1.0.0 wording sign-off only**) | Locked | **Owner sign-off is sufficient for the final `v1.0.0` wording lock.** D-076/D-158/D-189 require a second maintainer to countersign wording review; this repository has exactly one maintainer (D-191: a personal user account, where GitHub will not even request review on the owner's own PRs), so the requirement cannot be met and would block v1.0.0 indefinitely. The systematic review recorded in `wording-lock-review.md` plus the owner's sign-off constitutes the v1.0.0 wording lock. **Two-maintainer review resumes automatically** the moment a second maintainer exists or the project moves to an organization/team model — at which point D-158 and D-189 apply again in full, unmodified, including the 30-day re-read eligibility rule. This decision narrows *who signs off*; it does not weaken *what §6.7 requires* of the wording itself. | The alternative was shipping with a permanently unmet gate or pretending a second reviewer existed. Naming the constraint and its expiry condition is more honest than either, and keeps the two-reviewer discipline alive as the default rather than quietly deleting it. | v1.0.0's wording lock has no independent second reader. The mitigation is that the review was systematic and is published in full, so any reader can audit it; and the discipline reinstates itself without further decision once the team grows. |
+| D-194 | §9.7, §11.6 (supersedes the RC plan's "cost-regression + soak green once" gate) | Locked | The **cost-regression (D-143)** and **soak (D-145)** harnesses are **out-of-band and non-blocking, and are not a final-`v1.0.0` gate**. No green evidence exists for either, and none is claimed. Two mechanical facts make this the honest position rather than a concession: `ci-cost.yml` and `ci-soak.yml` are `schedule` + `workflow_dispatch` only and never run on push/PR *by their own design*; and GitHub runs scheduled workflows **only from the default branch**, where these two files do not exist — they live on `v1.0.0-rc`, so neither nightly has ever fired and neither can until the branch reaches `main`. D-143's own strict >2% throughput gate is already deferred to "a PR check at GA once thresholds are calibrated on stable infra", and D-145 already reads "failures handled in release planning". A manual `workflow_dispatch` run of each before GA is **recommended, not required**. | A gate that cannot physically produce evidence is not a gate; it is a stalled release. Recording the mechanism — scheduled runs need the default branch — turns "we never got round to it" into a known, fixable condition. | v1.0.0 ships without cost or soak evidence. The performance envelope (D-043, D-131) rests on the Tier-1 matrix, the local harnesses, and D-188's commitment to empirical validation by real installs. If a regression exists, the first signal will come from users rather than CI. |
+
+---
+
 ## Summary
 
-- **Total decisions:** 190 (D-001 through D-190)
-- **Locked:** 184
+- **Total decisions:** 194 (D-001 through D-194)
+- **Locked:** 187
 - **Tentative:** 1 (D-181)
 - **Deferred items inside otherwise-locked decisions:** 2 (D-180 `@TimeZone` to v0.4; D-184 view layer to v0.2)
 - **Deferred:** 1 (D-182 to v0.2/v0.3)
 - **At Risk:** 6 (D-034, D-043, D-076, D-092, D-121, D-164) — each tracked by one of D-188/D-189/D-190
-- **Superseded:** 0
+- **Superseded:** 1 (D-185, routing target only, by D-191)
 
 No decisions have been silently merged, dropped, or simplified during reconciliation. If a future change supersedes a decision, append a new D-### entry and mark the superseded entry as `Superseded by D-###` rather than editing history.
 

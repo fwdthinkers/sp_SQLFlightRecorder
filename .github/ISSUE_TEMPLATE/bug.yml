@@ -1,0 +1,68 @@
+# Bug report — one of the 8 issue templates (D-156). Style is reused by the
+# other templates. Blank issues are disabled (see config.yml).
+name: Bug report
+description: Something the tool does that contradicts its documented behavior.
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. Please confirm the behavior contradicts
+        [docs/design.md](../../docs/design.md) / [docs/decisions.md](../../docs/decisions.md)
+        — documented design decisions are not bugs. **Do not paste real
+        production query text or secrets.**
+  - type: input
+    id: tool-version
+    attributes:
+      label: Tool version
+      description: Output of `EXEC dbo.sp_SQLFlightRecorder @Mode = N'About';`
+      placeholder: e.g. 1.0.0
+    validations:
+      required: true
+  - type: input
+    id: sql-version
+    attributes:
+      label: SQL Server version / edition / platform
+      placeholder: e.g. SQL Server 2019 Standard, Linux / Azure SQL MI
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What the docs say should happen, with a link to the decision/section.
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: What happened instead. Include the exact mode/parameters and any error text.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction steps
+      description: Minimal steps. Prefer synthetic data over real query text.
+      placeholder: |
+        1. EXEC dbo.sp_SQLFlightRecorder @Mode = N'Install';
+        2. ...
+    validations:
+      required: true
+  - type: textarea
+    id: status
+    attributes:
+      label: Status output (redacted)
+      description: Output of `@Mode = N'Status'` with anything sensitive removed.
+    validations:
+      required: false
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I confirmed this contradicts documented behavior, not a design decision.
+          required: true
+        - label: I removed any real query text / secrets from this report.
+          required: true

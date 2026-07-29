@@ -20,7 +20,7 @@
 #
 #   -- lint:scan-bounded-reads
 #
-# near the top of src/sp_SQLFlightRecorder.sql. Listing items here in Part 2
+# near the top of sp_SQLFlightRecorder.sql. Listing items here in Part 2
 # is intentional: it locks the allow-set BEFORE collectors are written so
 # Part 4 cannot quietly expand it without a documented decision.
 #

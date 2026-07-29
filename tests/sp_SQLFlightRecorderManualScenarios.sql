@@ -27,7 +27,7 @@ DECLARE @ProcName sysname = N'dbo.sp_SQLFlightRecorder';
 
 IF OBJECT_ID(@ProcName, N'P') IS NULL
 BEGIN
-    RAISERROR('dbo.sp_SQLFlightRecorder does not exist in this database. Run src/sp_SQLFlightRecorder.sql first.', 16, 1);
+    RAISERROR('dbo.sp_SQLFlightRecorder does not exist in this database. Run sp_SQLFlightRecorder.sql first.', 16, 1);
     RETURN;
 END;
 

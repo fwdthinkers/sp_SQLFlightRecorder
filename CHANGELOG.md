@@ -7,6 +7,131 @@ Per design decision D-175, entries tag the affected `RuleId`s and `@Mode`s so
 runbook owners can grep. Versioning follows the project-specific semver of
 D-171 (major = contract break; minor = additive; patch = fixes).
 
+## [1.0.0] - 2026-07-29
+
+**First stable release.** The v1.x contract starts here: rule IDs, output
+columns, and the forward-only schema are now "1.0 is forever" promises — see
+[docs/compatibility/support-policy.md](docs/compatibility/support-policy.md).
+
+Relative to `1.0.0-rc.1` the **only artifact change is version metadata**:
+`ToolVersion` `1.0.0-rc.1` → `1.0.0` and the build date. Everything else in this
+entry is documentation and process. `SchemaVersion` stays `0.4.0` (no DDL,
+forward-only, D-038) and `RulePackVersion` stays `0.4.3` — it names the release
+that last changed rule logic or the rule catalog, not the tool release (D-085),
+and no rule has changed since 0.4.3.
+
+**Compatibility, stated by tier.** Tier-1 **verified** in automated CI: SQL
+Server 2017 / 2019 / 2022 / 2025 Developer, plus 2022 Express and Standard.
+Tier-2 **Unverified** — no attestation received, meaning untested, not "works"
+and not "broken": SQL Server 2012 / 2014 / 2016 (Windows), Azure SQL Managed
+Instance, Azure SQL Database. The two tiers are separate claims; see
+[docs/compatibility/matrix.md](docs/compatibility/matrix.md) before relying on a
+Tier-2 target.
+
+**Upgrades** from 0.4.1 / 0.4.2 / 0.4.3 / 1.0.0-rc.1 are validated and
+migration-free (`tests/upgrade/run-upgrade.sh`). `v0.4.0` has no public tag and
+is untested — not faked, not claimed.
+
+### Changed
+
+- `ToolVersion` is now `1.0.0` (surfaced by `About`, `Help`, `Status`, and the
+  Markdown report header; build date 2026-07-29). **No behavior change.**
+- **Security reporting now has a dedicated private contact.** `SECURITY.md`
+  directs vulnerability reports to
+  `sqlflightrecorder-security@forwardthinkersconsulting.com`. GitHub private
+  vulnerability reporting is **not** enabled on this repository, and the policy
+  says so rather than pointing reporters at a *Report a vulnerability* button
+  that is not available to them.
+- **Conduct reporting has a designated v1.0.0 path.** `CODE_OF_CONDUCT.md`
+  routes reports to the repository owner through GitHub maintainer channels,
+  with a fallback for reporters who have no private channel, marked explicitly
+  as the v1.0.0 path rather than a placeholder. No address invented. It also
+  states that a single-maintainer project cannot independently review a report
+  about that maintainer, and points to GitHub's own abuse reporting as an
+  independent route.
+- **Owner sign-off is sufficient for the v1.0.0 wording lock** (**D-193**),
+  superseding D-158's two-reviewer rule and D-189's second-reviewer eligibility
+  for that sign-off only. Two-maintainer review resumes automatically once a
+  second maintainer exists or the project moves to an organization/team model.
+  This narrows who signs off, not what §6.7 requires of the wording.
+- **Cost-regression (D-143) and soak (D-145) are not a v1.0.0 gate**
+  (**D-194**). No green evidence exists for either and none is claimed: both
+  workflows are schedule/dispatch-only by design, and scheduled workflows run
+  only from the default branch, where neither file exists yet.
+- **Tier-2 attestation is no longer a v1.0.0 release gate** (**D-192**). The
+  earlier §11.6 rule required at least 4 of 5 Tier-2 targets attested before
+  final v1.0.0; final v1.0.0 may now ship with those targets **Unverified**.
+  What replaces the count is a wording obligation: compatibility claims must
+  keep **Tier-1 verified** (automated CI evidence) and **Tier-2 pending /
+  unverified** (no attestation received) visibly separate, and no unattested
+  target may be described as verified or tested. SQL Server 2012, 2014 and 2016
+  and the Azure targets stay *Unverified* — untested, not "works", not "broken"
+  — until a real attestation is recorded. Attestation collection continues as
+  post-1.0 work under D-164 and the D-190 18-month review.
+- The Tier-2 attestation issue template now **requires** the capability snapshot
+  and takes it as a multi-line field. The process always listed it as required
+  evidence — it is what pins which target the evidence describes — but the
+  template marked it optional, so an attestation could arrive unrecordable.
+- The upgrade harness now includes `1.0.0-rc.1` as a source version, so the
+  RC-to-final upgrade path is covered. Fixed a latent bug it exposed: database
+  names were built by stripping dots only, so a prerelease version's hyphen
+  produced an illegal identifier.
+- The **hotfix process (D-174) was rehearsed** before this release: branch from
+  the latest tag, minimal fix, validation, forward-merge. Recorded with its
+  limits in `docs/release-readiness-v1.0.0-rc.1.md` — the rehearsal used a
+  docs-only fix, so it did not exercise the regression-test leg.
+
+## [1.0.0-rc.1] - 2026-07-21
+
+First release candidate for v1.0.0. This is a **documentation, CI/release-process,
+and version-metadata** stabilization on top of `0.4.3`. It changes **no schema,
+output contract, rule ID, rule logic, collector, or mode**: `SchemaVersion` stays
+`0.4.0`, and `RulePackVersion` stays `0.4.3` because no rule logic or catalog
+entry changed since 0.4.3 (the rule-pack version names the last rule change, not
+the tool release — D-085). Upgrades from 0.4.1 / 0.4.2 / 0.4.3 are validated and
+migration-free.
+
+### Changed
+
+- `ToolVersion` is now `1.0.0-rc.1` (surfaced by `About`, `Help`, `Status`, and
+  the Markdown report header; build date 2026-07-21). No behavior change.
+
+### Added
+
+- **Documentation completeness** (§11.6): a page for every mode, rule, and
+  config key, enforced by a CI doc-coverage gate (`scripts/check-doc-coverage.sh`)
+  plus rule/mode/compat-matrix generators.
+- **CI / release wiring**: rule fixtures + demo golden in CI; a dry-runnable
+  release workflow (`release.yml`) that builds a byte-identical artifact with a
+  checksum and attaches the compatibility matrix; out-of-band cost/soak harnesses
+  (non-blocking).
+- **Compatibility**: six Tier-1 verified targets (2017/2019/2022/2025 Developer +
+  2022 Express/Standard) and a documented Tier-2 attestation process for
+  2012/2014/2016 Windows + Azure MI/DB (pending attestation).
+- **Upgrade-path validation** harness (`tests/upgrade/run-upgrade.sh`).
+- **Security / support / governance** docs: threat-model, support policy,
+  contributing guides, CODEOWNERS, and eight issue templates.
+
+### Notes
+
+- The **D-076 / D-189 wording lock** was reviewed with no changes required: every
+  rule recommendation is advisory and evidence-gated ("consider … only after
+  validating"), with explicit guards against reflexive action; no unsafe advice
+  is present (no kill / force / `NOLOCK` / shrink; no unqualified root-cause
+  claims). See `docs/wording-lock-review.md`.
+- **Must resolve before final v1.0.0:** a dedicated private security contact or
+  GitHub private vulnerability reporting; a dedicated conduct contact; the
+  two-maintainer wording sign-off; ≥ 4 of 5 Tier-2 attestations; and,
+  optionally, the historical `v0.4.0` upgrade artifact (no public `v0.4.0` tag
+  exists). `SECURITY.md` and `CODE_OF_CONDUCT.md` describe the channels that
+  exist today rather than promising contacts that do not — no placeholder
+  addresses are published.
+- **CODEOWNERS** routes to the repository owner account `@forward-thinkers-lab`.
+  The repository is owned by a user account, not an organization, so GitHub team
+  syntax cannot resolve here; D-185's `@core-maintainers` team routing is
+  superseded by **D-191** and reactivated only if the project moves under an
+  organization.
+
 ## [0.4.3] - 2026-07-17
 
 Pre-v1.0 rule-maturation patch. Resolves the last documented rule-behavior gap

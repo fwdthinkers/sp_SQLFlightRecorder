@@ -1,0 +1,47 @@
+# =============================================================================
+# Cost-regression CI (D-143) — OUT-OF-BAND, NON-BLOCKING
+# -----------------------------------------------------------------------------
+# Runs the cost-regression harness on a schedule and on demand only — never on
+# push/pull_request — so it cannot gate a PR or the v1.0.0-rc. It enforces the
+# hard 10 s per-Collect ceiling (D-143) and reports mean throughput vs the
+# optional committed baseline. Per D-143 the strict >2% throughput gate becomes
+# a PR check at GA once thresholds are calibrated on stable infra; until then it
+# is advisory here. Build-pipeline only (D-148).
+# =============================================================================
+
+name: ci-cost
+
+on:
+  schedule:
+    - cron: '17 4 * * *'   # nightly, out-of-band
+  workflow_dispatch:
+    inputs:
+      iterations:
+        description: 'Timed Collect iterations (after warm-up)'
+        required: false
+        default: '20'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-cost
+  cancel-in-progress: true
+
+jobs:
+  cost:
+    name: Cost regression (out-of-band, non-blocking)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      ITERATIONS: ${{ github.event.inputs.iterations || '20' }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Run cost-regression harness (SQL Server 2022)
+        run: |
+          set -euo pipefail
+          ITERS="${ITERATIONS}"
+          [[ "${ITERS}" =~ ^[0-9]+$ ]] || ITERS=20
+          bash tests/perf/run-cost-regression.sh mcr.microsoft.com/mssql/server:2022-latest "${ITERS}"

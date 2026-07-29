@@ -1,4 +1,4 @@
--- Models the shape of src/sp_SQLFlightRecorder.sql at Part 1: no DMV reads,
+-- Models the shape of sp_SQLFlightRecorder.sql at Part 1: no DMV reads,
 -- no BEGIN TRAN, only the install stub's EXEC(...) with an allow annotation,
 -- and ordinary PRINT / SELECT-of-literals. Must produce zero findings.
 SET NOCOUNT ON;

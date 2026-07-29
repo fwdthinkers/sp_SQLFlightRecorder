@@ -168,7 +168,7 @@ SQL Agent is not available in SQL Server Express and is not available in Azure S
 Use the file:
 
 ```text
-src/sp_SQLFlightRecorder.sql
+sp_SQLFlightRecorder.sql
 ```
 
 Open it in SSMS, Azure Data Studio, sqlcmd, or another SQL client connected to the target database.
@@ -1038,7 +1038,7 @@ Fix:
 
 Run the full procedure file first:
 
-    src/sp_SQLFlightRecorder.sql
+    sp_SQLFlightRecorder.sql
 
 Then confirm:
 

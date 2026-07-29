@@ -1,30 +1,29 @@
 # Install mode
 
-`Install` creates and seeds the Part 3 repository schema in the current database.
+Creates and seeds the `FR_*` repository (tables, views, config, rule catalog) in the current database.
 
-## Behavior
+## Safety
 
-- Refuses installation in `master`, `model`, `msdb`, `tempdb`, or `distribution` (D-004 v0.1 constraint).
-- Refuses when `DATABASEPROPERTYEX(DB_NAME(), 'Updateability') <> 'READ_WRITE'`.
-- Refuses when caller lacks `VIEW SERVER STATE` (D-118).
-- Enforces forward-only schema migration (D-038) and blocks downgrade attempts (D-039).
-- Creates the 12 v0.1 core `dbo.FR_*` tables idempotently.
-- Seeds `FR_Config` defaults and `FR_Rules` catalog rows idempotently.
-- Writes one `FR_RunLog` row with `Mode = 'Install'` and terminal `Status` (`Success` / `Error`).
-- Does **not** create SQL Agent jobs in Part 3.
+**Idempotent** — re-running is safe and does not drop existing tables (forward-only, D-038). Refuses system databases (D-004), read-only databases, and callers lacking `VIEW SERVER STATE` (D-118). Blocks downgrade (D-039). Optionally creates a SQL Agent job (`@CreateAgentJob=1`, D-005), skipped on Express.
 
-## Success result shape
+## Parameters
 
-One row with:
+| Parameter | Meaning |
+|---|---|
+| `@CreateAgentJob` | Optional. `1` creates a per-minute Collect Agent job (default 0). |
 
-- `Status` (`Installed` or `AlreadyInstalled`)
-- `DatabaseName`
-- `SchemaVersion`
-- `TableCount`
-- `Message`
+## Result set(s)
 
-## Example
+One row: `Status (Success/Error), DatabaseName, SchemaVersion, TableCount, Message`.
+
+## Examples
 
 ```sql
 EXEC dbo.sp_SQLFlightRecorder @Mode = N'Install';
+EXEC dbo.sp_SQLFlightRecorder @Mode = N'Install', @CreateAgentJob = 1;
 ```
+
+## Common failure modes
+
+See troubleshooting: install refused (system DB / read-only / missing permission / downgrade). See [operations/troubleshooting.md](../operations/troubleshooting.md).
+

@@ -1,0 +1,57 @@
+# False-positive report — one of the 8 issue templates (D-156). Same style as
+# bug.yml. Blank issues are disabled (see config.yml).
+name: False positive
+description: A rule fired when it should not have.
+labels: ["false-positive", "rule-pack", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this when a **rule produced a finding you believe is wrong**. If a
+        rule *failed to fire* when it should have, use the false-negative
+        template instead. **Do not paste real query text or secrets.**
+  - type: input
+    id: rule-id
+    attributes:
+      label: Rule ID
+      description: The RuleId from the finding, e.g. FR_R0003_TopWaitTypeSpike. See docs/rules/.
+      placeholder: FR_R0003_TopWaitTypeSpike
+    validations:
+      required: true
+  - type: input
+    id: tool-version
+    attributes:
+      label: Tool version
+      description: Output of `EXEC dbo.sp_SQLFlightRecorder @Mode = N'About';`
+    validations:
+      required: true
+  - type: textarea
+    id: finding
+    attributes:
+      label: The finding (redacted)
+      description: The Severity / Summary / Evidence / MoreInfo columns, with sensitive text removed.
+    validations:
+      required: true
+  - type: textarea
+    id: why-wrong
+    attributes:
+      label: Why you believe it is a false positive
+      description: What the real situation was, and why the rule's evidence does not justify the finding.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction (synthetic if possible)
+      description: How to reproduce, ideally by seeding FR_* rows (see tests/rules/).
+    validations:
+      required: false
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I checked the rule's doc page (docs/rules/<RuleId>.md) and its documented false-positive risks.
+          required: true
+        - label: I removed any real query text / secrets from this report.
+          required: true

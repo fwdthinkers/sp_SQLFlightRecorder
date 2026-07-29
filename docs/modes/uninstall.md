@@ -1,28 +1,31 @@
 # Uninstall mode
 
-`Uninstall` removes Part 3 repository objects from the current database.
+Removes all `FR_*` objects, and the Agent job if this tool created it.
 
-## Behavior
+## Safety
 
-- Refuses uninstall if an in-progress collect run exists (`FR_RunLog` row with `Mode='Collect'` and `Status='InProgress'`).
-- `@WhatIf = 1` returns objects that would be changed and the action (`Drop` / `Rename`), with no changes applied.
-- Default (`@PreserveRunLog = 0`): drops core `FR_*` tables in dependency-safe order.
-- `@PreserveRunLog = 1` (D-183): renames `FR_RunLog` and `FR_RunLogStep` to timestamped archive names and drops the rest.
-- Part 3 intentionally does **not** drop `FR_RunLog_Archive_*` tables.
+**Reversible-by-design cleanup.** `@WhatIf=1` previews without dropping. `@PreserveRunLog=1` renames the run-log tables to timestamped archives instead of dropping them (D-183). Safe on a database where Install never ran (returns a clean empty result).
 
-## Result shape
+## Parameters
 
-One row with:
+| Parameter | Meaning |
+|---|---|
+| `@WhatIf` | `1` lists what would be dropped without dropping. |
+| `@PreserveRunLog` | `1` archives `FR_RunLog`/`FR_RunLogStep` with a timestamped rename (default 0). |
 
-- `Status` (`Uninstalled` or `PartiallyUninstalled`)
-- `DroppedCount`
-- `RenamedCount`
-- `Message`
+## Result set(s)
+
+`@WhatIf`: one row per object with the planned action. Otherwise one row: `Status, DatabaseName, Message`.
 
 ## Examples
 
 ```sql
-EXEC dbo.sp_SQLFlightRecorder @Mode = N'Uninstall';
 EXEC dbo.sp_SQLFlightRecorder @Mode = N'Uninstall', @WhatIf = 1;
+EXEC dbo.sp_SQLFlightRecorder @Mode = N'Uninstall';
 EXEC dbo.sp_SQLFlightRecorder @Mode = N'Uninstall', @PreserveRunLog = 1;
 ```
+
+## Common failure modes
+
+Refuses while a Collect is in progress. See [operations/troubleshooting.md](../operations/troubleshooting.md).
+

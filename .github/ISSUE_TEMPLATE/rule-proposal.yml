@@ -1,0 +1,63 @@
+# New-rule proposal (D-156). Blank issues disabled (see config.yml).
+name: Rule proposal
+description: Propose a new recommendation rule for the rule pack.
+labels: ["rule-proposal", "rule-pack"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        New rules are permanent (RuleId is reserved forever, D-089) and ship in a
+        minor release. A merged rule is a five-part bundle (D-160): FR_Rules
+        metadata, T-SQL logic, a docs page from docs/rules/_template.md, a
+        positive **and** a negative test, golden updates, and a §6.7 wording
+        self-review. Please confirm the constraints below before proposing.
+  - type: input
+    id: name
+    attributes:
+      label: Proposed short name
+      description: e.g. LogBackupChainBroken. Maintainers assign the FR_R#### number.
+    validations:
+      required: true
+  - type: dropdown
+    id: category
+    attributes:
+      label: Category
+      options: [Blocking, Waits, IO, Memory, Tempdb, Maintenance, HA, QueryStore, PlanCache, Configuration, Coverage]
+    validations:
+      required: true
+  - type: textarea
+    id: pattern
+    attributes:
+      label: Pattern and why it is high-signal
+      description: What incident class it catches, and why it earns a permanent slot in a deliberately small rule pack.
+    validations:
+      required: true
+  - type: textarea
+    id: data-source
+    attributes:
+      label: Data source (repository-only)
+      description: Which FR_* tables it reads. Rules read only the FR_* repository plus bounded Query Store views (D-014/D-081) — no live DMVs, no plan XML.
+    validations:
+      required: true
+  - type: input
+    id: sce
+    attributes:
+      label: Proposed Severity / Confidence / EvidenceType
+      placeholder: e.g. High / High / Observed
+    validations:
+      required: true
+  - type: textarea
+    id: fp-risks
+    attributes:
+      label: False-positive risks
+    validations:
+      required: true
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Constraints acknowledged
+      options:
+        - label: Reads only FR_* / bounded Query Store; no live DMVs, no plan XML shredding (D-014/D-081/D-015).
+          required: true
+        - label: I understand a merged rule requires the full five-part bundle (D-160) and the RuleId is permanent.
+          required: true
