@@ -5,8 +5,8 @@ recommendation, finding, and message text in `sp_SQLFlightRecorder.sql`.
 
 The §6.7 wording rules (D-076) are human-enforced and, per **D-189**, an ongoing
 maintainer responsibility rather than one-time setup. This document records the
-systematic pre-v1.0 review pass. It is **not** a substitute for the two-maintainer
-sign-off D-076/D-158 require — see "Remaining" below.
+systematic pre-v1.0 review pass. Per **D-193**, owner sign-off is sufficient for
+the v1.0.0 wording lock — see "Sign-off" below.
 
 ## What §6.7 forbids
 Recommendation wording must not say: *"kill session," "force the plan," "use
@@ -52,10 +52,24 @@ Representative conservative recommendations (unchanged):
 No column, rule ID, category, severity, or logic was touched — this pass is
 review-only.
 
-## Remaining
+## Sign-off
 D-076/D-189 make wording compliance a standing two-maintainer discipline (§6.7,
 D-158): the second reviewer on any PR touching `FR_Rules` seed data or rule logic
-must have re-read §6.7 and the safety checklist (D-176) within 30 days. This
-document records that the **current** wording is compliant; the human
-two-maintainer sign-off is the final gate and is tracked with the other pre-v1.0
-release items.
+must have re-read §6.7 and the safety checklist (D-176) within 30 days.
+
+This repository has one maintainer, so that countersignature cannot be obtained.
+**D-193** resolves it: owner sign-off is sufficient for the final v1.0.0 wording
+lock, and two-maintainer review resumes automatically — D-158 and D-189 applying
+again in full, including the 30-day rule — as soon as a second maintainer exists
+or the project moves to an organization/team model. D-193 narrows *who signs
+off*; it does not weaken what §6.7 requires of the wording.
+
+| | |
+|---|---|
+| Review recorded | 2026-07-21 (this document); re-confirmed against the unchanged artifact 2026-07-29 |
+| Artifact reviewed | `ToolVersion 1.0.0-rc.1`, SHA256 `2ae4c475…` |
+| Reviewer | *(owner sign-off — record name and date here)* |
+| Status | ⬜ **Awaiting owner sign-off** |
+
+The sign-off line above is deliberately blank. It is the owner's to complete —
+recording it on their behalf would defeat its only purpose.

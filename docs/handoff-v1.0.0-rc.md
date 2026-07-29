@@ -87,18 +87,27 @@ No public-facing `TODO` placeholders remain — `SECURITY.md` and
 `CODE_OF_CONDUCT.md` now state the current channel honestly instead. The
 underlying items are still open:
 
-1. **Conduct contact** — configure a dedicated one. `CODE_OF_CONDUCT.md`
-   currently routes reports to the owner/maintainers via available GitHub
-   channels and says no dedicated address is configured yet.
-2. Two-maintainer §6.7 wording sign-off (D-076/D-158/D-189) — the systematic
-   review is in [wording-lock-review.md](wording-lock-review.md); the human
-   sign-off remains.
-3. Release process dry-run twice (§11.6, D-173) — the `workflow_dispatch`
-   dry-run has never run.
-4. Hotfix process rehearsed (§11.6, D-174) — now possible, since `v1.0.0-rc.1`
-   exists to branch from.
-5. Optional: `tests/upgrade/artifacts/v0.4.0.sql` to validate the v0.4.0 upgrade
-   path. Not a public promise, so not a blocker.
+1. **Owner wording sign-off signature** — D-193 makes owner sign-off sufficient,
+   so the rule is settled; the line in
+   [wording-lock-review.md](wording-lock-review.md) is still blank and marked
+   *Awaiting owner sign-off*. Left blank deliberately.
+2. **Release process dry-run twice** (§11.6, D-173) — the `workflow_dispatch`
+   dry-run of `release.yml` has never run. Last unmet process gate.
+3. Optional and set aside: `tests/upgrade/artifacts/v0.4.0.sql`.
+
+Then the v1.0.0 mechanics: bump `ToolVersion` → `1.0.0`, CHANGELOG `1.0.0` entry
+dated on its ship day, re-run validation + upgrade harness (which then exercises
+the real rc.1 → 1.0.0 path), confirm `ci-tier1`, tag.
+
+**Resolved 2026-07-29:** conduct path documented as the designated v1.0.0 route
+(owner via GitHub maintainer channels; no address invented; single-maintainer
+impartiality limit stated openly). Wording sign-off rule settled by **D-193**.
+Hotfix process **rehearsed** (D-174) — branch `hotfix/rehearsal-v1.0.0-rc.1`
+from tag `v1.0.0-rc.1`, fix `94969cd`, validation green, forward-merged as
+`638df8f`; nothing tagged, published, or pushed. Cost-regression and soak are
+**not** gates (**D-194**) and have **no** evidence — neither nightly has ever
+run, because scheduled workflows fire only from the default branch and those two
+workflow files exist only on `v1.0.0-rc`.
 
 **Resolved 2026-07-29 — private security contact.** `SECURITY.md` names
 `sqlflightrecorder-security@forwardthinkersconsulting.com` as the dedicated

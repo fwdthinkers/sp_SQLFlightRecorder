@@ -19,6 +19,22 @@ Process and documentation only. No artifact change.
   vulnerability reporting is **not** enabled on this repository, and the policy
   says so rather than pointing reporters at a *Report a vulnerability* button
   that is not available to them.
+- **Conduct reporting has a designated v1.0.0 path.** `CODE_OF_CONDUCT.md`
+  routes reports to the repository owner through GitHub maintainer channels,
+  with a fallback for reporters who have no private channel, marked explicitly
+  as the v1.0.0 path rather than a placeholder. No address invented. It also
+  states that a single-maintainer project cannot independently review a report
+  about that maintainer, and points to GitHub's own abuse reporting as an
+  independent route.
+- **Owner sign-off is sufficient for the v1.0.0 wording lock** (**D-193**),
+  superseding D-158's two-reviewer rule and D-189's second-reviewer eligibility
+  for that sign-off only. Two-maintainer review resumes automatically once a
+  second maintainer exists or the project moves to an organization/team model.
+  This narrows who signs off, not what §6.7 requires of the wording.
+- **Cost-regression (D-143) and soak (D-145) are not a v1.0.0 gate**
+  (**D-194**). No green evidence exists for either and none is claimed: both
+  workflows are schedule/dispatch-only by design, and scheduled workflows run
+  only from the default branch, where neither file exists yet.
 - **Tier-2 attestation is no longer a v1.0.0 release gate** (**D-192**). The
   earlier §11.6 rule required at least 4 of 5 Tier-2 targets attested before
   final v1.0.0; final v1.0.0 may now ship with those targets **Unverified**.

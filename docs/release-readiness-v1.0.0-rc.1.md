@@ -54,20 +54,41 @@ publish path it had only been dry-run against locally.
   live, no target marked Verified without evidence.
 
 ## Tracked before final v1.0.0 (not code changes)
-1. **Conduct contact** — configure a dedicated one. `CODE_OF_CONDUCT.md` routes
-   reports to the owner/maintainers through available GitHub channels and says
-   plainly that no dedicated address is configured. No address is invented.
-2. **Two-maintainer wording sign-off** (D-076/D-158/D-189) — the systematic
-   review is recorded in `wording-lock-review.md`; the human sign-off remains.
-3. **Release process dry-run twice** (§11.6, D-173) — the `workflow_dispatch`
+1. **Owner wording sign-off not yet recorded.** D-193 makes owner sign-off
+   sufficient, so the *rule* is resolved — but the signature itself is still
+   blank. `wording-lock-review.md` now carries a sign-off block marked
+   **Awaiting owner sign-off**; it is left blank deliberately, since filling it
+   in on the owner's behalf would defeat its purpose.
+2. **Release process dry-run twice** (§11.6, D-173) — the `workflow_dispatch`
    dry-run of `release.yml` has never been run; only local build dry-runs plus
-   the one real rc.1 tag run.
-4. **Hotfix process rehearsed** (§11.6, D-174) — branch from latest tag, minimal
-   fix + regression test, Tier 1 green, forward-merge. Not yet rehearsed; now
-   possible for the first time, since `v1.0.0-rc.1` exists to branch from.
-5. **`v0.4.0` upgrade artifact** — optional; supply
+   the one real rc.1 tag run. This is the last unmet *process* gate.
+3. **`v0.4.0` upgrade artifact** — optional; supply
    `tests/upgrade/artifacts/v0.4.0.sql` to validate that path. Not a public
-   promise, so not a blocker (Group F decision).
+   promise, so not a blocker (Group F decision) — and explicitly set aside by
+   the owner.
+
+Then the mechanical v1.0.0 steps themselves: bump `ToolVersion` → `1.0.0`, add a
+CHANGELOG `1.0.0` entry dated on its ship day, re-run the validation wave and the
+upgrade harness (which at that point exercises the genuine rc.1 → 1.0.0 path),
+confirm `ci-tier1` green, then tag.
+
+**Resolved 2026-07-29 — conduct contact.** `CODE_OF_CONDUCT.md` now names a
+concrete v1.0.0 reporting path: the repository owner via GitHub maintainer
+channels, with a fallback for reporters who have no private channel, marked
+explicitly as the designated path for v1.0.0 rather than a placeholder. No
+address was invented. It also states plainly that a single-maintainer project
+cannot review a report *about* that maintainer independently, and points to
+GitHub's own abuse reporting as an independent route.
+
+**Resolved 2026-07-29 — two-maintainer wording sign-off rule (D-193).** Owner
+sign-off is sufficient for v1.0.0; two-maintainer review resumes automatically
+once a second maintainer exists or the project moves to an organization. The
+outstanding part is only the signature — item 1 above.
+
+**Resolved 2026-07-29 — hotfix rehearsal (D-174).** Performed; evidence below.
+
+**Not a gate — cost-regression and soak (D-194).** No green evidence exists for
+either, and none is claimed. Details below.
 
 **No longer a blocker — Tier-2 attestations (D-192, 2026-07-29).** The ≥ 4-of-5
 attestation gate is superseded: v1.0.0 may ship with Tier-2 targets *Unverified*.
@@ -112,10 +133,55 @@ SHA256 `2ae4c475…`. The real workflow then ran on the tag push and published t
 prerelease.
 
 ## Outcome
-Released as `v1.0.0-rc.1` (prerelease) on 2026-07-28. Remaining final-v1.0 gates:
-the **conduct** contact, the wording sign-off, and the two §11.6 process gates
-(release dry-run ×2, hotfix rehearsal). The **security** contact is resolved
-(2026-07-29). Tier-2 attestations are **no longer** a gate — see D-192 above.
+Released as `v1.0.0-rc.1` (prerelease) on 2026-07-28. **Final `v1.0.0` is not
+released and no date is claimed.**
+
+As of 2026-07-29 two things stand between here and a final tag: the **owner's
+wording sign-off signature** (the rule is resolved by D-193; the line is still
+blank) and the **`workflow_dispatch` release dry-run** (§11.6 wants two; only
+local build dry-runs plus the one real rc.1 tag run have happened). Everything
+else that was a gate is resolved or formally removed: security contact and
+conduct path documented, hotfix rehearsed (D-174), Tier-2 attestations removed
+as a gate (D-192), cost/soak removed as a gate (D-194), `v0.4.0` artifact set
+aside by the owner.
+
+## Hotfix rehearsal (D-174) — performed 2026-07-29
+Rehearsed end to end without publishing anything.
+
+| Step | Evidence |
+|---|---|
+| Branch from latest tag | `hotfix/rehearsal-v1.0.0-rc.1` created from `v1.0.0-rc.1` (`1f6d056`) |
+| Minimal fix | `94969cd` — docs-only: `tests/upgrade/README.md` "Current results" heading claimed the table described the current artifact at `ToolVersion 0.4.3`, but the tagged artifact is `1.0.0-rc.1` and the table is never refreshed automatically. Reframed as an explicit point-in-time record. |
+| Tier-1-equivalent validation | Run on the hotfix branch: doc-coverage 12/31/36 no orphans; `lint.py` + 11-fixture self-test; three generators `--check` in sync; release build byte-identical, 344,857 bytes, SHA256 `2ae4c475…` |
+| Forward-merge | `638df8f` — `git merge --no-ff` into `v1.0.0-rc`, clean, no conflicts |
+| Not done, deliberately | no tag, no publish, no push of the hotfix branch. The branch is retained locally as evidence. |
+
+**What this rehearsal does and does not prove.** It exercises the D-174
+mechanics — branch from tag, minimal change, validation, forward-merge — and
+those worked with no friction. It does **not** exercise the regression-test leg:
+D-174 calls for "minimal fix + regression test", and a docs-only fix has no
+regression test to write, so that half is still unrehearsed. It also does not
+cover the 72-hour turnaround target, which only a real incident can test.
+
+## Cost-regression (D-143) and soak (D-145) — no evidence, and why
+**Neither has ever run. No green result is claimed.**
+
+Both harnesses exist (`tests/perf/run-cost-regression.sh`, `run-soak.sh`) with
+workflows (`ci-cost.yml`, `ci-soak.yml`), and both are `schedule` +
+`workflow_dispatch` only — never on push or PR, by explicit design in their own
+headers, so they cannot gate a PR or the RC.
+
+The reason there is no nightly evidence is mechanical, and worth stating because
+it is fixable: **GitHub runs scheduled workflows only from the default branch.**
+`ci-cost.yml` and `ci-soak.yml` exist only on `v1.0.0-rc`; `origin/main` carries
+just `ci-tier1.yml`. Verified with `git ls-tree origin/main .github/workflows/`.
+So the nightly crons have never fired and cannot until the branch reaches `main`.
+
+Per **D-194** this is not a v1.0.0 gate — consistent with D-143, which already
+defers its strict >2% throughput check to "a PR check at GA once thresholds are
+calibrated", and D-145, which already reads "failures handled in release
+planning". A manual `workflow_dispatch` run of each before GA is **recommended,
+not required**; it is the only way to get evidence before the merge to `main`.
 
 ## Post-release follow-ups
 1. **Verify the published artifact's checksum.** Download the release asset and
