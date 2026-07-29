@@ -52,7 +52,13 @@ claimed until a real attestation lands.
 | Azure SQL Managed Instance | ⏳ Pending attestation |
 | Azure SQL Database | ⏳ Pending attestation (heavy degradation expected: per-DB install, no Agent/msdb/error log — D-109) |
 
-**v1.0 gate:** at least **4 of 5** Tier-2 targets attested (§11.6). The staleness
+**No v1.0 gate (D-192).** Tier-2 attestation is **not** a release gate: v1.0 ships
+with these targets *Unverified*, and that word is used literally — no attestation
+has been received, so nothing about them has been independently confirmed. They
+are **not** verified, not tested, and not equivalent to the Tier-1 results above;
+treat the two tiers as separate claims and validate in your own environment
+before relying on an unattested target. This replaces the earlier "at least 4 of
+5 attested" gate. Attestation collection continues after 1.0: the staleness
 policy (D-164) moves a target to *Unverified* after 3 minors without an
 attestation and opens a deprecation discussion after 6; the process is on an
 18-month post-1.0 review (D-190).

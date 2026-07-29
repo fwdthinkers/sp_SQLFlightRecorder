@@ -7,6 +7,31 @@ Per design decision D-175, entries tag the affected `RuleId`s and `@Mode`s so
 runbook owners can grep. Versioning follows the project-specific semver of
 D-171 (major = contract break; minor = additive; patch = fixes).
 
+## [Unreleased]
+
+Process and documentation only. No artifact change.
+
+### Changed
+
+- **Tier-2 attestation is no longer a v1.0.0 release gate** (**D-192**). The
+  earlier §11.6 rule required at least 4 of 5 Tier-2 targets attested before
+  final v1.0.0; final v1.0.0 may now ship with those targets **Unverified**.
+  What replaces the count is a wording obligation: compatibility claims must
+  keep **Tier-1 verified** (automated CI evidence) and **Tier-2 pending /
+  unverified** (no attestation received) visibly separate, and no unattested
+  target may be described as verified or tested. SQL Server 2012, 2014 and 2016
+  and the Azure targets stay *Unverified* — untested, not "works", not "broken"
+  — until a real attestation is recorded. Attestation collection continues as
+  post-1.0 work under D-164 and the D-190 18-month review.
+- The Tier-2 attestation issue template now **requires** the capability snapshot
+  and takes it as a multi-line field. The process always listed it as required
+  evidence — it is what pins which target the evidence describes — but the
+  template marked it optional, so an attestation could arrive unrecordable.
+- The upgrade harness now includes `1.0.0-rc.1` as a source version, so the
+  RC-to-final upgrade path is covered. Fixed a latent bug it exposed: database
+  names were built by stripping dots only, so a prerelease version's hyphen
+  produced an illegal identifier.
+
 ## [1.0.0-rc.1] - 2026-07-21
 
 First release candidate for v1.0.0. This is a **documentation, CI/release-process,

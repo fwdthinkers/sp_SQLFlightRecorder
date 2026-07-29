@@ -700,7 +700,7 @@ Safety review checklist is its own doc, pasted verbatim into PR reviews when nee
 
 **Goals:** no new features; hardening; documentation completeness; version-matrix breadth; operational confidence.
 
-**Included:** bug fixes from v0.4 RC; static analysis extensions; documentation completeness (every mode, rule, collector, config key, capability flag); design doc published; runbook examples; full Tier 1 matrix green; Tier 2 attestation complete for at least 4 of 5 targets; release process dry-run twice; hotfix process rehearsed; wording lock; "1.0 is forever" promises (rule IDs, output columns, forward-only schema, no breaking changes in v1.x).
+**Included:** bug fixes from v0.4 RC; static analysis extensions; documentation completeness (every mode, rule, collector, config key, capability flag); design doc published; runbook examples; full Tier 1 matrix green; Tier 2 attestation **not** a release gate — v1.0 may ship with Tier-2 targets *Unverified*, provided every compatibility claim separates Tier-1 verified from Tier-2 pending/unverified and no unattested target is described as verified (**D-192**, superseding this clause's original "at least 4 of 5 targets" requirement); release process dry-run twice; hotfix process rehearsed; wording lock; "1.0 is forever" promises (rule IDs, output columns, forward-only schema, no breaking changes in v1.x).
 
 **Excluded (binding):** absolutely no new collectors, rules, modes, parameters, capability flags, or view-layer expansion; no behavior-changing PRs.
 

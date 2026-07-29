@@ -605,7 +605,11 @@ ORDER BY o.name;
 
 Recommended:
 
-- SQL Server 2012 or newer
+- SQL Server 2012 or newer — but **check which targets are actually verified**:
+  2017/2019/2022/2025 are Tier-1 verified in automated CI, while 2012/2014/2016
+  and the Azure targets are Tier-2 **Unverified** (no attestation received —
+  untested, not "broken"). See
+  [docs/compatibility/matrix.md](docs/compatibility/matrix.md).
 - A user database for the repository
 - Permission to create/alter the stored procedure
 - Permission to create repository tables

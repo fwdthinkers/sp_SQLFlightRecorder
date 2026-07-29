@@ -86,10 +86,25 @@ snapshot.
   targets went Unverified, and whether the staleness cascade actually fired. If
   it produced no useful signal, it is replaced in a v1.x minor.
 
-## v1.0 gate
-At least **4 of the 5** Tier-2 targets must have a passing attestation before
-the v1.0.0 release (§11.6). Until then they remain Pending, and the matrix and
-release notes say so plainly.
+## v1.0 and Tier-2 status (D-192)
+Tier-2 attestation is **not** a v1.0 release gate. The earlier rule — at least
+4 of the 5 targets attested before v1.0.0 (§11.6) — is superseded by **D-192**:
+final `v1.0.0` may ship with every Tier-2 target **Unverified**.
+
+What that obliges in exchange:
+- **The two tiers are never merged into one claim.** Tier-1 results come from
+  automated CI evidence; Tier-2 targets with no attestation are *pending /
+  unverified*. Any statement about compatibility must make clear which of the
+  two it rests on.
+- **No unattested target is described as verified** — not "verified", not
+  "tested", not "supported (as tested)", not "equivalent to Tier 1". SQL Server
+  2012, 2014 and 2016 in particular must not be presented as verified until a
+  real attestation is recorded here and in the matrix.
+- *Unverified* keeps its meaning throughout: **untested**, not "works" and not
+  "broken".
+
+Attestations remain welcome and wanted — they are ordinary post-1.0 work under
+the D-164 cadence and the D-190 18-month review, not a blocked release gate.
 
 ## Not this process
 Tier-3 community reports (via Discussions) are non-binding and carry **no**

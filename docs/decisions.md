@@ -1,12 +1,12 @@
 # Decision Log — SQL Server DBA Flight Recorder
 
-Complete, append-only decision log. Every decision ID from D-001 through D-191 appears below with its source section and status.
+Complete, append-only decision log. Every decision ID from D-001 through D-192 appears below with its source section and status.
 
 **Status legend:**
 - **Locked** — Final; only changeable in a major release per project versioning (D-171, D-126).
 - **Tentative** — Decision is committed but explicitly subject to revision based on user feedback (typically a default value or threshold).
 - **Deferred** — Decision identifies an item that has been moved to a later release; the target version is named.
-- **Superseded** — Replaced by a later decision; the superseding D-### is named. (None currently.)
+- **Superseded** — Replaced by a later decision; the superseding D-### is named. (Currently: D-185, routing target only, by D-191.)
 - **At Risk** — Locked, but the design lock review (`docs/design-lock-review.md`) flagged a residual risk that depends on post-launch validation. The decision stands; the risk is tracked.
 
 ---
@@ -260,13 +260,14 @@ These three decisions were created by the design lock / compliance review (see `
 | ID | Source | Status | Decision | Rationale | Tradeoff accepted |
 |---|---|---|---|---|---|
 | D-191 | §10.6 (supersedes the routing target of D-185) | Locked | `CODEOWNERS` owners are the repository owner account `@forward-thinkers-lab`, not an `@org/team`. Confirmed 2026-07-28: this repository is owned by a **GitHub user account, not an organization**, so team syntax cannot resolve and D-185's `@core-maintainers` routing was unachievable as written. D-185's *intent* — single default owner at v1.0, topic teams only when trusted maintainers with that focus exist — is retained and reactivated verbatim if the project later moves under an organization. | An owner that cannot resolve is silently ignored by GitHub: the rules read as review protection while enforcing nothing. A valid owner that actually resolves is safer than an aspirational one. | CODEOWNERS cannot request a review from the repository owner on their own PR, so it does not by itself enforce the two-reviewer rule (D-158); that still depends on a second human reviewer. Revisit if the project moves to an org. |
+| D-192 | §11.6 (supersedes the "Tier 2 attestation complete for at least 4 of 5 targets" clause of §11.6) | Locked | Final `v1.0.0` **may ship with Tier-2 targets Unverified**. The ≥ 4-of-5 attestation count is no longer a release gate. In exchange, every compatibility claim must state its tier explicitly and keep the two separate: **Tier-1 verified** (automated CI evidence) versus **Tier-2 pending / unverified** (no attestation received). SQL Server 2012 / 2014 / 2016 and the Azure targets must never be described as verified, tested, supported-as-tested, or equivalent to Tier 1 until a real attestation is recorded in the matrix. Attestation collection continues as ordinary post-1.0 work under D-164's cadence and D-190's 18-month review; D-121, D-164 and D-190 are otherwise unchanged. | Owner decision, 2026-07-29. The three Windows targets need out-of-support SQL builds on dedicated hardware and the Azure targets need paid services; none are available. Holding v1.0 indefinitely for attestations that may never arrive serves no user. Shipping with an honest "untested" label is more truthful than either faking verification or blocking the release forever. | v1.0 ships without independent evidence on five targets. Users on 2012/2014/2016 or Azure get a documented *Unverified* status and must validate in their own environment. The compatibility matrix and release notes now carry the whole burden of not overstating — a wording slip there is the main risk this decision creates. |
 
 ---
 
 ## Summary
 
-- **Total decisions:** 191 (D-001 through D-191)
-- **Locked:** 184
+- **Total decisions:** 192 (D-001 through D-192)
+- **Locked:** 185
 - **Tentative:** 1 (D-181)
 - **Deferred items inside otherwise-locked decisions:** 2 (D-180 `@TimeZone` to v0.4; D-184 view layer to v0.2)
 - **Deferred:** 1 (D-182 to v0.2/v0.3)

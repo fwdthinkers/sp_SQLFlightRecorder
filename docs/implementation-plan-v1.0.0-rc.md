@@ -7,7 +7,9 @@
 Per design §11.6, v1.0 delivers: bug fixes from the v0.4 RC; static-analysis
 extensions; **documentation completeness** (every mode, rule, collector, config
 key, capability flag); design doc published; runnable examples; full Tier-1
-matrix green; Tier-2 attestation for **≥4 of 5** targets; release process
+matrix green; ~~Tier-2 attestation for **≥4 of 5** targets~~ (removed as a gate
+by **D-192**, 2026-07-29 — v1.0 may ship with Tier-2 targets Unverified);
+release process
 **dry-run twice**; hotfix rehearsed; **wording lock**; the "1.0 is forever"
 promises. §11.6 **binding exclusion:** no new collectors, rules, modes,
 parameters, capability flags, or view-layer expansion; **no behavior-changing
@@ -51,7 +53,7 @@ PRs.**
 | 8 issue templates + CODEOWNERS | D-156/163 | 0/8, none | C |
 | Release workflow + dry-run ×2 | D-173 | missing | D/F |
 | Cost-regression + soak | D-143/145 | missing | D |
-| Tier-2 attestation (≥4/5) | D-164/190 | undefined | E |
+| Tier-2 attestation (no v1.0 count — D-192) | D-164/190/192 | undefined | E |
 | Upgrade path 0.4.x → 1.0 | D-038 | untested | E |
 | Wording lock (26 rules) | D-076/189 | not done | F |
 | "1.0 is forever" promises | §11.8 | not written | F |
@@ -136,7 +138,8 @@ PRs.**
 - Tier-2 attestation (D-164/190): author the `version-compat` attestation
   template + process (auto-open per RC; staleness→Unverified at 3 minors;
   deprecation at 6) for 2012/2014/2016 Win + Azure MI + Azure DB. RC: process
-  live; **final: ≥4/5 attested**.
+  live; **final: no attestation count required** (D-192) — targets may remain
+  Unverified provided nothing describes them as verified.
 - **Risk:** Tier-2 depends on external attesters / real hardware (D-190 puts it
   on 18-month probation). **Code change:** none.
 
@@ -171,14 +174,19 @@ PRs.**
 6. Lint exit 0; SchemaVersion `0.4.0`; contracts + rule IDs unchanged.
 
 **Additional gates before final `v1.0.0`:**
-- Tier-2 attestation ≥4/5 (D-164, §11.6).
+- ~~Tier-2 attestation ≥4/5 (D-164, §11.6).~~ *Removed as a gate 2026-07-29 by
+  **D-192**: v1.0.0 may ship with Tier-2 targets Unverified, provided Tier-1
+  verified and Tier-2 pending/unverified are kept visibly separate and no
+  unattested target is described as verified. Attestations continue as post-1.0
+  work.*
 - Release dry-run twice + hotfix rehearsed (D-173/174).
 - Cost-regression + soak green once (D-143/145).
 - "1.0 is forever" promises published; wording locked.
 
 **Deferrable past v1.0 (per decisions):**
 - `CriticalWaitTypes` config honoring → v1.1 (D-105).
-- Full Tier-2 coverage of all 5 targets (≥4/5 suffices; D-190 18-month review).
+- Tier-2 coverage of any of the 5 targets (no count required at v1.0 per D-192;
+  D-190 18-month review still applies).
 - `FR_v_*` expansion, new collectors/rules — permanently out of v1 (§11.7).
 
 **Would block release:**

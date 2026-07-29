@@ -65,10 +65,23 @@ publish path it had only been dry-run against locally.
    plainly that no dedicated address is configured. No address is invented.
 3. **Two-maintainer wording sign-off** (D-076/D-158/D-189) — the systematic
    review is recorded in `wording-lock-review.md`; the human sign-off remains.
-4. **Tier-2 attestations** — ≥ 4 of 5 targets before final v1.0.0 (§11.6).
-5. **`v0.4.0` upgrade artifact** — optional; supply
+4. **Release process dry-run twice** (§11.6, D-173) — the `workflow_dispatch`
+   dry-run of `release.yml` has never been run; only local build dry-runs plus
+   the one real rc.1 tag run.
+5. **Hotfix process rehearsed** (§11.6, D-174) — branch from latest tag, minimal
+   fix + regression test, Tier 1 green, forward-merge. Not yet rehearsed; now
+   possible for the first time, since `v1.0.0-rc.1` exists to branch from.
+6. **`v0.4.0` upgrade artifact** — optional; supply
    `tests/upgrade/artifacts/v0.4.0.sql` to validate that path. Not a public
-   promise, so not an RC blocker (Group F decision).
+   promise, so not a blocker (Group F decision).
+
+**No longer a blocker — Tier-2 attestations (D-192, 2026-07-29).** The ≥ 4-of-5
+attestation gate is superseded: v1.0.0 may ship with Tier-2 targets *Unverified*.
+The obligation that replaces it is a wording discipline, not a count — Tier-1
+verified and Tier-2 pending/unverified must stay visibly separate, and no
+unattested target (2012/2014/2016 or Azure) may be described as verified.
+Attestations remain wanted as post-1.0 work; the five prepared issues are still
+worth opening.
 
 **Resolved 2026-07-28 — no longer a blocker:** CODEOWNERS. The owner was
 confirmed to be a GitHub **user account**, not an organization, so `@org/team`
@@ -98,8 +111,10 @@ SHA256 `2ae4c475…`. The real workflow then ran on the tag push and published t
 prerelease.
 
 ## Outcome
-Released as `v1.0.0-rc.1` (prerelease) on 2026-07-28. The two contact items, the
-wording sign-off and the Tier-2 attestations remain final-v1.0 gates.
+Released as `v1.0.0-rc.1` (prerelease) on 2026-07-28. The two contact items and
+the wording sign-off remain final-v1.0 gates, joined by the two §11.6 process
+gates (release dry-run ×2, hotfix rehearsal). Tier-2 attestations are **no
+longer** a gate — see D-192 above.
 
 ## Post-release follow-ups
 1. **Verify the published artifact's checksum.** Download the release asset and
@@ -109,9 +124,10 @@ wording sign-off and the Tier-2 attestations remain final-v1.0 gates.
 2. **Open the Tier-2 attestation issues for this RC.** D-164 specifies an
    attestation issue each RC, and `compatibility/tier2-attestation.md` describes
    it as auto-opened, but **no workflow implements it** — `release.yml` does not
-   create issues. It is a manual maintainer step today. These issues feed the
-   "≥ 4 of 5 attestations" final-v1.0 gate, so the RC cycle only prompts
-   re-attestation if someone opens them.
+   create issues. It is a manual maintainer step today. Since D-192 these no
+   longer gate v1.0, but they remain the only mechanism that prompts anyone to
+   attest, so the targets stay *Unverified* indefinitely until someone opens
+   them. Five issue bodies (one per target) are drafted and ready to paste.
 3. **CHANGELOG date.** The `1.0.0-rc.1` entry is dated `2026-07-21` (when the
    version was prepared); the actual tag and publish date was `2026-07-28`. Left
    as-is deliberately: that section was extracted verbatim into the published

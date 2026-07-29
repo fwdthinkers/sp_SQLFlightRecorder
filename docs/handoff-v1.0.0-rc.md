@@ -97,9 +97,18 @@ underlying items are still open:
 3. Two-maintainer §6.7 wording sign-off (D-076/D-158/D-189) — the systematic
    review is in [wording-lock-review.md](wording-lock-review.md); the human
    sign-off remains.
-4. ≥ 4 of 5 Tier-2 attestations (§11.6).
-5. Optional: `tests/upgrade/artifacts/v0.4.0.sql` to validate the v0.4.0 upgrade
-   path. Not a public promise, so not an RC blocker.
+4. Release process dry-run twice (§11.6, D-173) — the `workflow_dispatch`
+   dry-run has never run.
+5. Hotfix process rehearsed (§11.6, D-174) — now possible, since `v1.0.0-rc.1`
+   exists to branch from.
+6. Optional: `tests/upgrade/artifacts/v0.4.0.sql` to validate the v0.4.0 upgrade
+   path. Not a public promise, so not a blocker.
+
+**Removed as a gate 2026-07-29 — Tier-2 attestations (D-192).** v1.0.0 may ship
+with Tier-2 targets *Unverified*. What replaces the ≥ 4-of-5 count is a wording
+obligation: Tier-1 verified and Tier-2 pending/unverified stay visibly separate,
+and no unattested target — 2012/2014/2016 or Azure — is ever described as
+verified. Attestations are still wanted as post-1.0 work.
 
 **Resolved 2026-07-28 (was item 3):** CODEOWNERS. `forward-thinkers-lab` is a
 GitHub **user account**, not an organization, so `@org/team` syntax could never
@@ -139,7 +148,8 @@ Kept as the template for the next release. Steps 1–4 are **done** for
 2. **Open the Tier-2 attestation issues for this RC.** D-164 requires one per RC
    and `compatibility/tier2-attestation.md` calls it auto-opened, but **nothing
    implements that** — `release.yml` creates no issues, so it is a manual step.
-   This feeds the "≥ 4 of 5" final-v1.0 gate.
+   Since D-192 this no longer gates v1.0, but it is the only thing that prompts
+   anyone to attest — the targets stay *Unverified* until someone opens them.
 3. Collect RC feedback; fix anything it surfaces on this branch.
 4. Before **final** `v1.0.0`: resolve the tracked items above, bump `ToolVersion`
    → `1.0.0`, add a CHANGELOG `1.0.0` entry dated on the day it ships, and run
