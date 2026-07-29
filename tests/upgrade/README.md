@@ -33,7 +33,12 @@ regression can never hide behind a skip.
 Requires Docker and a git work tree (preflight fails loudly otherwise). One
 container, one database per source version.
 
-## Current results (2026-07-17, target 2022, current artifact ToolVersion 0.4.3)
+## Results — point-in-time record, not live status
+Recorded 2026-07-17 against target 2022 with the artifact at
+`ToolVersion 0.4.3`. This table is the record of **one past run**: nothing
+refreshes it automatically, and it does not necessarily describe the artifact
+currently in the working tree. Re-run the harness (above) for current results.
+
 | Source | Result |
 |---|---|
 | v0.4.0 | **UNAVAILABLE** — no `v0.4.0` tag; pending historical artifact. Drop the file at `tests/upgrade/artifacts/v0.4.0.sql` to include it. |
