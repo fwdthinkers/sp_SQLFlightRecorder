@@ -68,8 +68,8 @@ off*; it does not weaken what §6.7 requires of the wording.
 |---|---|
 | Review recorded | 2026-07-21 (this document); re-confirmed against the unchanged artifact 2026-07-29 |
 | Artifact reviewed | `ToolVersion 1.0.0-rc.1`, SHA256 `2ae4c475…` |
-| Reviewer | *(owner sign-off — record name and date here)* |
-| Status | ⬜ **Awaiting owner sign-off** |
+| Reviewer | Ysaias Portes / @forward-thinkers-lab, 2026-07-29|
+| Status | ✅ **Owner sign-off complete** |
 
 The sign-off line above is deliberately blank. It is the owner's to complete —
 recording it on their behalf would defeat its only purpose.
