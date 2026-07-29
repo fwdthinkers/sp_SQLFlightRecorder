@@ -2,12 +2,15 @@
 
 ## Our pledge
 
-We as members, contributors, and maintainers pledge to make participation in
-this project a harassment-free experience for everyone, regardless of age, body
-size, visible or invisible disability, ethnicity, sex characteristics, gender
-identity and expression, level of experience, education, socio-economic status,
-nationality, personal appearance, race, religion, or sexual identity and
-orientation.
+We pledge to make participation in this project a harassment-free experience for
+everyone, without exception.
+
+For this Code of Conduct, harassment means unwelcome conduct that a reasonable
+person would consider intimidating, threatening, abusive, hostile, or targeted in
+a way that interferes with someone's participation in the project. Good-faith
+technical disagreement, code review, project decisions, constructive feedback,
+normal moderation, or professional encouragement are not harassment when
+communicated respectfully.
 
 ## Our standards
 
@@ -47,9 +50,3 @@ through a channel outside this project — for example GitHub's own abuse and
 spam reporting, which is independent of any repository maintainer. Should the
 project gain additional maintainers or move under an organization, conduct
 handling moves to that group and this section is revised.
-
-## Attribution
-
-This Code of Conduct is adapted from the [Contributor Covenant](https://www.contributor-covenant.org),
-version 2.1. Community Impact Guidelines were inspired by Mozilla's code of
-conduct enforcement ladder.
