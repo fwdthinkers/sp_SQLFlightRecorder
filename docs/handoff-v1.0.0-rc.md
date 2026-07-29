@@ -1,23 +1,22 @@
-# Handoff — v1.0.0-rc.1
+# Handoff — v1.0.0 release record
 
-Full context for picking up the `sp_SQLFlightRecorder` v1.0.0 release candidate.
-Written 2026-07-21. This is a hub; it links the authoritative docs rather than
-duplicating them.
+The record of how `sp_SQLFlightRecorder` reached **v1.0.0**, and what was
+deliberately carried past it. Started 2026-07-21 as the RC handoff; closed out
+2026-07-29 when v1.0.0 shipped. This is a hub; it links the authoritative docs
+rather than duplicating them.
 
-## Snapshot
+## Snapshot — RELEASED
 | | |
 |---|---|
-| Branch | `v1.0.0-rc` (cut from `b9d4cd3` = the `v0.4.3` tag), tracking `origin/v1.0.0-rc` |
+| Status | ✅ **v1.0.0 released 2026-07-29** |
 | Artifact version | `ToolVersion 1.0.0` (build date 2026-07-29), `SchemaVersion 0.4.0`, `RulePackVersion 0.4.3` |
-| Working tree | clean |
-| Tags | `v1.0.0-rc.1` on `1f6d056` (annotated, 2026-07-28). **No `v1.0.0` tag.** |
-| Published | GitHub **prerelease** `v1.0.0-rc.1` only. **No `v1.0.0` release.** |
-| Merged to `main`? | **No** — tagging from the RC branch is what the plan calls for (D-173); no merge required |
-| Status | **Final `v1.0.0` prepared, not released.** One gate open: the `workflow_dispatch` release dry-run. See [release-readiness-v1.0.0-rc.1.md](release-readiness-v1.0.0-rc.1.md) |
+| Tags | `v1.0.0` on `49e10ac`; `v1.0.0-rc.1` on `1f6d056` |
+| Published | GitHub release **`v1.0.0`** (full release), plus the earlier `v1.0.0-rc.1` prerelease |
+| `main` | `v1.0.0-rc` **merged** to `main` |
+| Contract | v1.x output contract frozen from here — see [compatibility/support-policy.md](compatibility/support-policy.md) |
 
-**Standing rule:** the owner authorizes every push, merge, tag, and publish.
-`v1.0.0` is **not** tagged, **not** published, and the branch is **not** merged
-to `main`.
+**Standing rule (unchanged):** the owner authorizes every push, merge, tag, and
+publish.
 
 ## What this RC is
 A **documentation, CI/release-process, and version-metadata** stabilization on
@@ -81,26 +80,22 @@ Run on the completed RC branch:
 - **Tier 1 verified:** 2017/2019/2022/2025 Developer + 2022 Express/Standard.
 - **Tier 2 pending attestation:** 2012/2014/2016 Windows + Azure MI/DB.
 
-## Tracked before FINAL v1.0.0 (none are code changes)
-No public-facing `TODO` placeholders remain — `SECURITY.md` and
-`CODE_OF_CONDUCT.md` now state the current channel honestly instead. The
-underlying items are still open:
+## Gates before final v1.0.0 — all closed
+Every §11.6 gate was met or formally removed before the release. No public-facing
+`TODO` placeholder remains anywhere.
 
-**None remain.** Every §11.6 gate is met or formally removed. The only optional
-item still open is `tests/upgrade/artifacts/v0.4.0.sql`, which the owner has set
-aside.
+`ToolVersion` is `1.0.0` (build date 2026-07-29), the CHANGELOG carries
+`[1.0.0] - 2026-07-29`, validation and the upgrade harness were green — including
+the genuine rc.1 → 1.0.0 path — the release process was dry-run twice (D-173:
+the rc.1 tag run, and `release` #2 via `workflow_dispatch`, Success in 54s
+publishing nothing), and the final `v1.0.0` release workflow then ran and
+published successfully.
 
-The v1.0.0 mechanics are **done**: `ToolVersion` is `1.0.0` (build date
-2026-07-29), the CHANGELOG has a `[1.0.0] - 2026-07-29` entry, validation plus
-the upgrade harness are green — including the genuine rc.1 → 1.0.0 path — and
-the release process has now been dry-run twice (D-173): the real rc.1 tag run,
-and `release` #2 via `workflow_dispatch` on 2026-07-29 (Success, 54s, published
-nothing). What remains is push → `ci-tier1` green on the `1.0.0` artifact → tag
-`v1.0.0` on the owner's authorization.
+**Shipped knowingly unverified — recorded, never claimed as passing:** Tier-2
+targets are *Unverified* (D-192), and there is no cost or soak evidence (D-194).
+See "Post-1.0 follow-ups" below.
 
-Shipping knowingly unverified, both recorded and neither claimed as passing:
-Tier-2 targets are *Unverified* (D-192), and there is no cost or soak evidence
-(D-194).
+Optional and set aside by the owner: `tests/upgrade/artifacts/v0.4.0.sql`.
 
 **Resolved 2026-07-29:** conduct path documented as the designated v1.0.0 route
 (owner via GitHub maintainer channels; no address invented; single-maintainer
@@ -155,19 +150,30 @@ Kept as the template for the next release. Steps 1–4 are **done** for
      the tag must match exactly.
    - No merge to `main` is involved; the workflow triggers on `tags: v*`.
 
-## Post-RC state and next steps
-`v1.0.0-rc.1` shipped. Outstanding work, in rough order:
-1. **Verify the published asset's SHA256** against the local reproducible build
-   `2ae4c475…` (344,857 bytes).
-2. **Open the Tier-2 attestation issues for this RC.** D-164 requires one per RC
-   and `compatibility/tier2-attestation.md` calls it auto-opened, but **nothing
+## Post-1.0 follow-ups
+`v1.0.0` shipped 2026-07-29. Outstanding work, in rough order:
+
+1. **Verify the published `v1.0.0` asset's SHA256** against the local
+   reproducible build `dfb46a5428cce98291bcf30ca27a17fb0c0d5242e2d7be97ccfbc74e6a0e2989`
+   (344,863 bytes). Same check for the earlier rc.1 asset (`2ae4c475…`,
+   344,857 bytes) was never completed either.
+2. **Open the Tier-2 attestation issues.** D-164 requires one per release and
+   `compatibility/tier2-attestation.md` calls it auto-opened, but **nothing
    implements that** — `release.yml` creates no issues, so it is a manual step.
-   Since D-192 this no longer gates v1.0, but it is the only thing that prompts
-   anyone to attest — the targets stay *Unverified* until someone opens them.
-3. Collect RC feedback; fix anything it surfaces on this branch.
-4. Before **final** `v1.0.0`: resolve the tracked items above, bump `ToolVersion`
-   → `1.0.0`, add a CHANGELOG `1.0.0` entry dated on the day it ships, and run
-   the validation wave again.
+   Per D-192 this does not gate anything, but it is the only mechanism that
+   prompts anyone to attest: the targets stay *Unverified* until someone opens
+   them. Five issue bodies were drafted during release prep.
+3. **Cost and soak now have somewhere to run.** D-194 recorded that the
+   nightlies had never fired because scheduled workflows run only from the
+   default branch and `ci-cost.yml`/`ci-soak.yml` existed only on `v1.0.0-rc`.
+   That condition is now cleared — `main` carries them, so the crons can fire
+   for the first time. Worth checking the first nightly results, and running
+   each once via `workflow_dispatch` if you don't want to wait.
+4. **Tier-2 attestation automation** — deliberately not built before 1.0. If
+   added, prefer a separate workflow on `release: published` with `issues:
+   write`, idempotent via a label search, so it cannot break publishing.
+5. Collect v1.0.0 user feedback; hotfixes follow D-174 (rehearsed — see the
+   readiness report).
 
 ## Repo map
 - Artifact: `sp_SQLFlightRecorder.sql` (repo root).

@@ -1,6 +1,8 @@
 ## SQL Server DBA Flight Recorder
 
-**sp_SQLFlightRecorderr** is a lightweight, open-source, pure T-SQL stored procedure that captures safe SQL Server diagnostic snapshots and turns them into concise incident timelines, findings, and recommendations.
+**sp_SQLFlightRecorder** is a lightweight, open-source, pure T-SQL stored procedure that captures safe SQL Server diagnostic snapshots and turns them into concise incident timelines, findings, and recommendations.
+
+**Current stable release: v1.0.0** (2026-07-29) — see the [CHANGELOG](CHANGELOG.md) and [releases](https://github.com/forward-thinkers-lab/sp_SQLFlightRecorder/releases). From v1.0.0 the output contract is frozen for v1.x: rule IDs, output columns, and the forward-only schema are ["1.0 is forever" promises](docs/compatibility/support-policy.md).
 
 It is built for the question every DBA gets at 2 AM:
 

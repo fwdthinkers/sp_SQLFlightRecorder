@@ -1,30 +1,26 @@
 # Documentation index — sp_SQLFlightRecorder
 
-This is the map of the project's documentation and the coverage checklist for
-the v1.0.0 documentation-completeness gate (§11.6). Each row names where a topic
-is documented; **Status** is `present`, `sample` (a v1.0.0-rc structure sample
-establishing the final template — the rest are produced from it), or `planned`
-(authored in v1.0.0-rc Groups B/C — see `docs/implementation-plan-v1.0.0-rc.md`).
+This is the map of the project's documentation. The v1.0.0
+documentation-completeness gate (§11.6) is **met**: every mode, rule, config key
+and capability flag has a page, enforced on every push by
+`scripts/check-doc-coverage.sh` plus the rule/mode/compat-matrix generators
+running `--check`. Each row below names where a topic is documented.
 
-> **Structure samples (v1.0.0-rc):** the reusable templates are in place — a
-> rule page ([rules/FR_R0003.md](rules/FR_R0003.md) from
-> [rules/_template.md](rules/_template.md)), a mode page
-> ([modes/report.md](modes/report.md)), the failure-mode catalog
-> ([operations/troubleshooting.md](operations/troubleshooting.md)), the
-> security/threat model (now folded into [design.md](design.md) §12/§13), the
-> security/support/governance skeletons (SECURITY/SUPPORT/CONTRIBUTING/
-> CODE_OF_CONDUCT/CODEOWNERS), and two issue templates (bug, false-positive).
+> **v1.0.0 released 2026-07-29** — tagged `v1.0.0`, published, and `v1.0.0-rc`
+> merged to `main`. The templates that seeded this documentation set
+> ([rules/_template.md](rules/_template.md), [modes/report.md](modes/report.md))
+> remain the pattern for new pages.
 
 ## Start here
 - [README.md](../README.md) — what the tool is, 30-second install, headline use.
 - [docs/user-guide.md](user-guide.md) — full operational guide.
 - [docs/design.md](design.md) — consolidated design (§1–§13; §12/§13 security
   & appendices folded in for v1.0).
-- [docs/decisions.md](decisions.md) — decision log D-001…D-190.
+- [docs/decisions.md](decisions.md) — decision log D-001…D-194.
 - [CHANGELOG.md](../CHANGELOG.md) — release history (Keep a Changelog, D-175).
-- [docs/handoff-v1.0.0-rc.md](handoff-v1.0.0-rc.md) — **resume here**: full
-  current state (artifact bumped to `1.0.0`, not yet tagged or released), commit
-  inventory, release steps, and open items.
+- [docs/handoff-v1.0.0-rc.md](handoff-v1.0.0-rc.md) — the v1.0.0 release record:
+  commit inventory, the release process as executed, and the post-1.0
+  follow-ups.
 
 ## Modes (12) → `docs/modes/<mode>.md`
 All **present**. `report.md` is the hand-authored style flagship; the other 11
@@ -81,7 +77,7 @@ Windows, Azure SQL MI/DB). Tier-2 process:
 
 ## Operations
 - [operations/troubleshooting.md](operations/troubleshooting.md) — failure-mode
-  catalog (D-147). **present** (living; more entries added through RC).
+  catalog (D-147). **present** (living; entries added as failure modes surface).
 - [compatibility/support-policy.md](compatibility/support-policy.md) — "1.0 is
   forever" promises (§11.8). **present**.
 
@@ -92,11 +88,14 @@ Windows, Azure SQL MI/DB). Tier-2 process:
   Security & threat model: [design.md §12/§13](design.md#12-security-and-threat-model-q-041)
   — **present** (folded from the RC staging draft; Q-041/Q-042).
 - [docs/wording-lock-review.md](wording-lock-review.md) — §6.7 wording lock
-  (D-076/D-189) — **present** (reviewed; two-maintainer sign-off pending).
+  (D-076/D-189) — **present**; reviewed and **owner sign-off complete**
+  (2026-07-29). Per **D-193** owner sign-off is sufficient while the project has
+  one maintainer; two-maintainer review resumes automatically once a second
+  maintainer exists or the project moves to an organization.
 - [CONTRIBUTING.md](../CONTRIBUTING.md) · [SUPPORT.md](../SUPPORT.md) ·
-  [CODE_OF_CONDUCT.md](../CODE_OF_CONDUCT.md) — **present** (no dedicated
-  conduct contact yet; reports route to the owner/maintainers via available
-  GitHub channels — final-v1.0 blocker, not an RC blocker).
+  [CODE_OF_CONDUCT.md](../CODE_OF_CONDUCT.md) — **present**; the conduct
+  reporting path is configured for v1.0.0 (owner via GitHub maintainer channels,
+  with the single-maintainer impartiality limit stated openly).
 - `docs/contributing/`: [overview](contributing/overview.md) ·
   [coding-style](contributing/coding-style.md) (D-153) ·
   [safety-checklist](contributing/safety-checklist.md) (D-176) — **present**.
@@ -128,6 +127,37 @@ pages.
   — manual scenarios.
 
 ---
-*The `planned` rows are the v1.0.0 documentation-completeness worklist. A CI
-doc-coverage gate (Group D) will assert a page exists for every mode, rule, and
-config key before v1.0.0.*
+
+## Release status — v1.0.0 (2026-07-29)
+Tagged `v1.0.0`, published, and `v1.0.0-rc` merged to `main`. The §11.6 gates are
+closed:
+
+- **Documentation completeness** — every mode, rule, config key and capability
+  flag documented; `check-doc-coverage.sh` + three generators `--check` enforce
+  it on every push.
+- **Wording lock** — reviewed, **owner sign-off complete** (D-193).
+- **Security contact** — configured:
+  `sqlflightrecorder-security@forwardthinkersconsulting.com`. GitHub private
+  vulnerability reporting is *not* enabled on this repository, and
+  [SECURITY.md](../SECURITY.md) says so rather than pointing at a button that
+  is not there.
+- **Conduct path** — configured for v1.0.0 (owner via GitHub maintainer
+  channels).
+- **Release process** — dry-run twice (D-173): the `v1.0.0-rc.1` tag run and a
+  manual `workflow_dispatch` run. The final `v1.0.0` release workflow then ran
+  and published successfully.
+- **Hotfix process** — rehearsed (D-174).
+- **Upgrades** — 0.4.1 / 0.4.2 / 0.4.3 / 1.0.0-rc.1 → 1.0.0 validated,
+  migration-free (28 passed, 0 failed, 1 unavailable). `v0.4.0` has no public
+  tag and is untested — not faked, not claimed.
+
+### Known follow-ups, carried past 1.0 deliberately
+- **Tier-2 attestations** (2012/2014/2016 Windows, Azure SQL MI/DB) remain
+  **Unverified** — no attestation received, meaning *untested*, not "works" and
+  not "broken". Per **D-192** they are post-1.0 follow-up, not a release gate.
+  Compatibility claims must keep Tier-1 verified and Tier-2 unverified visibly
+  separate; no unattested target may be described as verified.
+- **Cost-regression (D-143) and soak (D-145)** have **no green evidence**, and
+  none is claimed. Per **D-194** they are non-blocking. Both workflows are
+  schedule/dispatch-only, and scheduled workflows run from the default branch —
+  now that `main` carries them, the nightlies can fire for the first time.

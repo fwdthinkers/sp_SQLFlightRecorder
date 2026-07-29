@@ -162,22 +162,24 @@ finding, or message string is touched.
 ## Outcome
 Released as `v1.0.0-rc.1` (prerelease) on 2026-07-28.
 
-**Final `v1.0.0` is prepared but NOT released.** As of 2026-07-29 the artifact
-is bumped to `ToolVersion 1.0.0` (build date 2026-07-29), the CHANGELOG carries
-a `[1.0.0] - 2026-07-29` entry, and the full validation wave plus the upgrade
-harness are green — but **no `v1.0.0` tag exists, no release is published, and
-`v1.0.0-rc` has not been merged to `main`.** No release date is claimed.
+**✅ `v1.0.0` released 2026-07-29** — tagged `v1.0.0` on `49e10ac`, published as
+a full GitHub release, and `v1.0.0-rc` merged to `main`. `ToolVersion 1.0.0`,
+build date 2026-07-29, `SchemaVersion 0.4.0`, `RulePackVersion 0.4.3`.
 
-**Every §11.6 gate is now met or formally removed:** security contact, conduct
-path, wording sign-off (rule **and** owner signature), release process dry-run
-twice (D-173), hotfix rehearsed (D-174), Tier-2 removed as a gate (D-192),
-cost/soak removed as a gate (D-194), `v0.4.0` set aside by the owner.
+**Every §11.6 gate was met or formally removed before the release:** security
+contact, conduct path, wording sign-off (rule **and** owner signature), release
+process dry-run twice (D-173), hotfix rehearsed (D-174), Tier-2 removed as a
+gate (D-192), cost/soak removed as a gate (D-194), `v0.4.0` set aside by the
+owner.
 
-What remains is not a gate but a sequence: push this commit, confirm `ci-tier1`
-green on the `1.0.0` artifact, then tag `v1.0.0` on the owner's authorization.
-Two things ship knowingly unverified — Tier-2 targets are *Unverified*, and
-there is no cost or soak evidence. Both are recorded above and in the release
-notes; neither is claimed as passing.
+Two things shipped **knowingly unverified**, recorded here and in the release
+notes and never claimed as passing: Tier-2 targets are *Unverified* (no
+attestation received — untested, not "works" and not "broken"), and there is no
+cost-regression or soak evidence. Both remain post-1.0 follow-ups; see the
+handoff.
+
+This document is now a historical record of the readiness assessment. Live
+project state lives in [handoff-v1.0.0-rc.md](handoff-v1.0.0-rc.md).
 
 ## Hotfix rehearsal (D-174) — performed 2026-07-29
 Rehearsed end to end without publishing anything.
