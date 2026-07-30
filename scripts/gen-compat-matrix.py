@@ -38,10 +38,37 @@ TIER1 = [
     ("SQL Server 2025", "Developer", "3", "Linux", "ci-tier1 + local matrix"),
 ]
 
+# Full version x platform grid (D-195/D-196). Explicit rows only — no collapsed
+# "2017+" shorthand — because a reader checking one version on one OS should find
+# that exact combination rather than infer it. "SQL Server on Azure VM" is IaaS:
+# the same engine on a VM you administer, so it inherits the matching on-prem
+# row. It is NOT Azure SQL Managed Instance, which is PaaS and attested
+# separately below.
+PLATFORMS = [
+    ("SQL Server 2017", "Linux", "Tier 1", "✅ Verified (automated)", "`ci-tier1` per-push + local six-target matrix."),
+    ("SQL Server 2017", "Windows", "—", "Supported, capability-based", "No attestation on file. Same code path as Linux — branching is on capability flags and `EngineEdition`, never on OS."),
+    ("SQL Server 2017", "Azure VM (IaaS)", "—", "Supported as the matching row above", "Inherits the Linux or Windows row for this version; not separately verified."),
+    ("SQL Server 2019", "Linux", "Tier 1", "✅ Verified (automated)", "`ci-tier1` per-push + local six-target matrix."),
+    ("SQL Server 2019", "Windows", "—", "Supported, capability-based", "No attestation on file."),
+    ("SQL Server 2019", "Azure VM (IaaS)", "—", "Supported as the matching row above", "Inherits the Linux or Windows row for this version."),
+    ("SQL Server 2022", "Linux", "Tier 1", "✅ Verified (automated)", "`ci-tier1` per-push + local six-target matrix; Developer, Express and Standard editions."),
+    ("SQL Server 2022", "Windows", "—", "Supported, capability-based", "No attestation on file."),
+    ("SQL Server 2022", "Azure VM (IaaS)", "—", "Supported as the matching row above", "Inherits the Linux or Windows row for this version."),
+    ("SQL Server 2025", "Linux", "Tier 1", "✅ Verified (automated)", "`ci-tier1` per-push + local six-target matrix."),
+    ("SQL Server 2025", "Windows", "—", "Supported, capability-based", "No attestation on file."),
+    ("SQL Server 2025", "Azure VM (IaaS)", "—", "Supported as the matching row above", "Inherits the Linux or Windows row for this version."),
+    ("SQL Server 2016", "Windows **only**", "Tier 2", "✅ Verified (manual, v1.0.0)", "See Tier 2 below. On Azure VM, treat as this row."),
+    ("SQL Server 2014", "Windows **only**", "Tier 2", "✅ Verified (manual, v1.0.0)", "See Tier 2 below. On Azure VM, treat as this row."),
+    ("SQL Server 2012", "Windows **only**", "Tier 2", "⚠️ Legacy best-effort", "Not a clean verified target — `SchemaActivity` fails, collects return `PartialSuccess` (D-195)."),
+    ("Azure SQL Managed Instance", "Azure PaaS", "Tier 2", "✅ Verified (manual, v1.0.0)", "`EngineEdition 8`. Full collector set; only `AlwaysOnState` skipped, capability-gated."),
+    ("Azure SQL Database", "Azure PaaS", "Tier 2", "✅ Verified (manual, v1.0.0)", "`EngineEdition 5`. Verified **with expected capability-gated skips** — see Tier 2 below."),
+]
+
 # Tier 2 — manual attestation (D-121/D-164); Unverified until attested.
-# Status upgrades only when real evidence exists (D-192). 2014/2016 were attested
-# manually against v1.0.0 on 2026-07-29; 2012 completed the same lifecycle but
-# with a reproducible collector failure, so it is legacy best-effort (D-195).
+# Status upgrades only when real evidence exists (D-192). 2014/2016 attested
+# against v1.0.0 on 2026-07-29 (D-195); Azure MI and Azure SQL DB attested
+# against v1.0.0 (D-196); 2012 completed the same lifecycle but with a
+# reproducible collector failure, so it is legacy best-effort (D-195).
 TIER2 = [
     ("SQL Server 2016 (Windows)", "✅ Verified — manual, v1.0.0",
      "EngineEdition 2, ProductMajorVersion 13, ProductLevel SP2. Install, Collect ×2, Report (incl. `FR_R0026`), Purge `@WhatIf`, Uninstall all Success. Query Store supported but not enabled on the tested databases; Always On not enabled; ErrorLog and BufferPool collectors left disabled by default."),
@@ -49,9 +76,10 @@ TIER2 = [
      "EngineEdition 3, ProductLevel RTM. Same lifecycle, all Success. Query Store unsupported and time-zone support unavailable, both as expected; Always On not enabled. Note: `ProductMajorVersion` came back **blank** in the capability snapshot, so keep external `ProductVersion` evidence for this target."),
     ("SQL Server 2012 (Windows)", "⚠️ Legacy best-effort — **not** a clean verified target",
      "EngineEdition 3, ProductLevel RTM. Lifecycle completes — Install, Report (incl. `FR_R0026`), Purge `@WhatIf`, Uninstall all Success — but **both Collect runs returned `PartialSuccess`**: the `SchemaActivity` collector reported `dbsDone=0; dbErrors=1; budgetHit=0`. Expect degraded schema-activity data (D-195)."),
-    ("Azure SQL Managed Instance", "⏳ Pending attestation", "No attestation received."),
-    ("Azure SQL Database", "⏳ Pending attestation",
-     "No attestation received. Heavy degradation expected: per-DB install, no Agent/msdb/error log (D-109)."),
+    ("Azure SQL Managed Instance", "✅ Verified — manual, v1.0.0",
+     "`EngineEdition 8`, `ProductMajorVersion 17`, `ProductLevel RTM`; `IsAzureManagedInstance 1`, `IsAzureSqlDb 0`. Capabilities: `HasMsdb 1`, `HasAgent 1`, `HasQueryStoreSupport 1`, `HasBufferPoolSupport 1`, `HasTimeZoneSupport 1`. Install Success (25 core `FR_*` tables + 5 `FR_v_*` views), Collect ×2 Success, Report incl. `FR_R0026`, Purge `@WhatIf` preview, Uninstall Success, `RemainingFrObjects = 0`. All core collectors succeeded; only `AlwaysOnState` skipped, capability-gated. Tested against database `SQLFR_Tier2_AzureMI`."),
+    ("Azure SQL Database", "✅ Verified — manual, v1.0.0, **with expected capability-gated skips**",
+     "`EngineEdition 5`, `ProductMajorVersion 12`, `ProductLevel RTM`; `IsAzureSqlDb 1`, `IsAzureManagedInstance 0`. Capabilities: `HasMsdb 0`, `HasAgent 0`, `HasQueryStoreSupport 1`, `HasBufferPoolSupport 0`, `HasTimeZoneSupport 1`. Preflight: `HasViewServerState` **NULL**, `HasViewDatabaseState 1`, `IsDbOwner 1`. Install Success (25 core `FR_*` tables + 5 `FR_v_*` views), Collect ×2 Success, Report incl. `FR_R0026` carrying the skip reasons, Purge `@WhatIf` preview, Uninstall Success, `RemainingFrObjects = 0`. **Expected skips, all normal on this platform:** `AgentJobs` (no msdb/Agent), `BackupHistory` (no msdb), `Deadlocks` (no `system_health` ring buffer on Azure SQL DB), `AlwaysOnState` (not enabled). Tested against database `sqlfr`."),
 ]
 
 
@@ -69,18 +97,29 @@ Primary supported range: **SQL Server 2014 through 2025**, on-prem and cloud, wi
 capability-driven degradation (D-108 as amended by **D-195**). Synapse, Fabric,
 Big Data Clusters, and Stretch are out of scope.
 
-**Platform support at a glance**
-
-| Range | Platforms | Status |
-|---|---|---|
-| SQL Server 2017–2025 | Linux **and** Windows | Linux verified in automated Tier-1 CI. Windows is supported by the same capability-based behavior — the tool branches on capability flags and `EngineEdition`, never on OS — and is manually attested where evidence exists. |
-| SQL Server 2014 and 2016 | **Windows only** | Manual Tier-2 targets, both **verified against v1.0.0** (see Tier 2 below). |
-| SQL Server 2012 | **Windows only** | **Legacy best-effort.** The v1.0.0 lifecycle completed, but with a known `SchemaActivity` collector failure and `PartialSuccess` collects. Not a normally supported target (**D-195**). |
-
 > The released `v1.0.0` artifact reports `SupportedSqlServerRange` as
 > "SQL Server 2012–2025". That is not wrong — 2012 still runs, best-effort — but
 > it predates this policy and is coarser than it. The artifact is immutable; this
 > page carries the qualification.
+
+## Version × platform grid
+Every supported combination has its own row — no "2017+" shorthand — so checking
+one version on one platform never requires inferring from a range.
+
+{table(["Version", "Platform", "Tier", "Status", "Evidence and caveats"], PLATFORMS)}
+
+**Hosting models are not interchangeable.** *SQL Server on Azure VM* is **IaaS**:
+the ordinary engine on a VM you administer, so it behaves as the matching on-prem
+row for its version and OS and is not verified separately. *Azure SQL Managed
+Instance* and *Azure SQL Database* are **PaaS**, are different products with
+different capability surfaces, and are attested individually below.
+
+**No equivalence is claimed between Azure SQL Database and Managed Instance.**
+They were attested separately and their evidence differs materially — MI reports
+`HasMsdb 1` / `HasAgent 1` and runs the full collector set, while Azure SQL DB
+reports `HasMsdb 0` / `HasAgent 0` and skips four collectors by design. Neither
+result may be read across to the other, and neither may be read across to
+on-prem.
 
 > **Verification tiers.** **Tier 1** = automated CI on Linux containers, blocking
 > (D-120). **Tier 2** = manual attestation for targets that cannot be
@@ -116,22 +155,22 @@ untested.
 
 {table(["Target", "Status", "Evidence and caveats"], TIER2)}
 
-**Tier 2 verified is not Tier 1 verified.** The 2014 and 2016 rows rest on a
-single manual lifecycle run each, recorded above — one run on one machine, not a
-per-push automated gate. They are believed good and the evidence is real, but
-they are re-checked only when someone runs them again (D-164 staleness applies).
-Treat the two tiers as separate claims.
-
-**Azure remains unattested.** No Azure equivalence is claimed for Managed
-Instance or SQL Database until a real attestation lands.
+**Tier-2 "Verified" is not Tier-1 verified — the difference matters.** Every
+Tier-2 row rests on a **single manual lifecycle run**, recorded above: one run,
+one machine, one point in time, performed by a human. Tier 1 is an automated gate
+that re-runs on every push and blocks the build when it fails. A Tier-2 target
+can regress silently and nothing will notice until someone runs it again
+(D-164 staleness applies). The evidence is real and the targets are believed
+good; they are not continuously guarded.
 
 **No release gate (D-192).** Tier-2 attestation does not gate a release. `v1.0.0`
-shipped with every Tier-2 target *Unverified*; 2014 and 2016 were attested
-shortly afterwards and upgraded here on evidence, which is exactly the path D-192
-requires — status improves only when someone produces a run. Attestation
-collection continues: the staleness policy (D-164) moves a target back to
-*Unverified* after 3 minors without a fresh attestation and opens a deprecation
-discussion after 6; the process is on an 18-month post-1.0 review (D-190).
+shipped with every Tier-2 target *Unverified*; 2014, 2016 (D-195) and then Azure
+MI and Azure SQL DB (D-196) were attested afterwards and upgraded here on
+evidence — exactly the path D-192 requires, where status improves only when
+someone produces a run. Attestation collection continues: the staleness policy
+(D-164) moves a target back to *Unverified* after 3 minors without a fresh
+attestation and opens a deprecation discussion after 6; the process is on an
+18-month post-1.0 review (D-190).
 
 ## How to contribute an attestation
 Open a **Version compatibility / Tier-2 attestation** issue with your Install →

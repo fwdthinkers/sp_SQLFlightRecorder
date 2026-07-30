@@ -72,12 +72,19 @@ Closed key set (D-127), incl. `PlanAnalysisSupport = 0`.
 ## Compatibility → [compatibility/matrix.md](compatibility/matrix.md) (D-165) — **present**
 Six Tier-1 verified targets (2017/2019/2022/2025 Developer + 2022
 Express/Standard, with EngineEdition). Primary supported range **2014–2025**
-(D-195): Tier-2 **verified** on manual v1.0.0 evidence for 2014/2016 Windows,
-**pending** for Azure SQL MI/DB, and 2012 Windows is **legacy best-effort** with
-a known `SchemaActivity` limitation. Tier-2 process:
+(D-195), with an explicit row per version and platform — no "2017+" shorthand.
+Tier-2 **verified** on manual v1.0.0 evidence for 2014/2016 Windows and, since
+**D-196**, **Azure SQL Managed Instance and Azure SQL Database** (the latter with
+four expected capability-gated skips); 2012 Windows is **legacy best-effort**
+with a known `SchemaActivity` limitation. SQL Server on Azure VM is IaaS and
+follows its matching on-prem row. Tier-2 process:
 [compatibility/tier2-attestation.md](compatibility/tier2-attestation.md) — **present**.
 
 ## Operations
+- [operations/scheduling.md](operations/scheduling.md) — **scheduling guidance by
+  platform**: cron + `sqlcmd` on Linux, SQL Agent on Azure SQL Managed Instance,
+  Elastic Jobs / external schedulers on Azure SQL Database, plus the
+  all-platform defaults. **present**.
 - [operations/troubleshooting.md](operations/troubleshooting.md) — failure-mode
   catalog (D-147). **present** (living; entries added as failure modes surface).
 - [compatibility/support-policy.md](compatibility/support-policy.md) — "1.0 is
@@ -154,14 +161,14 @@ closed:
   tag and is untested — not faked, not claimed.
 
 ### Known follow-ups, carried past 1.0 deliberately
-- **Tier-2 attestations** — partially discharged since release (**D-195**):
-  **2014 and 2016 Windows are now Verified** on manual `v1.0.0` evidence, and
-  **2012 Windows is legacy best-effort** (lifecycle completes, `SchemaActivity`
-  fails, collects return `PartialSuccess`). **Azure SQL MI/DB remain
-  Unverified** — no attestation received, meaning *untested*, not "works" and
-  not "broken". Per **D-192** none of this gates a release, and status improves
-  only on real evidence; Tier-1 verified and Tier-2 claims stay visibly
-  separate.
+- **Tier-2 attestations — now fully discharged** (**D-195**, **D-196**): 2014
+  and 2016 Windows, **Azure SQL Managed Instance** and **Azure SQL Database** are
+  all **Verified** on manual `v1.0.0` evidence, and **2012 Windows is legacy
+  best-effort** (lifecycle completes, `SchemaActivity` fails, collects return
+  `PartialSuccess`). Per **D-192** none of this gates a release and status
+  improved only on real evidence. Tier-2 "verified" still means one manual run,
+  not the Tier-1 per-push gate — the two claims stay visibly separate, and no
+  equivalence is claimed between Azure SQL DB and MI.
 - **Cost-regression (D-143) and soak (D-145)** have **no green evidence**, and
   none is claimed. Per **D-194** they are non-blocking. Both workflows are
   schedule/dispatch-only, and scheduled workflows run from the default branch —

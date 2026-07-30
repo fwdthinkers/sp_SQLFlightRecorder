@@ -11,7 +11,34 @@ D-171 (major = contract break; minor = additive; patch = fixes).
 
 Documentation only. The released `1.0.0` artifact is unchanged.
 
+### Added
+
+- **Scheduling guidance by platform** — `docs/operations/scheduling.md`. Which
+  scheduler to use is a capability question, not a preference: cron + `sqlcmd` on
+  Linux; a SQL Agent job step on Azure SQL Managed Instance (`HasAgent = 1`);
+  Azure Elastic Jobs or an external scheduler on Azure SQL Database, which has
+  neither Agent nor msdb. Includes copy-paste snippets and the all-platform
+  defaults (leave `CollectErrorLog` and `EnableBufferPoolCollector` off unless
+  needed, periodic `Report`, occasional `Purge @WhatIf = 1`, UTC, and a
+  documented uninstall path).
+
 ### Changed
+
+- **Azure SQL Managed Instance and Azure SQL Database are certified as
+  supported** (**D-196**), both **Verified** by manual Tier-2 attestation against
+  `v1.0.0`. MI ran the full collector set with only `AlwaysOnState` skipped;
+  Azure SQL Database returned `Success` with four collectors skipped by design —
+  `AgentJobs`, `BackupHistory`, `Deadlocks`, `AlwaysOnState` — each reason
+  carried in the `FR_R0026` coverage finding. Both installed 25 core `FR_*`
+  tables plus 5 `FR_v_*` views and uninstalled leaving `RemainingFrObjects = 0`.
+  **No equivalence is claimed** between the two, or between either and on-prem.
+- **The compatibility matrix now lists every version and platform explicitly** —
+  no collapsed "2017+" row — including separate rows for **SQL Server on Azure VM
+  (IaaS)**, which is the ordinary engine on a VM you administer and inherits its
+  matching on-prem row, as distinct from the Azure PaaS products.
+- The matrix states plainly that **Tier-2 "Verified" is not Tier-1 verified**: it
+  is one manual run at one point in time, where Tier 1 is an automated per-push
+  gate that blocks the build on failure.
 
 - **Primary supported range is now SQL Server 2014–2025** (**D-195**, amending
   D-108's range framing). SQL Server **2012 is demoted to legacy best-effort**:

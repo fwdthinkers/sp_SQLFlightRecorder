@@ -497,6 +497,8 @@ WHERE name LIKE N'%sp_SQLFlightRecorder%';
 
 If SQL Agent is unavailable, schedule collection externally with `sqlcmd`, a DBA automation tool, Windows Task Scheduler, cron, or your preferred job runner.
 
+> **Platform-specific recipes** — cron + `sqlcmd` on Linux, a SQL Agent job step on Azure SQL Managed Instance, and Elastic Jobs or an external scheduler on Azure SQL Database (which has no SQL Agent and no msdb): see **[docs/operations/scheduling.md](docs/operations/scheduling.md)**.
+
 Example:
 
 ```bash
@@ -609,10 +611,18 @@ ORDER BY o.name;
 
 | Version | Platform | Support status |
 |---|---|---|
-| **2017–2025** | Linux **and** Windows | Supported core. Linux verified per-push in automated Tier-1 CI; Windows runs the same capability-based code path and is manually attested where evidence exists. |
-| **2014, 2016** | **Windows only** | Manual Tier-2 support targets, both **verified against v1.0.0**. |
+| **2017, 2019, 2022, 2025** | Linux | Supported core — **verified** per-push in automated Tier-1 CI. |
+| **2017, 2019, 2022, 2025** | Windows | Supported. Same capability-based code path as Linux (the tool branches on capability flags and `EngineEdition`, never on OS); no manual attestation on file yet. |
+| **2017, 2019, 2022, 2025** | SQL Server on Azure VM (IaaS) | Supported as the matching Linux or Windows row — it is the ordinary engine on a VM you administer, not a separate product. |
+| **2016** | **Windows only** | Manual Tier-2 target — **verified against v1.0.0**. |
+| **2014** | **Windows only** | Manual Tier-2 target — **verified against v1.0.0**. |
 | **2012** | **Windows only** | **Legacy best-effort.** The v1.0.0 lifecycle was manually tested and completed, but with a known `SchemaActivity` collector degradation — collect runs return `PartialSuccess` and schema-activity data is incomplete. |
-| Azure SQL MI / Azure SQL DB | — | Tier-2, **pending attestation**. No equivalence claimed. |
+| **Azure SQL Managed Instance** | Azure PaaS | **Verified** by manual Tier-2 attestation against v1.0.0. Full collector set; only `AlwaysOnState` skipped, capability-gated. SQL Agent available. |
+| **Azure SQL Database** | Azure PaaS | **Verified** by manual Tier-2 attestation against v1.0.0, **with four expected capability-gated skips** (`AgentJobs`, `BackupHistory`, `Deadlocks`, `AlwaysOnState`). No SQL Agent, no msdb. |
+
+Tier-2 "verified" means one manual lifecycle run, not the per-push automated
+gate that covers the Tier-1 Linux rows. **No equivalence is claimed** between
+Azure SQL Database and Managed Instance, or between either and on-prem.
 
 Full detail, including per-target evidence and caveats:
 [docs/compatibility/matrix.md](docs/compatibility/matrix.md) and

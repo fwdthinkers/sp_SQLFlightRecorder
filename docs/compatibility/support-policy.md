@@ -36,6 +36,21 @@ least one minor of deprecation warnings.
 | **2017–2025** | Linux **and** Windows | The supported core. Linux is verified per-push in automated Tier-1 CI. Windows runs the same capability-based code path — the tool branches on capability flags and `EngineEdition`, never on operating system — and is manually attested where evidence exists. |
 | **2014 and 2016** | **Windows only** | Manual Tier-2 targets, both **verified against v1.0.0**. Supported, but on the strength of a single manual lifecycle run each, not continuous CI. |
 | **2012** | **Windows only** | **Legacy best-effort — not a normally supported target.** It runs and the v1.0.0 lifecycle completed, but with a known `SchemaActivity` collector failure and `PartialSuccess` collect runs. Use it knowing schema-activity data will be incomplete. |
+| **Azure SQL Managed Instance** | Azure PaaS | **Supported — verified** by manual Tier-2 attestation against v1.0.0 (D-196). Full collector set; only `AlwaysOnState` skipped, capability-gated. SQL Agent available. |
+| **Azure SQL Database** | Azure PaaS | **Supported — verified** by manual Tier-2 attestation against v1.0.0 (D-196), **with four expected capability-gated skips**: `AgentJobs`, `BackupHistory`, `Deadlocks`, `AlwaysOnState`. No SQL Agent and no msdb. |
+
+**SQL Server on Azure VM is IaaS**, not a separate product: it is the ordinary
+engine on a VM you administer, so it follows the row for its version and OS
+above. It is not Azure SQL Managed Instance, which is PaaS and attested in its
+own right.
+
+**No equivalence is claimed between Azure SQL Database and Managed Instance**, or
+between either and on-prem. They were attested separately, and their capability
+surfaces differ materially — MI reports `HasMsdb 1` / `HasAgent 1`, Azure SQL DB
+reports `0` for both. Evidence for one says nothing about the other.
+
+Scheduling differs by platform because SQL Agent availability differs — see
+[../operations/scheduling.md](../operations/scheduling.md).
 
 Older than 2012 is out of scope entirely, as are Synapse, Fabric, Big Data
 Clusters, and Stretch (D-108).
@@ -50,22 +65,23 @@ Clusters, and Stretch (D-108).
   [compatibility matrix](matrix.md): SQL Server 2017/2019/2022/2025 Developer and
   2022 Express/Standard, on Linux containers. Exercised on every push.
 - **Tier 2 — manual attestation, best-effort (D-121/D-164).** SQL Server
-  2014/2016 (Windows) are **Verified** on manual v1.0.0 evidence; SQL Server 2012
-  (Windows) is **legacy best-effort** with a known limitation; Azure SQL Managed
-  Instance and Azure SQL Database remain **Unverified until a real attestation
-  lands** (see [tier2-attestation.md](tier2-attestation.md)). Tier 2 is a
-  best-effort signal, **not a guarantee of support**, and its status can go stale
-  (D-164).
+  2014/2016 (Windows), Azure SQL Managed Instance and Azure SQL Database are all
+  **Verified** on manual v1.0.0 evidence; SQL Server 2012 (Windows) is **legacy
+  best-effort** with a known limitation (see
+  [tier2-attestation.md](tier2-attestation.md)). Tier 2 is a best-effort signal,
+  **not a guarantee of support**, and its status can go stale (D-164).
 - **Tier 3 — community reports (D-166).** Non-binding; no formal status.
 
-**No Azure equivalence is claimed.** Azure SQL DB/MI are Tier-2 pending; expect
-degraded behavior on Azure SQL DB (per-DB install, no Agent/msdb/error log,
-D-109) until an attestation says otherwise.
+**Tier-2 "Verified" is weaker than Tier-1 verified.** Every Tier-2 status rests
+on a single manual lifecycle run at one point in time. Tier 1 is an automated
+gate that re-runs on every push and blocks the build on failure. A Tier-2 target
+can regress silently until someone runs it again.
 
 ## Experimental / pending
-- Azure SQL Managed Instance and Azure SQL Database, until attested.
 - SQL Server 2012 — permanently best-effort unless an attestation clears the
   `SchemaActivity` failure.
+- SQL Server 2017–2025 on **Windows** — supported and expected to behave as the
+  Linux rows do (identical code path), but no manual attestation is on file yet.
 - `CriticalWaitTypes` config honoring is deferred to **v1.1** (D-105); FR_R0003
   uses the hard-coded critical-wait list until then.
 - Plan-level analysis is **not** experimental-pending — it is permanently out of

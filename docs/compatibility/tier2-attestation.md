@@ -4,16 +4,32 @@ Tier 2 covers the supported targets that **cannot be containerized in free CI**,
 so they are verified by human **attestation** instead of automation (D-121,
 D-164).
 
-**Clean Tier-2 targets** — Windows-only, and both verified against `v1.0.0`
-(2026-07-29):
+**Clean Tier-2 targets** — all verified against `v1.0.0` by manual attestation:
 
 - SQL Server 2016 (Windows) — ✅ Verified
 - SQL Server 2014 (Windows) — ✅ Verified
+- Azure SQL Managed Instance — ✅ Verified (D-196). `EngineEdition 8`,
+  `ProductMajorVersion 17`, RTM; `HasMsdb 1`, `HasAgent 1`,
+  `HasQueryStoreSupport 1`, `HasBufferPoolSupport 1`, `HasTimeZoneSupport 1`.
+  Every core collector succeeded; only `AlwaysOnState` skipped, capability-gated.
+- Azure SQL Database — ✅ Verified (D-196) **with expected capability-gated
+  skips**. `EngineEdition 5`, `ProductMajorVersion 12`, RTM; `HasMsdb 0`,
+  `HasAgent 0`, `HasQueryStoreSupport 1`, `HasBufferPoolSupport 0`,
+  `HasTimeZoneSupport 1`; preflight `HasViewServerState` **NULL**,
+  `HasViewDatabaseState 1`, `IsDbOwner 1`. `Collect` returned `Success` with
+  `AgentJobs`, `BackupHistory`, `Deadlocks` and `AlwaysOnState` skipped by
+  design, each reason carried in `FR_R0026`.
 
-**Pending attestation:**
+Both Azure targets installed 25 core `FR_*` tables plus 5 `FR_v_*` views,
+previewed `Purge @WhatIf = 1`, uninstalled cleanly, and left
+`RemainingFrObjects = 0`. Full evidence is recorded per target in
+[matrix.md](matrix.md).
 
-- Azure SQL Managed Instance
-- Azure SQL Database
+**No equivalence between them.** Azure SQL Database and Managed Instance are
+separate products with materially different capability surfaces; each was
+attested on its own and neither result may be read across to the other, or to
+on-prem. *SQL Server on Azure VM* is IaaS and is not covered here at all — it
+follows its matching on-prem version/platform row.
 
 **Not a clean Tier-2 target — SQL Server 2012 (Windows), legacy best-effort
 (D-195).** 2012 was manually exercised on `v1.0.0` and the lifecycle completed:

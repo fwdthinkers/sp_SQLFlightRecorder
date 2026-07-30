@@ -476,7 +476,7 @@ Restart detection splits the window at the boundary; a Critical informational fi
 ### 8.6 Test matrix
 
 - **Tier 1** (automated CI, blocking): SQL Server 2017, 2019, 2022, 2025 Linux containers, latest CU (**D-120**).
-- **Tier 2** (manual attestation, not merge-blocking): SQL Server 2014 and 2016 Windows — both **Verified** on manual `v1.0.0` evidence; Azure SQL MI and Azure SQL DB — **pending**; SQL Server 2012 Windows — **legacy best-effort**, lifecycle completes but `SchemaActivity` fails and collects return `PartialSuccess` (**D-121**, **D-195**).
+- **Tier 2** (manual attestation, not merge-blocking): SQL Server 2014 and 2016 Windows, **Azure SQL Managed Instance** and **Azure SQL Database** — all **Verified** on manual `v1.0.0` evidence, the last of these with four expected capability-gated skips (`AgentJobs`, `BackupHistory`, `Deadlocks`, `AlwaysOnState`); SQL Server 2012 Windows — **legacy best-effort**, lifecycle completes but `SchemaActivity` fails and collects return `PartialSuccess` (**D-121**, **D-195**, **D-196**). No equivalence is claimed between Azure SQL DB and MI. SQL Server on Azure VM is IaaS and follows its matching on-prem version/platform row, not these PaaS entries.
 - Golden output tests per version; any byte diff fails CI (**D-122**).
 - Capability-flag unit tests with simulated `CapabilitySnapshot` values (**D-123**).
 - New major engine releases evaluated within 90 days of GA; capability probes and rules added in a minor release (**D-124**).
