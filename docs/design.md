@@ -76,7 +76,7 @@
 - **Boring, transparent, easy to test.** Deterministic behavior; auditable evidence.
 - **Honest.** Severity / Confidence / EvidenceType on every finding; no overclaiming; coverage gaps are findings, not silence.
 - **Safe on production.** Bounded reads; no plan shredding; no user-table scans; cooperative timeout.
-- **Compatible.** SQL Server 2012 through 2025, on-prem and cloud; capability-driven branching.
+- **Compatible.** Primary range SQL Server 2014 through 2025, on-prem and cloud; capability-driven branching. 2017+ on Linux and Windows; 2014/2016 Windows-only; 2012 legacy best-effort with a known `SchemaActivity` limitation (**D-195**).
 - **Open source first.** GitHub-native; DBA-friendly contribution model.
 
 ---
@@ -446,7 +446,7 @@ Restart detection splits the window at the boundary; a Critical informational fi
 
 ### 8.1 Matrix
 
-- Supported engine range: SQL Server 2012 through 2025 (**D-108**).
+- Supported engine range: primary **SQL Server 2014 through 2025**; 2012 is legacy best-effort only (**D-108** as amended by **D-195**). Platform split: 2017+ Linux and Windows; 2014/2016 Windows-only; 2012 Windows-only, best-effort. The released `v1.0.0` artifact still reports `SupportedSqlServerRange = 'SQL Server 2012–2025'` — coarser than this policy, not false, and immutable.
 - Synapse, Fabric, Big Data Clusters, Stretch Database — explicitly out of scope.
 - Azure SQL Database supported with heavy degradation; per-database install, no Agent/msdb/error log (**D-109**).
 
@@ -476,7 +476,7 @@ Restart detection splits the window at the boundary; a Critical informational fi
 ### 8.6 Test matrix
 
 - **Tier 1** (automated CI, blocking): SQL Server 2017, 2019, 2022, 2025 Linux containers, latest CU (**D-120**).
-- **Tier 2** (manual attestation, not merge-blocking): SQL Server 2012, 2014, 2016 Windows; Azure SQL MI; Azure SQL DB (**D-121**).
+- **Tier 2** (manual attestation, not merge-blocking): SQL Server 2014 and 2016 Windows — both **Verified** on manual `v1.0.0` evidence; Azure SQL MI and Azure SQL DB — **pending**; SQL Server 2012 Windows — **legacy best-effort**, lifecycle completes but `SchemaActivity` fails and collects return `PartialSuccess` (**D-121**, **D-195**).
 - Golden output tests per version; any byte diff fails CI (**D-122**).
 - Capability-flag unit tests with simulated `CapabilitySnapshot` values (**D-123**).
 - New major engine releases evaluated within 90 days of GA; capability probes and rules added in a minor release (**D-124**).

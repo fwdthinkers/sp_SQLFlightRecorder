@@ -2,19 +2,36 @@
 
 Tier 2 covers the supported targets that **cannot be containerized in free CI**,
 so they are verified by human **attestation** instead of automation (D-121,
-D-164):
+D-164).
 
-- SQL Server 2012 (Windows)
-- SQL Server 2014 (Windows)
-- SQL Server 2016 (Windows)
+**Clean Tier-2 targets** — Windows-only, and both verified against `v1.0.0`
+(2026-07-29):
+
+- SQL Server 2016 (Windows) — ✅ Verified
+- SQL Server 2014 (Windows) — ✅ Verified
+
+**Pending attestation:**
+
 - Azure SQL Managed Instance
 - Azure SQL Database
+
+**Not a clean Tier-2 target — SQL Server 2012 (Windows), legacy best-effort
+(D-195).** 2012 was manually exercised on `v1.0.0` and the lifecycle completed:
+Install, Report (including `FR_R0026`), Purge `@WhatIf = 1`, and Uninstall all
+succeeded. But **both `Collect` runs returned `PartialSuccess`** — the
+`SchemaActivity` collector reported `dbsDone=0; dbErrors=1; budgetHit=0`. A
+reproducible collector failure disqualifies a target from Verified, so 2012 is
+tracked separately as legacy best-effort: expected to run, expected to degrade,
+and **never to be described as verified**. A future attestation that clears the
+`SchemaActivity` failure could promote it; a passing lifecycle *with* that
+failure cannot.
 
 An attestation is a report that the tool completed its lifecycle on one of these
 targets, with enough evidence to trust it. **No Tier-2 target is marked Verified
 without a real attestation** — the default is Pending, which is a statement of
-"untested," not "works" and not "broken." See the current state in
-[matrix.md](matrix.md).
+"untested," not "works" and not "broken." A lifecycle that completes *with* a
+collector failure does not earn Verified either; see SQL Server 2012 below. The
+current state, with per-target evidence and caveats, is in [matrix.md](matrix.md).
 
 ## The vehicle
 File a **Version compatibility / Tier-2 attestation** issue

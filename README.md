@@ -605,13 +605,21 @@ ORDER BY o.name;
 
 ## Requirements
 
-Recommended:
+**Primary supported range: SQL Server 2014–2025.**
 
-- SQL Server 2012 or newer — but **check which targets are actually verified**:
-  2017/2019/2022/2025 are Tier-1 verified in automated CI, while 2012/2014/2016
-  and the Azure targets are Tier-2 **Unverified** (no attestation received —
-  untested, not "broken"). See
-  [docs/compatibility/matrix.md](docs/compatibility/matrix.md).
+| Version | Platform | Support status |
+|---|---|---|
+| **2017–2025** | Linux **and** Windows | Supported core. Linux verified per-push in automated Tier-1 CI; Windows runs the same capability-based code path and is manually attested where evidence exists. |
+| **2014, 2016** | **Windows only** | Manual Tier-2 support targets, both **verified against v1.0.0**. |
+| **2012** | **Windows only** | **Legacy best-effort.** The v1.0.0 lifecycle was manually tested and completed, but with a known `SchemaActivity` collector degradation — collect runs return `PartialSuccess` and schema-activity data is incomplete. |
+| Azure SQL MI / Azure SQL DB | — | Tier-2, **pending attestation**. No equivalence claimed. |
+
+Full detail, including per-target evidence and caveats:
+[docs/compatibility/matrix.md](docs/compatibility/matrix.md) and
+[docs/compatibility/support-policy.md](docs/compatibility/support-policy.md).
+
+Also required:
+
 - A user database for the repository
 - Permission to create/alter the stored procedure
 - Permission to create repository tables

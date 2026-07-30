@@ -7,6 +7,28 @@ Per design decision D-175, entries tag the affected `RuleId`s and `@Mode`s so
 runbook owners can grep. Versioning follows the project-specific semver of
 D-171 (major = contract break; minor = additive; patch = fixes).
 
+## [Unreleased]
+
+Documentation only. The released `1.0.0` artifact is unchanged.
+
+### Changed
+
+- **Primary supported range is now SQL Server 2014–2025** (**D-195**, amending
+  D-108's range framing). SQL Server **2012 is demoted to legacy best-effort**:
+  the `v1.0.0` lifecycle was manually tested on 2012 Windows and completed, but
+  with a known `SchemaActivity` collector degradation — both `Collect` runs
+  returned `PartialSuccess` (`dbsDone=0; dbErrors=1; budgetHit=0`). Platform
+  split now stated wherever compatibility is claimed: **2017+ on Linux and
+  Windows**, **2014/2016 Windows-only**, **2012 Windows-only best-effort**.
+- **SQL Server 2014 and 2016 (Windows) are now Tier-2 Verified** on manual
+  `v1.0.0` attestations — full lifecycle Success, evidence and caveats recorded
+  in the compatibility matrix. This is the first upgrade of a Tier-2 status on
+  real evidence, which is the only path D-192 permits.
+- Note for anyone comparing docs with the tool: the released `1.0.0` artifact
+  reports `SupportedSqlServerRange = 'SQL Server 2012–2025'`. That is not false
+  — 2012 remains supported best-effort — but it is coarser than this policy, and
+  the artifact is immutable.
+
 ## [1.0.0] - 2026-07-29
 
 **First stable release.** The v1.x contract starts here: rule IDs, output
