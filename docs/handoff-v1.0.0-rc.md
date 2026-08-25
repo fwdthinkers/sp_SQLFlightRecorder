@@ -58,7 +58,7 @@ them touch the artifact.
 - **Output contracts frozen** for v1.x: Findings 16-col (D-067), Timeline 12-col
   (D-071), Markdown 14-key header (D-085). See [compatibility/support-policy.md](compatibility/support-policy.md).
 - Repo conventions: single-file artifact at repo root (D-110/D-152); LF endings
-  via `.gitattributes`; `.gitignore` covers `dist/` + Python caches; `.claude/`
+  via `.gitattributes`; `.gitignore` covers `dist/` + Python caches; 
   excluded via `.git/info/exclude` (local, never committed).
 
 ## Validation status (all green, 2026-07-21; local wave re-run green 2026-07-28 on `1f6d056` immediately before tagging)
