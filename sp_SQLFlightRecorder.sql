@@ -1329,6 +1329,10 @@ CREATE TABLE dbo.FR_Rules (
                 END;
                 ELSE
                 BEGIN
+                    -- Built in nvarchar(max) appends: a single concatenated
+                    -- expression of non-max literals is typed nvarchar(4000)
+                    -- and silently truncates this ~4.9K-char batch mid-token.
+                    -- Appending to @AgentSql keeps every step max-typed.
                     SET @AgentSql = N'
 USE msdb;
 
@@ -1354,7 +1358,8 @@ BEGIN
           @job_id = @collectJobId
         , @step_name = N''Collect''
         , @subsystem = N''TSQL''
-        , @database_name = N''' + REPLACE(DB_NAME(), N'''', N'''''') + N'''
+        , @database_name = N''';
+                    SET @AgentSql = @AgentSql + REPLACE(DB_NAME(), N'''', N'''''') + N'''
         , @command = N''EXEC dbo.sp_SQLFlightRecorder @Mode = N''''Collect'''';''
         , @on_success_action = 3
         , @on_fail_action = 2;
@@ -1367,7 +1372,8 @@ BEGIN
           @job_id = @collectJobId
         , @step_name = N''Purge''
         , @subsystem = N''TSQL''
-        , @database_name = N''' + REPLACE(DB_NAME(), N'''', N'''''') + N'''
+        , @database_name = N''';
+                    SET @AgentSql = @AgentSql + REPLACE(DB_NAME(), N'''', N'''''') + N'''
         , @command = N''EXEC dbo.sp_SQLFlightRecorder @Mode = N''''Purge'''', @WhatIf = 0;''
         , @on_success_action = 1
         , @on_fail_action = 2;
@@ -1423,7 +1429,8 @@ BEGIN
           @job_id = @purgeJobId
         , @step_name = N''Purge''
         , @subsystem = N''TSQL''
-        , @database_name = N''' + REPLACE(DB_NAME(), N'''', N'''''') + N'''
+        , @database_name = N''';
+                    SET @AgentSql = @AgentSql + REPLACE(DB_NAME(), N'''', N'''''') + N'''
         , @command = N''EXEC dbo.sp_SQLFlightRecorder @Mode = N''''Purge'''', @WhatIf = 0;''
         , @on_success_action = 1
         , @on_fail_action = 2;
