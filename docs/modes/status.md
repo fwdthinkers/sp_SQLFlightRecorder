@@ -1,10 +1,10 @@
 # Status mode
 
-Reports installation state, configuration, the rule catalog, recent runs, repository footprint, and the capability snapshot.
+Reports installation state, configuration, the rule catalog, recent runs, repository footprint, the capability snapshot, and retention/purge health.
 
 ## Safety
 
-Read-only; reads only `FR_*` and allow-listed catalogs. Returns multiple result sets (Status is exempt from the two-result-set rule, which applies to Report).
+Read-only; reads only `FR_*`, allow-listed catalogs, and (where SQL Agent exists) msdb job metadata for the retention-health checks. Returns multiple result sets (Status is exempt from the two-result-set rule, which applies to Report).
 
 ## Parameters
 
@@ -14,7 +14,7 @@ Read-only; reads only `FR_*` and allow-listed catalogs. Returns multiple result 
 
 ## Result set(s)
 
-Six result sets: installation summary; configuration; rule catalog; recent runs; repository size; capability snapshot.
+Seven result sets: installation summary; configuration; rule catalog; recent runs; repository size; capability snapshot; retention and purge health (`CheckName, CheckStatus, Detail` — warns when the oldest snapshot exceeds retention, purge is not keeping up, the collector job lacks a Purge step, the daily purge job is missing, or an `FR_*` table exceeds `RepositoryTableWarnRows`).
 
 ## Examples
 

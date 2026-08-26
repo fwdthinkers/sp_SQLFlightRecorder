@@ -4,6 +4,8 @@
 -- =============================================================================
 -- Developed by: Ysaias Portes
 -- Company:      Forward Thinkers Consulting, LLC.
+-- Web:          https://www.forwardthinkersconsulting.com/
+-- Contact:      contact@forwardthinkersconsulting.com
 -- Repository:   https://github.com/forward-thinkers-lab/sp_SQLFlightRecorder
 -- License:      MIT
 --
@@ -19,8 +21,8 @@
 --   * Collect / CollectDebug / Report / Configure / Purge:
 --       implemented as the procedure evolves through the v0.1 roadmap
 --
--- Tool-Version:   1.0.0
--- Build-Date-Utc: 2026-07-29
+-- Tool-Version:   1.1.0
+-- Build-Date-Utc: 2026-08-25
 -- Design:         docs/design.md
 -- Decisions:      docs/decisions.md
 --
@@ -83,11 +85,13 @@ BEGIN
     -- =========================================================================
     -- Constants and version info
     -- =========================================================================
-    DECLARE @ToolVersion             nvarchar(30)  = N'1.0.0';
-    DECLARE @BuildDateUtc            datetime2(3)  = CONVERT(datetime2(3), '2026-07-29T00:00:00');
-    -- SchemaVersion stays 0.4.0: v0.4.1/v0.4.2/v0.4.3, 1.0.0-rc.1 and 1.0.0 change
-    -- no DDL (rule lifecycle flips and new FR_Config seeds are data). Forward-only (D-038).
-    DECLARE @SchemaVersion            nvarchar(20) = N'0.4.0';
+    DECLARE @ToolVersion             nvarchar(30)  = N'1.1.0';
+    DECLARE @BuildDateUtc            datetime2(3)  = CONVERT(datetime2(3), '2026-08-25T00:00:00');
+    -- SchemaVersion 0.5.0: v1.1.0 adds retention/purge-support indexes on the
+    -- existing FR_* tables (D-199). Index-only DDL; no table shape changes.
+    -- Forward-only (D-038): Install creates the indexes on upgraded
+    -- repositories the first time it runs over them.
+    DECLARE @SchemaVersion            nvarchar(20) = N'0.5.0';
     -- Rule-pack version is part of the Markdown header contract (D-085).
     -- It names the release that last changed rule logic or the rule catalog
     -- (0.4.3 completed the FR_R0003 escalation before the v1.0 lock). 1.0.0-rc.1
@@ -408,6 +412,7 @@ BEGIN
         DECLARE @CreateSql nvarchar(max);
         DECLARE @TableCompressionClause nvarchar(64) = N'';
         DECLARE @IndexCompressionClause nvarchar(64) = N'';
+        DECLARE @InstallAgentSummary nvarchar(600) = N'';
 
         IF @EngineEdition IN (3, 5, 8) OR (@EngineEdition = 2 AND ISNULL(@ProductMajorVersion, 0) >= 13)
         BEGIN
@@ -1098,6 +1103,11 @@ CREATE TABLE dbo.FR_Rules (
                 INSERT INTO dbo.FR_Config (ConfigKey, ConfigValue, Description)
                 VALUES (N'FileIoLatencyWarnMs', N'20', N'Absolute per-file IO latency floor (ms) for FR_R0004 escalation over baseline (tentative).');
 
+            -- v1.1 retention guardrail (D-199).
+            IF NOT EXISTS (SELECT 1 FROM dbo.FR_Config WHERE ConfigKey = N'RepositoryTableWarnRows')
+                INSERT INTO dbo.FR_Config (ConfigKey, ConfigValue, Description)
+                VALUES (N'RepositoryTableWarnRows', N'5000000', N'Row count per FR_* table that raises a Status retention-health warning (D-199).');
+
             -- Forward-only migration marker maintenance: advance recorded SchemaVersion (D-038).
             UPDATE dbo.FR_Config
             SET ConfigValue = @SchemaVersion, ModifiedUtc = SYSUTCDATETIME()
@@ -1228,10 +1238,72 @@ CREATE TABLE dbo.FR_Rules (
                              N'FR_R0034_PlanParallelism')
               AND LifecycleState <> N'Disabled';
 
+            -- ===== v1.1 index hardening (D-199) ==============================
+            -- Purge removes FR_Snapshot rows only after the engine checks every
+            -- child FK; without a SnapshotId index each check is a child-table
+            -- scan, which is what made purge (and window-first report reads)
+            -- unusable on repositories that grew unpurged (35M+ row children).
+            -- Idempotent; applies to fresh installs and upgrades (D-038).
+            DECLARE @IndexDefs TABLE (Seq int IDENTITY(1,1) PRIMARY KEY, TableName sysname NOT NULL, IndexName sysname NOT NULL, KeyColumn sysname NOT NULL);
+            INSERT INTO @IndexDefs (TableName, IndexName, KeyColumn)
+            VALUES
+                  (N'FR_InstanceSnapshot', N'IX_FR_InstanceSnapshot_SnapshotId', N'SnapshotId')
+                , (N'FR_Configuration',    N'IX_FR_Configuration_SnapshotId',    N'SnapshotId')
+                , (N'FR_Request',          N'IX_FR_Request_SnapshotId',          N'SnapshotId')
+                , (N'FR_Request',          N'IX_FR_Request_QueryHash',           N'QueryHash')
+                , (N'FR_Wait',             N'IX_FR_Wait_SnapshotId',             N'SnapshotId')
+                , (N'FR_FileStat',         N'IX_FR_FileStat_SnapshotId',         N'SnapshotId')
+                , (N'FR_PerfCounter',      N'IX_FR_PerfCounter_SnapshotId',      N'SnapshotId')
+                , (N'FR_Tempdb',           N'IX_FR_Tempdb_SnapshotId',           N'SnapshotId')
+                , (N'FR_Memory',           N'IX_FR_Memory_SnapshotId',           N'SnapshotId')
+                , (N'FR_AgentJob',         N'IX_FR_AgentJob_SnapshotId',         N'SnapshotId')
+                , (N'FR_BackupHistory',    N'IX_FR_BackupHistory_SnapshotId',    N'SnapshotId')
+                , (N'FR_AlwaysOnState',    N'IX_FR_AlwaysOnState_SnapshotId',    N'SnapshotId')
+                , (N'FR_Deadlock',         N'IX_FR_Deadlock_SnapshotId',         N'SnapshotId')
+                , (N'FR_QueryPlan',        N'IX_FR_QueryPlan_SnapshotId',        N'SnapshotId')
+                , (N'FR_QueryStoreTopN',   N'IX_FR_QueryStoreTopN_SnapshotId',   N'SnapshotId')
+                , (N'FR_ErrorLog',         N'IX_FR_ErrorLog_SnapshotId',         N'SnapshotId')
+                , (N'FR_SchemaActivity',   N'IX_FR_SchemaActivity_SnapshotId',   N'SnapshotId')
+                , (N'FR_PlanCacheSummary', N'IX_FR_PlanCacheSummary_SnapshotId', N'SnapshotId')
+                , (N'FR_HaState',          N'IX_FR_HaState_SnapshotId',          N'SnapshotId')
+                , (N'FR_BufferPool',       N'IX_FR_BufferPool_SnapshotId',       N'SnapshotId')
+                , (N'FR_Snapshot',         N'IX_FR_Snapshot_RunId',              N'RunId')
+                , (N'FR_RunLogStep',       N'IX_FR_RunLogStep_RunId',            N'RunId');
+
+            DECLARE @IndexSeq int = 0;
+            DECLARE @IndexTable sysname, @IndexName sysname, @IndexKey sysname;
+            WHILE 1 = 1
+            BEGIN
+                SELECT TOP (1) @IndexSeq = Seq, @IndexTable = TableName, @IndexName = IndexName, @IndexKey = KeyColumn
+                FROM @IndexDefs
+                WHERE Seq > @IndexSeq
+                ORDER BY Seq ASC;
+
+                IF @@ROWCOUNT = 0 BREAK;
+
+                IF OBJECT_ID(CONCAT(N'dbo.', @IndexTable), N'U') IS NOT NULL
+                   AND NOT EXISTS (SELECT 1 FROM sys.indexes
+                                   WHERE object_id = OBJECT_ID(CONCAT(N'dbo.', @IndexTable))
+                                     AND name = @IndexName)
+                BEGIN
+                    SET @CreateSql = CONCAT(N'CREATE NONCLUSTERED INDEX ', QUOTENAME(@IndexName),
+                                            N' ON dbo.', QUOTENAME(@IndexTable),
+                                            N' (', QUOTENAME(@IndexKey), N')', @IndexCompressionClause);
+                    EXEC sys.sp_executesql @CreateSql;
+                END;
+            END;
+
             -- Optional SQL Agent job creation. Explicit opt-in only.
+            -- v1.1 (D-199): ensures TWO jobs, idempotently (an existing job is
+            -- completed in place; never duplicates a job, step, or schedule):
+            --   1. 'SQLFlightRecorder Collect' — step 1 Collect, step 2 Purge
+            --      (@WhatIf = 0) as post-collect cleanup, every minute.
+            --   2. 'SQLFlightRecorder Purge' — daily 02:30 retention backstop
+            --      in case the collector job is disabled, changed, or failing.
             IF @CreateAgentJob = 1
             BEGIN
                 DECLARE @AgentJobName sysname = N'SQLFlightRecorder Collect';
+                DECLARE @PurgeAgentJobName sysname = N'SQLFlightRecorder Purge';
                 DECLARE @AgentSql nvarchar(max);
                 DECLARE @AgentSupported bit = 1;
 
@@ -1248,55 +1320,163 @@ CREATE TABLE dbo.FR_Rules (
                 BEGIN
                     IF NOT EXISTS (SELECT 1 FROM dbo.FR_Config WHERE ConfigKey = N'AgentJobCreatedBySQLFlightRecorder')
                         INSERT INTO dbo.FR_Config (ConfigKey, ConfigValue, Description)
-                        VALUES (N'AgentJobCreatedBySQLFlightRecorder', N'0', N'SQL Agent unavailable or unsupported.');
+                        VALUES (N'AgentJobCreatedBySQLFlightRecorder', N'0', N'SQL Agent unavailable or unsupported; schedule Collect and Purge externally.');
+
+                    -- Azure SQL Database / Express have no local SQL Agent:
+                    -- surface the external-scheduling requirement in the
+                    -- Install result instead of silently doing nothing.
+                    SET @InstallAgentSummary = N' SQL Agent is not available on this platform, so no job was created. Schedule BOTH of these externally (Elastic Jobs, cron + sqlcmd, or another scheduler): EXEC dbo.sp_SQLFlightRecorder @Mode = N''Collect''; (every minute) and EXEC dbo.sp_SQLFlightRecorder @Mode = N''Purge'', @WhatIf = 0; (daily).';
                 END;
                 ELSE
                 BEGIN
                     SET @AgentSql = N'
 USE msdb;
 
-IF NOT EXISTS (SELECT 1 FROM msdb.dbo.sysjobs WHERE name = N''SQLFlightRecorder Collect'')
+DECLARE @collectJobId uniqueidentifier;
+DECLARE @purgeJobId   uniqueidentifier;
+DECLARE @collectStepId int;
+
+-- Collector job: create when missing (idempotent).
+SELECT @collectJobId = job_id FROM msdb.dbo.sysjobs WHERE name = N''SQLFlightRecorder Collect'';
+IF @collectJobId IS NULL
 BEGIN
     EXEC msdb.dbo.sp_add_job
           @job_name = N''SQLFlightRecorder Collect''
         , @enabled = 1
-        , @description = N''Runs dbo.sp_SQLFlightRecorder @Mode = Collect every minute.'';
+        , @description = N''Runs dbo.sp_SQLFlightRecorder @Mode = Collect every minute, then @Mode = Purge as post-collect cleanup.'';
+    SELECT @collectJobId = job_id FROM msdb.dbo.sysjobs WHERE name = N''SQLFlightRecorder Collect'';
+END;
 
+-- Step 1: Collect (added only when missing; never duplicated).
+IF NOT EXISTS (SELECT 1 FROM msdb.dbo.sysjobsteps WHERE job_id = @collectJobId AND step_name = N''Collect'')
+BEGIN
     EXEC msdb.dbo.sp_add_jobstep
-          @job_name = N''SQLFlightRecorder Collect''
+          @job_id = @collectJobId
         , @step_name = N''Collect''
         , @subsystem = N''TSQL''
         , @database_name = N''' + REPLACE(DB_NAME(), N'''', N'''''') + N'''
-        , @command = N''EXEC dbo.sp_SQLFlightRecorder @Mode = N''''Collect'''';'';
+        , @command = N''EXEC dbo.sp_SQLFlightRecorder @Mode = N''''Collect'''';''
+        , @on_success_action = 3
+        , @on_fail_action = 2;
+END;
 
-    IF NOT EXISTS (SELECT 1 FROM msdb.dbo.sysschedules WHERE name = N''SQLFlightRecorder Every Minute'')
-    BEGIN
-        EXEC msdb.dbo.sp_add_schedule
-              @schedule_name = N''SQLFlightRecorder Every Minute''
-            , @enabled = 1
-            , @freq_type = 4
-            , @freq_interval = 1
-            , @freq_subday_type = 4
-            , @freq_subday_interval = 1;
-    END;
+-- Step 2: Purge after Collect (added only when missing; never duplicated).
+IF NOT EXISTS (SELECT 1 FROM msdb.dbo.sysjobsteps WHERE job_id = @collectJobId AND step_name = N''Purge'')
+BEGIN
+    EXEC msdb.dbo.sp_add_jobstep
+          @job_id = @collectJobId
+        , @step_name = N''Purge''
+        , @subsystem = N''TSQL''
+        , @database_name = N''' + REPLACE(DB_NAME(), N'''', N'''''') + N'''
+        , @command = N''EXEC dbo.sp_SQLFlightRecorder @Mode = N''''Purge'''', @WhatIf = 0;''
+        , @on_success_action = 1
+        , @on_fail_action = 2;
+END;
 
+-- A pre-v1.1 collector job has its Collect step quitting on success; point it
+-- at the next step so the Purge step actually runs.
+SELECT @collectStepId = step_id
+FROM msdb.dbo.sysjobsteps
+WHERE job_id = @collectJobId AND step_name = N''Collect'' AND on_success_action <> 3;
+IF @collectStepId IS NOT NULL
+    EXEC msdb.dbo.sp_update_jobstep
+          @job_id = @collectJobId
+        , @step_id = @collectStepId
+        , @on_success_action = 3;
+
+IF NOT EXISTS (SELECT 1 FROM msdb.dbo.sysschedules WHERE name = N''SQLFlightRecorder Every Minute'')
+BEGIN
+    EXEC msdb.dbo.sp_add_schedule
+          @schedule_name = N''SQLFlightRecorder Every Minute''
+        , @enabled = 1
+        , @freq_type = 4
+        , @freq_interval = 1
+        , @freq_subday_type = 4
+        , @freq_subday_interval = 1;
+END;
+
+IF NOT EXISTS (SELECT 1
+               FROM msdb.dbo.sysjobschedules AS js
+               INNER JOIN msdb.dbo.sysschedules AS s ON s.schedule_id = js.schedule_id
+               WHERE js.job_id = @collectJobId AND s.name = N''SQLFlightRecorder Every Minute'')
     EXEC msdb.dbo.sp_attach_schedule
-          @job_name = N''SQLFlightRecorder Collect''
+          @job_id = @collectJobId
         , @schedule_name = N''SQLFlightRecorder Every Minute'';
 
-    EXEC msdb.dbo.sp_add_jobserver
-          @job_name = N''SQLFlightRecorder Collect'';
+IF NOT EXISTS (SELECT 1 FROM msdb.dbo.sysjobservers WHERE job_id = @collectJobId)
+    EXEC msdb.dbo.sp_add_jobserver @job_id = @collectJobId;
+
+-- Daily purge backstop job: create when missing (idempotent).
+SELECT @purgeJobId = job_id FROM msdb.dbo.sysjobs WHERE name = N''SQLFlightRecorder Purge'';
+IF @purgeJobId IS NULL
+BEGIN
+    EXEC msdb.dbo.sp_add_job
+          @job_name = N''SQLFlightRecorder Purge''
+        , @enabled = 1
+        , @description = N''Runs dbo.sp_SQLFlightRecorder @Mode = Purge daily as a retention backstop, in case the collector job is disabled, changed, or failing.'';
+    SELECT @purgeJobId = job_id FROM msdb.dbo.sysjobs WHERE name = N''SQLFlightRecorder Purge'';
 END;
+
+IF NOT EXISTS (SELECT 1 FROM msdb.dbo.sysjobsteps WHERE job_id = @purgeJobId AND step_name = N''Purge'')
+BEGIN
+    EXEC msdb.dbo.sp_add_jobstep
+          @job_id = @purgeJobId
+        , @step_name = N''Purge''
+        , @subsystem = N''TSQL''
+        , @database_name = N''' + REPLACE(DB_NAME(), N'''', N'''''') + N'''
+        , @command = N''EXEC dbo.sp_SQLFlightRecorder @Mode = N''''Purge'''', @WhatIf = 0;''
+        , @on_success_action = 1
+        , @on_fail_action = 2;
+END;
+
+IF NOT EXISTS (SELECT 1 FROM msdb.dbo.sysschedules WHERE name = N''SQLFlightRecorder Daily Purge'')
+BEGIN
+    EXEC msdb.dbo.sp_add_schedule
+          @schedule_name = N''SQLFlightRecorder Daily Purge''
+        , @enabled = 1
+        , @freq_type = 4
+        , @freq_interval = 1
+        , @freq_subday_type = 1
+        , @active_start_time = 23000;
+END;
+
+IF NOT EXISTS (SELECT 1
+               FROM msdb.dbo.sysjobschedules AS js
+               INNER JOIN msdb.dbo.sysschedules AS s ON s.schedule_id = js.schedule_id
+               WHERE js.job_id = @purgeJobId AND s.name = N''SQLFlightRecorder Daily Purge'')
+    EXEC msdb.dbo.sp_attach_schedule
+          @job_id = @purgeJobId
+        , @schedule_name = N''SQLFlightRecorder Daily Purge'';
+
+IF NOT EXISTS (SELECT 1 FROM msdb.dbo.sysjobservers WHERE job_id = @purgeJobId)
+    EXEC msdb.dbo.sp_add_jobserver @job_id = @purgeJobId;
 ';
                     EXEC sys.sp_executesql @AgentSql;
 
                     IF NOT EXISTS (SELECT 1 FROM dbo.FR_Config WHERE ConfigKey = N'AgentJobName')
                         INSERT INTO dbo.FR_Config (ConfigKey, ConfigValue, Description)
-                        VALUES (N'AgentJobName', @AgentJobName, N'SQL Agent job created by Install opt-in.');
+                        VALUES (N'AgentJobName', @AgentJobName, N'SQL Agent collector job created by Install opt-in.');
 
                     IF NOT EXISTS (SELECT 1 FROM dbo.FR_Config WHERE ConfigKey = N'AgentJobCreatedBySQLFlightRecorder')
                         INSERT INTO dbo.FR_Config (ConfigKey, ConfigValue, Description)
-                        VALUES (N'AgentJobCreatedBySQLFlightRecorder', N'1', N'This procedure created the SQL Agent job.');
+                        VALUES (N'AgentJobCreatedBySQLFlightRecorder', N'1', N'This procedure created the SQL Agent collector job.');
+
+                    IF NOT EXISTS (SELECT 1 FROM dbo.FR_Config WHERE ConfigKey = N'PurgeAgentJobName')
+                        INSERT INTO dbo.FR_Config (ConfigKey, ConfigValue, Description)
+                        VALUES (N'PurgeAgentJobName', @PurgeAgentJobName, N'SQL Agent daily purge job created by Install opt-in (D-199).');
+
+                    IF NOT EXISTS (SELECT 1 FROM dbo.FR_Config WHERE ConfigKey = N'PurgeAgentJobCreatedBySQLFlightRecorder')
+                        INSERT INTO dbo.FR_Config (ConfigKey, ConfigValue, Description)
+                        VALUES (N'PurgeAgentJobCreatedBySQLFlightRecorder', N'1', N'This procedure created the SQL Agent daily purge job.');
+
+                    -- A pre-v1.1 unsupported-platform marker ('0') must not
+                    -- mask jobs that were just created on a capable platform.
+                    UPDATE dbo.FR_Config
+                    SET ConfigValue = N'1', ModifiedUtc = SYSUTCDATETIME()
+                    WHERE ConfigKey = N'AgentJobCreatedBySQLFlightRecorder'
+                      AND ConfigValue <> N'1';
+
+                    SET @InstallAgentSummary = N' SQL Agent jobs ensured: SQLFlightRecorder Collect (Collect then Purge, every minute) and SQLFlightRecorder Purge (daily 02:30 retention backstop).';
                 END;
             END;
 			
@@ -1347,7 +1527,7 @@ CREATE VIEW dbo.FR_v_RepositoryFootprint
 AS
 SELECT
       t.name                          AS TableName,
-      SUM(ps.row_count)               AS [RowCount],
+      SUM(CASE WHEN ps.index_id IN (0, 1) THEN ps.row_count ELSE 0 END) AS [RowCount],
       SUM(ps.used_page_count) * 8     AS UsedKb
 FROM sys.tables AS t
 INNER JOIN sys.dm_db_partition_stats AS ps ON ps.object_id = t.object_id
@@ -1373,7 +1553,8 @@ SELECT
                 DB_NAME() AS DatabaseName,
                 @SchemaVersion AS SchemaVersion,
                 25 AS TableCount,
-                N'Installation complete. 25 core FR_* tables + 5 FR_v_* views created (19 v0.1/v0.2 + 4 v0.3 + 2 v0.4).' AS Message;
+                CONCAT(N'Installation complete. 25 core FR_* tables + 5 FR_v_* views created (19 v0.1/v0.2 + 4 v0.3 + 2 v0.4).',
+                       @InstallAgentSummary) AS Message;
 
 				
 				
@@ -1430,6 +1611,20 @@ SELECT
                       SELECT 1
                       FROM dbo.FR_Config AS c2
                       WHERE c2.ConfigKey = N'AgentJobCreatedBySQLFlightRecorder'
+                        AND c2.ConfigValue = N'1'
+                  );
+
+                -- Daily purge backstop job (D-199), same created-by-us gate.
+                INSERT INTO @WhatIfAgentJob (ObjectName)
+                SELECT TRY_CONVERT(sysname, c.ConfigValue)
+                FROM dbo.FR_Config AS c
+                WHERE c.ConfigKey = N'PurgeAgentJobName'
+                  AND TRY_CONVERT(sysname, c.ConfigValue) IS NOT NULL
+                  AND EXISTS
+                  (
+                      SELECT 1
+                      FROM dbo.FR_Config AS c2
+                      WHERE c2.ConfigKey = N'PurgeAgentJobCreatedBySQLFlightRecorder'
                         AND c2.ConfigValue = N'1'
                   );
             END;
@@ -1496,11 +1691,15 @@ SELECT
             IF OBJECT_ID(N'dbo.FR_HaState', N'U')    IS NOT NULL DROP TABLE dbo.FR_HaState;
             IF OBJECT_ID(N'dbo.FR_BufferPool', N'U') IS NOT NULL DROP TABLE dbo.FR_BufferPool;
 
-            -- Remove SQL Agent job only if this procedure created it.
+            -- Remove SQL Agent jobs only if this procedure created them.
+            -- Idempotent: each removal is guarded by an IF EXISTS in msdb, so
+            -- an already-missing job never fails Uninstall (D-199).
             IF OBJECT_ID(N'dbo.FR_Config', N'U') IS NOT NULL
             BEGIN
                 DECLARE @UninstallAgentJobName sysname = NULL;
                 DECLARE @UninstallAgentCreated nvarchar(10) = NULL;
+                DECLARE @UninstallPurgeJobName sysname = NULL;
+                DECLARE @UninstallPurgeCreated nvarchar(10) = NULL;
                 DECLARE @UninstallAgentSql nvarchar(max);
 
                 SELECT @UninstallAgentJobName = TRY_CONVERT(sysname, ConfigValue)
@@ -1510,6 +1709,14 @@ SELECT
                 SELECT @UninstallAgentCreated = ConfigValue
                 FROM dbo.FR_Config
                 WHERE ConfigKey = N'AgentJobCreatedBySQLFlightRecorder';
+
+                SELECT @UninstallPurgeJobName = TRY_CONVERT(sysname, ConfigValue)
+                FROM dbo.FR_Config
+                WHERE ConfigKey = N'PurgeAgentJobName';
+
+                SELECT @UninstallPurgeCreated = ConfigValue
+                FROM dbo.FR_Config
+                WHERE ConfigKey = N'PurgeAgentJobCreatedBySQLFlightRecorder';
 
                 IF @UninstallAgentCreated = N'1'
                    AND @UninstallAgentJobName IS NOT NULL
@@ -1521,6 +1728,21 @@ USE msdb;
 IF EXISTS (SELECT 1 FROM msdb.dbo.sysjobs WHERE name = N''' + REPLACE(@UninstallAgentJobName, N'''', N'''''') + N''')
 BEGIN
     EXEC msdb.dbo.sp_delete_job @job_name = N''' + REPLACE(@UninstallAgentJobName, N'''', N'''''') + N''';
+END;
+';
+                    EXEC sys.sp_executesql @UninstallAgentSql;
+                END;
+
+                IF @UninstallPurgeCreated = N'1'
+                   AND @UninstallPurgeJobName IS NOT NULL
+                   AND DB_ID(N'msdb') IS NOT NULL
+                   AND OBJECT_ID(N'msdb.dbo.sp_delete_job', N'P') IS NOT NULL
+                BEGIN
+                    SET @UninstallAgentSql = N'
+USE msdb;
+IF EXISTS (SELECT 1 FROM msdb.dbo.sysjobs WHERE name = N''' + REPLACE(@UninstallPurgeJobName, N'''', N'''''') + N''')
+BEGIN
+    EXEC msdb.dbo.sp_delete_job @job_name = N''' + REPLACE(@UninstallPurgeJobName, N'''', N'''''') + N''';
 END;
 ';
                     EXEC sys.sp_executesql @UninstallAgentSql;
@@ -1714,7 +1936,7 @@ END;
         BEGIN
             SELECT
                   t.name AS TableName
-                , SUM(ps.row_count) AS [RowCount]
+                , SUM(CASE WHEN ps.index_id IN (0, 1) THEN ps.row_count ELSE 0 END) AS [RowCount]
                 , SUM(ps.used_page_count) * 8 AS UsedKb
             FROM sys.tables AS t
             INNER JOIN sys.dm_db_partition_stats AS ps
@@ -1765,6 +1987,179 @@ END;
         UNION ALL SELECT N'TimeZoneMode', ISNULL((SELECT ConfigValue FROM dbo.FR_Config WHERE ConfigKey = N'TimeZoneMode'), N'')
         UNION ALL SELECT N'FR_HaState'      AS TableName, NULL WHERE OBJECT_ID(N'dbo.FR_HaState', N'U')      IS NOT NULL
         UNION ALL SELECT N'FR_BufferPool'   AS TableName, NULL WHERE OBJECT_ID(N'dbo.FR_BufferPool', N'U')   IS NOT NULL;
+
+        -- Result Set 7: Retention and purge health (additive per D-023; D-199).
+        -- Six fixed checks so operators can see whether purge is keeping the
+        -- repository bounded before Report performance degrades.
+        DECLARE @HealthSnapRetention int = 7;
+        DECLARE @HealthRunLogRetention int = 28;
+        DECLARE @HealthTableWarnRows bigint = 5000000;
+        DECLARE @HealthOldestSnapshotUtc datetime2(3) = NULL;
+        DECLARE @HealthLastPurgeUtc datetime2(3) = NULL;
+        DECLARE @HealthLastPurgeStatus nvarchar(20) = NULL;
+        DECLARE @HealthCollectJobName sysname = N'SQLFlightRecorder Collect';
+        DECLARE @HealthPurgeJobName sysname = N'SQLFlightRecorder Purge';
+        DECLARE @HealthCollectJobExists bit = 0;
+        DECLARE @HealthCollectJobHasPurgeStep bit = 0;
+        DECLARE @HealthPurgeJobExists bit = 0;
+        DECLARE @HealthMsdbReadable bit = 0;
+        DECLARE @HealthBigTables nvarchar(1000) = N'';
+
+        IF @StatusIsInstalled = 1
+        BEGIN
+            SELECT @HealthSnapRetention = ISNULL(TRY_CONVERT(int, ConfigValue), 7)
+            FROM dbo.FR_Config WHERE ConfigKey = N'SnapshotRetentionDays';
+
+            SELECT @HealthRunLogRetention = ISNULL(TRY_CONVERT(int, ConfigValue), 28)
+            FROM dbo.FR_Config WHERE ConfigKey = N'RunLogRetentionDays';
+
+            SELECT @HealthTableWarnRows = ISNULL(TRY_CONVERT(bigint, ConfigValue), 5000000)
+            FROM dbo.FR_Config WHERE ConfigKey = N'RepositoryTableWarnRows';
+            IF @HealthTableWarnRows IS NULL OR @HealthTableWarnRows < 1 SET @HealthTableWarnRows = 5000000;
+
+            SELECT @HealthCollectJobName = ISNULL(TRY_CONVERT(sysname, ConfigValue), @HealthCollectJobName)
+            FROM dbo.FR_Config WHERE ConfigKey = N'AgentJobName';
+
+            SELECT @HealthPurgeJobName = ISNULL(TRY_CONVERT(sysname, ConfigValue), @HealthPurgeJobName)
+            FROM dbo.FR_Config WHERE ConfigKey = N'PurgeAgentJobName';
+
+            IF OBJECT_ID(N'dbo.FR_Snapshot', N'U') IS NOT NULL
+                SELECT @HealthOldestSnapshotUtc = MIN(SnapshotUtc) FROM dbo.FR_Snapshot;
+
+            IF OBJECT_ID(N'dbo.FR_RunLog', N'U') IS NOT NULL
+                SELECT TOP (1) @HealthLastPurgeUtc = StartUtc, @HealthLastPurgeStatus = Status
+                FROM dbo.FR_RunLog
+                WHERE Mode = N'Purge' AND Status IN (N'Success', N'PartialSuccess')
+                ORDER BY RunId DESC;
+
+            SELECT @HealthBigTables = ISNULL(STUFF((
+                SELECT TOP (10) N'; ' + t.name + N'=' + CONVERT(nvarchar(20), SUM(CASE WHEN ps.index_id IN (0, 1) THEN ps.row_count ELSE 0 END))
+                FROM sys.tables AS t
+                INNER JOIN sys.dm_db_partition_stats AS ps ON ps.object_id = t.object_id
+                WHERE t.schema_id = SCHEMA_ID(N'dbo')
+                  AND t.name LIKE N'FR\_%' ESCAPE N'\'
+                GROUP BY t.name
+                HAVING SUM(CASE WHEN ps.index_id IN (0, 1) THEN ps.row_count ELSE 0 END) > @HealthTableWarnRows
+                ORDER BY t.name
+                FOR XML PATH(N''), TYPE).value(N'.', N'nvarchar(max)'), 1, 2, N''), N'');
+
+            -- Job checks read msdb metadata via dynamic SQL (D-112) so the
+            -- procedure still compiles and runs where msdb does not exist.
+            IF @HasAgent = 1
+            BEGIN
+                BEGIN TRY
+                    DECLARE @HealthAgentSql nvarchar(max) = N'
+SELECT @jobExists = CASE WHEN EXISTS (SELECT 1 FROM msdb.dbo.sysjobs WHERE name = @collectJob) THEN 1 ELSE 0 END,
+       @hasPurgeStep = CASE WHEN EXISTS (SELECT 1
+                                         FROM msdb.dbo.sysjobs AS j
+                                         INNER JOIN msdb.dbo.sysjobsteps AS st ON st.job_id = j.job_id
+                                         WHERE j.name = @collectJob
+                                           AND st.command LIKE N''%sp_SQLFlightRecorder%''
+                                           AND st.command LIKE N''%Purge%'') THEN 1 ELSE 0 END,
+       @purgeJobExists = CASE WHEN EXISTS (SELECT 1 FROM msdb.dbo.sysjobs WHERE name = @purgeJob) THEN 1 ELSE 0 END;';
+                    EXEC sys.sp_executesql @HealthAgentSql,
+                         N'@collectJob sysname, @purgeJob sysname, @jobExists bit OUTPUT, @hasPurgeStep bit OUTPUT, @purgeJobExists bit OUTPUT',
+                         @collectJob = @HealthCollectJobName, @purgeJob = @HealthPurgeJobName,
+                         @jobExists = @HealthCollectJobExists OUTPUT,
+                         @hasPurgeStep = @HealthCollectJobHasPurgeStep OUTPUT,
+                         @purgeJobExists = @HealthPurgeJobExists OUTPUT;
+                    SET @HealthMsdbReadable = 1;
+                END TRY
+                BEGIN CATCH
+                    SET @HealthMsdbReadable = 0;   -- msdb denied: report Unknown, never fail Status
+                END CATCH;
+            END;
+
+            SELECT CheckName, CheckStatus, Detail
+            FROM (
+                SELECT 1 AS CheckOrdinal,
+                    N'RetentionConfiguration' AS CheckName,
+                    CASE WHEN @HealthSnapRetention NOT BETWEEN 1 AND 31
+                              OR @HealthRunLogRetention NOT BETWEEN 1 AND 124
+                         THEN N'Warning' ELSE N'OK' END AS CheckStatus,
+                    CONCAT(N'SnapshotRetentionDays=', @HealthSnapRetention, N' (allowed 1-31); RunLogRetentionDays=',
+                           @HealthRunLogRetention, N' (allowed 1-124).',
+                           CASE WHEN @HealthSnapRetention NOT BETWEEN 1 AND 31
+                                     OR @HealthRunLogRetention NOT BETWEEN 1 AND 124
+                                THEN N' Value predates the v1.1 guardrails; reconfigure via Configure mode.'
+                                ELSE N'' END) AS Detail
+
+                UNION ALL
+                SELECT 2,
+                    N'OldestSnapshotVsRetention',
+                    CASE WHEN @HealthOldestSnapshotUtc IS NULL THEN N'OK'
+                         WHEN @HealthOldestSnapshotUtc < DATEADD(day, -@HealthSnapRetention, SYSUTCDATETIME()) THEN N'Warning'
+                         ELSE N'OK' END,
+                    CASE WHEN @HealthOldestSnapshotUtc IS NULL THEN N'No snapshots captured yet.'
+                         ELSE CONCAT(N'Oldest snapshot ', CONVERT(nvarchar(30), @HealthOldestSnapshotUtc, 126), N'Z (age ',
+                                     DATEDIFF(day, @HealthOldestSnapshotUtc, SYSUTCDATETIME()), N' day(s); retention ',
+                                     @HealthSnapRetention, N' day(s)).',
+                                     CASE WHEN @HealthOldestSnapshotUtc < DATEADD(day, -@HealthSnapRetention, SYSUTCDATETIME())
+                                          THEN N' Rows older than retention exist; ensure Purge (@WhatIf = 0) is scheduled and running.'
+                                          ELSE N'' END) END
+
+                UNION ALL
+                SELECT 3,
+                    N'PurgeKeepingUp',
+                    CASE WHEN @HealthOldestSnapshotUtc IS NOT NULL
+                              AND @HealthOldestSnapshotUtc < DATEADD(day, -(@HealthSnapRetention + 2), SYSUTCDATETIME())
+                         THEN N'Warning' ELSE N'OK' END,
+                    CONCAT(N'Last completed Purge: ',
+                           CASE WHEN @HealthLastPurgeUtc IS NULL THEN N'(never)'
+                                ELSE CONCAT(CONVERT(nvarchar(30), @HealthLastPurgeUtc, 126), N'Z (', @HealthLastPurgeStatus, N')') END,
+                           N'.',
+                           CASE WHEN @HealthOldestSnapshotUtc IS NOT NULL
+                                     AND @HealthOldestSnapshotUtc < DATEADD(day, -(@HealthSnapRetention + 2), SYSUTCDATETIME())
+                                THEN N' Oldest data exceeds retention by more than 2 days; purge appears not to be keeping up. Large backlogs converge over repeated Purge runs.'
+                                ELSE N'' END)
+
+                UNION ALL
+                SELECT 4,
+                    N'CollectorJobPurgeStep',
+                    CASE WHEN @HasAgent = 0 THEN N'NotApplicable'
+                         WHEN @HealthMsdbReadable = 0 THEN N'Unknown'
+                         WHEN @HealthCollectJobExists = 0 THEN N'NotApplicable'
+                         WHEN @HealthCollectJobHasPurgeStep = 0 THEN N'Warning'
+                         ELSE N'OK' END,
+                    CASE WHEN @HasAgent = 0 THEN N'No SQL Agent on this platform; schedule Collect and Purge externally (see docs/operations/scheduling.md).'
+                         WHEN @HealthMsdbReadable = 0 THEN N'msdb job metadata could not be read (permissions); job health unknown.'
+                         WHEN @HealthCollectJobExists = 0 THEN CONCAT(N'Collector job ''', @HealthCollectJobName, N''' not found; if you schedule externally, ensure Purge also runs.')
+                         WHEN @HealthCollectJobHasPurgeStep = 0 THEN CONCAT(N'Collector job ''', @HealthCollectJobName, N''' has no Purge step; re-run Install with @CreateAgentJob = 1 to add it.')
+                         ELSE CONCAT(N'Collector job ''', @HealthCollectJobName, N''' includes a Purge step.') END
+
+                UNION ALL
+                SELECT 5,
+                    N'DailyPurgeJob',
+                    CASE WHEN @HasAgent = 0 THEN N'NotApplicable'
+                         WHEN @HealthMsdbReadable = 0 THEN N'Unknown'
+                         WHEN @HealthPurgeJobExists = 1 THEN N'OK'
+                         WHEN @HealthCollectJobExists = 1 THEN N'Warning'
+                         ELSE N'NotApplicable' END,
+                    CASE WHEN @HasAgent = 0 THEN N'No SQL Agent on this platform; schedule a daily Purge externally.'
+                         WHEN @HealthMsdbReadable = 0 THEN N'msdb job metadata could not be read (permissions); job health unknown.'
+                         WHEN @HealthPurgeJobExists = 1 THEN CONCAT(N'Daily purge job ''', @HealthPurgeJobName, N''' exists.')
+                         WHEN @HealthCollectJobExists = 1 THEN CONCAT(N'Daily purge job ''', @HealthPurgeJobName, N''' is missing; re-run Install with @CreateAgentJob = 1 to create the backstop.')
+                         ELSE N'No SQLFlightRecorder Agent jobs found; if you schedule externally, ensure Purge also runs daily.' END
+
+                UNION ALL
+                SELECT 6,
+                    N'RepositoryTableSize',
+                    CASE WHEN @HealthBigTables <> N'' THEN N'Warning' ELSE N'OK' END,
+                    CASE WHEN @HealthBigTables <> N''
+                         THEN CONCAT(N'FR_* table(s) over ', @HealthTableWarnRows, N' rows: ', @HealthBigTables,
+                                     N'. Run Purge, and consider lowering SnapshotRetentionDays; large tables raise Report cost.')
+                         ELSE CONCAT(N'No FR_* table exceeds ', @HealthTableWarnRows, N' rows (RepositoryTableWarnRows).') END
+            ) AS Checks
+            ORDER BY CheckOrdinal;
+        END
+        ELSE
+        BEGIN
+            SELECT
+                  CAST(NULL AS nvarchar(60)) AS CheckName
+                , CAST(NULL AS nvarchar(20)) AS CheckStatus
+                , CAST(NULL AS nvarchar(1000)) AS Detail
+            WHERE 1 = 0;
+        END;
 
         RETURN;
     END;
@@ -1828,6 +2223,8 @@ END;
             -- v0.4.2 rule tunables
             , N'LongOpenTxnSeconds'
             , N'FileIoLatencyWarnMs'
+            -- v1.1 retention guardrail (D-199)
+            , N'RepositoryTableWarnRows'
         )
         
         BEGIN
@@ -1853,11 +2250,42 @@ END;
                N'CompilationsPerSecWarn',
                N'CollectAdvancedHa', N'CollectBufferPool', N'SecondaryLagWarnSeconds', N'RedoQueueWarnKb',
                N'BackupWarnDays', N'CheckDbWarnDays',
-               N'LongOpenTxnSeconds', N'FileIoLatencyWarnMs')
+               N'LongOpenTxnSeconds', N'FileIoLatencyWarnMs',
+               N'RepositoryTableWarnRows')
            AND TRY_CONVERT(int, @ConfigValue) IS NULL
         BEGIN
             SELECT N'Error' AS Status, N'InvalidConfigValue' AS ErrorCode,
                 CONCAT(N'Config key ', @ConfigureKey, N' requires an integer value.') AS Message,
+                @ToolVersion AS ToolVersion;
+            RETURN;
+        END;
+
+        -- Retention guardrails (D-199): SQLFR is an operational diagnostic
+        -- recorder, not a long-term warehouse. Out-of-range values are refused
+        -- before anything is written, so FR_Config is never updated on error.
+        IF @ConfigureKey = N'SnapshotRetentionDays'
+           AND (TRY_CONVERT(int, @ConfigValue) < 1 OR TRY_CONVERT(int, @ConfigValue) > 31)
+        BEGIN
+            SELECT N'Error' AS Status, N'InvalidConfigValue' AS ErrorCode,
+                N'SnapshotRetentionDays must be between 1 and 31. Longer retention grows the FR_* repository and raises Report cost; export data you must keep longer.' AS Message,
+                @ToolVersion AS ToolVersion;
+            RETURN;
+        END;
+
+        IF @ConfigureKey = N'RunLogRetentionDays'
+           AND (TRY_CONVERT(int, @ConfigValue) < 1 OR TRY_CONVERT(int, @ConfigValue) > 124)
+        BEGIN
+            SELECT N'Error' AS Status, N'InvalidConfigValue' AS ErrorCode,
+                N'RunLogRetentionDays must be between 1 and 124. Longer retention grows the FR_* repository and raises Report cost; export data you must keep longer.' AS Message,
+                @ToolVersion AS ToolVersion;
+            RETURN;
+        END;
+
+        IF @ConfigureKey = N'RepositoryTableWarnRows'
+           AND TRY_CONVERT(int, @ConfigValue) < 1
+        BEGIN
+            SELECT N'Error' AS Status, N'InvalidConfigValue' AS ErrorCode,
+                N'RepositoryTableWarnRows must be a positive integer.' AS Message,
                 @ToolVersion AS ToolVersion;
             RETURN;
         END;
@@ -4381,12 +4809,17 @@ ORDER BY ag.name, ar.replica_server_name, drs.database_id;';
         DECLARE @RestartUtc datetime2(3) = NULL;
         IF OBJECT_ID(N'dbo.FR_InstanceSnapshot', N'U') IS NOT NULL
         BEGIN
+            -- Child SnapshotUtc always equals the parent FR_Snapshot value (both
+            -- written from one @CollectSnapshotUtc), so the extra child-side
+            -- range predicate is a clustered-index access path, not a filter
+            -- change. Applied through Report per D-199 (window-first reads).
             DECLARE @DistinctStarts int = 0;
             SELECT @DistinctStarts = COUNT(DISTINCT i.SqlStartTimeUtc),
                    @RestartUtc = MAX(i.SqlStartTimeUtc)
             FROM dbo.FR_InstanceSnapshot AS i
             INNER JOIN dbo.FR_Snapshot AS s ON s.SnapshotId = i.SnapshotId
             WHERE s.SnapshotUtc >= @ReportStartUtc AND s.SnapshotUtc <= @ReportEndUtc
+              AND i.SnapshotUtc >= @ReportStartUtc AND i.SnapshotUtc <= @ReportEndUtc
               AND i.SqlStartTimeUtc IS NOT NULL;
 
             IF @DistinctStarts > 1 OR (@RestartUtc IS NOT NULL AND @RestartUtc > @ReportStartUtc)
@@ -4399,6 +4832,7 @@ ORDER BY ag.name, ar.replica_server_name, drs.database_id;';
                 FROM dbo.FR_InstanceSnapshot AS i
                 INNER JOIN dbo.FR_Snapshot AS s ON s.SnapshotId = i.SnapshotId
                 WHERE s.SnapshotUtc >= @ReportStartUtc AND s.SnapshotUtc <= @ReportEndUtc
+                  AND i.SnapshotUtc >= @ReportStartUtc AND i.SnapshotUtc <= @ReportEndUtc
                   AND i.SqlStartTimeUtc = @RestartUtc;
                 IF @PostRestartFirstUtc IS NOT NULL
                     SET @DeltaStartUtc = @PostRestartFirstUtc;
@@ -4453,6 +4887,9 @@ ORDER BY ag.name, ar.replica_server_name, drs.database_id;';
             -- Wait deltas are computed at report time (D-007); for a bounded baseline
             -- we use per-snapshot cumulative values averaged across the lookback. This
             -- is an approximation by design (documented; "above recent baseline").
+            -- Child-side SnapshotUtc predicates mirror the parent join filter
+            -- exactly (same stored value) and exist for the clustered-index
+            -- access path (D-199 window-first reads).
             INSERT INTO #fr_baseline (MetricKey, MetricGroup, SampleCount, BaselineAvg, BaselineMax)
             SELECT
                 CONCAT(N'Wait:', w.WaitType), N'Wait',
@@ -4463,6 +4900,8 @@ ORDER BY ag.name, ar.replica_server_name, drs.database_id;';
             INNER JOIN dbo.FR_Snapshot AS s ON s.SnapshotId = w.SnapshotId
             WHERE s.SnapshotUtc >= @BaselineStartUtc
               AND s.SnapshotUtc <  @ReportStartUtc            -- exclude incident window (D-092)
+              AND w.SnapshotUtc >= @BaselineStartUtc
+              AND w.SnapshotUtc <  @ReportStartUtc
             GROUP BY w.WaitType;
 
             INSERT INTO #fr_baseline (MetricKey, MetricGroup, SampleCount, BaselineAvg, BaselineMax)
@@ -4481,6 +4920,8 @@ ORDER BY ag.name, ar.replica_server_name, drs.database_id;';
             INNER JOIN dbo.FR_Snapshot AS s ON s.SnapshotId = f.SnapshotId
             WHERE s.SnapshotUtc >= @BaselineStartUtc
               AND s.SnapshotUtc <  @ReportStartUtc
+              AND f.SnapshotUtc >= @BaselineStartUtc
+              AND f.SnapshotUtc <  @ReportStartUtc
             GROUP BY f.DatabaseId, f.FileId;
 
             INSERT INTO #fr_baseline (MetricKey, MetricGroup, SampleCount, BaselineAvg, BaselineMax)
@@ -4493,6 +4934,8 @@ ORDER BY ag.name, ar.replica_server_name, drs.database_id;';
             INNER JOIN dbo.FR_Snapshot AS s ON s.SnapshotId = p.SnapshotId
             WHERE s.SnapshotUtc >= @BaselineStartUtc
               AND s.SnapshotUtc <  @ReportStartUtc
+              AND p.SnapshotUtc >= @BaselineStartUtc
+              AND p.SnapshotUtc <  @ReportStartUtc
             GROUP BY RTRIM(p.CounterName);
 
             IF OBJECT_ID(N'dbo.FR_Memory', N'U') IS NOT NULL
@@ -4504,7 +4947,9 @@ ORDER BY ag.name, ar.replica_server_name, drs.database_id;';
             FROM dbo.FR_Memory AS m
             INNER JOIN dbo.FR_Snapshot AS s ON s.SnapshotId = m.SnapshotId
             WHERE s.SnapshotUtc >= @BaselineStartUtc
-              AND s.SnapshotUtc <  @ReportStartUtc;
+              AND s.SnapshotUtc <  @ReportStartUtc
+              AND m.SnapshotUtc >= @BaselineStartUtc
+              AND m.SnapshotUtc <  @ReportStartUtc;
         END TRY
         BEGIN CATCH
             -- A baseline build failure must not fail Report; rules treat a missing
@@ -4916,7 +5361,8 @@ ORDER BY ag.name, ar.replica_server_name, drs.database_id;';
                 SELECT @MemGrantsPendingMax = MAX(m.MemoryGrantsPending)
                 FROM dbo.FR_Memory AS m
                 INNER JOIN dbo.FR_Snapshot AS s ON s.SnapshotId = m.SnapshotId
-                WHERE s.SnapshotUtc >= @ReportStartUtc AND s.SnapshotUtc <= @ReportEndUtc;
+                WHERE s.SnapshotUtc >= @ReportStartUtc AND s.SnapshotUtc <= @ReportEndUtc
+                  AND m.SnapshotUtc >= @ReportStartUtc AND m.SnapshotUtc <= @ReportEndUtc;
 
             ;WITH Pending AS
             (
@@ -5375,6 +5821,7 @@ ORDER BY ag.name, ar.replica_server_name, drs.database_id;';
                 FROM dbo.FR_Configuration AS c
                 INNER JOIN dbo.FR_Snapshot AS s ON s.SnapshotId = c.SnapshotId
                 WHERE s.SnapshotUtc >= @ReportStartUtc AND s.SnapshotUtc <= @ReportEndUtc
+                  AND c.SnapshotUtc >= @ReportStartUtc AND c.SnapshotUtc <= @ReportEndUtc
             )
             INSERT INTO #fr_findings
             (Severity, Confidence, EvidenceType, Category, RuleId, Title, Summary, Evidence, Recommendation, DatabaseName, ObjectName, SessionId, StartTimeUtc, EndTimeUtc, MoreInfo)
@@ -5415,6 +5862,7 @@ ORDER BY ag.name, ar.replica_server_name, drs.database_id;';
                 FROM dbo.FR_PerfCounter AS p
                 INNER JOIN dbo.FR_Snapshot AS s ON s.SnapshotId = p.SnapshotId
                 WHERE s.SnapshotUtc >= @ReportStartUtc AND s.SnapshotUtc <= @ReportEndUtc
+                  AND p.SnapshotUtc >= @ReportStartUtc AND p.SnapshotUtc <= @ReportEndUtc
                   AND RTRIM(p.CounterName) IN (N'Log Growths', N'Percent Log Used')
                 GROUP BY RTRIM(p.CounterName)
             )
@@ -5468,6 +5916,7 @@ ORDER BY ag.name, ar.replica_server_name, drs.database_id;';
             FROM dbo.FR_Wait AS w
             INNER JOIN dbo.FR_Snapshot AS s ON s.SnapshotId = w.SnapshotId
             WHERE s.SnapshotUtc >= @ReportStartUtc AND s.SnapshotUtc <= @ReportEndUtc
+              AND w.SnapshotUtc >= @ReportStartUtc AND w.SnapshotUtc <= @ReportEndUtc
               AND w.WaitType = N'THREADPOOL'
               AND w.WaitTimeMs > 0
               AND CHARINDEX(N';FR_R0023_ThreadpoolWaitsObserved;', @DisabledRules) = 0
@@ -5501,6 +5950,7 @@ ORDER BY ag.name, ar.replica_server_name, drs.database_id;';
             FROM dbo.FR_Wait AS w
             INNER JOIN dbo.FR_Snapshot AS s ON s.SnapshotId = w.SnapshotId
             WHERE s.SnapshotUtc >= @ReportStartUtc AND s.SnapshotUtc <= @ReportEndUtc
+              AND w.SnapshotUtc >= @ReportStartUtc AND w.SnapshotUtc <= @ReportEndUtc
               AND w.WaitType = N'RESOURCE_SEMAPHORE'
               AND w.WaitTimeMs > 0
               AND CHARINDEX(N';FR_R0024_ResourceSemaphoreWaits;', @DisabledRules) = 0
@@ -5829,29 +6279,79 @@ ORDER BY ag.name, ar.replica_server_name, drs.database_id;';
               AND ISNULL(e.Category, N'Other') <> N'Other'
             ORDER BY e.LogDateUtc ASC;
 
+        -- Schema-activity timeline: window-first + dedup + cap (D-199).
+        -- The collector re-captures the same DDL/stats event on every snapshot
+        -- inside its 7-day lookback, so an unpurged repository fed this section
+        -- millions of duplicate rows through a full-table scan on ModifyDateUtc.
+        -- The SnapshotUtc bounds ride the clustered index: a capture of an
+        -- in-window event can only carry SnapshotUtc at/after its ModifyDateUtc
+        -- (1-day clock-skew margin) and within the lookback after the window.
         IF OBJECT_ID(N'dbo.FR_SchemaActivity', N'U') IS NOT NULL
+        BEGIN
+            IF OBJECT_ID(N'tempdb..#fr_sa_events') IS NOT NULL DROP TABLE #fr_sa_events;
+            CREATE TABLE #fr_sa_events
+            (
+                ActivityKind  nvarchar(30) NOT NULL,
+                DatabaseName  sysname      NULL,
+                SchemaName    sysname      NULL,
+                ObjectName    sysname      NULL,
+                StatName      sysname      NULL,
+                ModifyDateUtc datetime2(3) NOT NULL,
+                SnapshotId    bigint       NULL,
+                RowModCount   bigint       NULL
+            );
+
+            INSERT INTO #fr_sa_events
+                (ActivityKind, DatabaseName, SchemaName, ObjectName, StatName, ModifyDateUtc, SnapshotId, RowModCount)
+            SELECT TOP (@MaxFindings + 1)
+                a.ActivityKind, a.DatabaseName, a.SchemaName, a.ObjectName, a.StatName,
+                a.ModifyDateUtc, MIN(a.SnapshotId), MAX(a.RowModCount)
+            FROM dbo.FR_SchemaActivity AS a
+            WHERE a.ModifyDateUtc >= @ReportStartUtc AND a.ModifyDateUtc <= @ReportEndUtc
+              AND a.SnapshotUtc >= DATEADD(day, -1, @ReportStartUtc)
+              AND a.SnapshotUtc <= DATEADD(day, 8, @ReportEndUtc)
+            GROUP BY a.ActivityKind, a.DatabaseName, a.SchemaName, a.ObjectName, a.StatName, a.ModifyDateUtc
+            ORDER BY a.ModifyDateUtc ASC;
+
             INSERT INTO #fr_timeline
             (
                 EventUtc, EventType, Category, Severity, Summary,
                 DatabaseName, ObjectName, SnapshotId, MoreInfo
             )
             SELECT TOP (@MaxFindings)
-                a.ModifyDateUtc,
-                CASE WHEN a.ActivityKind = N'StatsUpdate' THEN N'StatsUpdate' ELSE N'SchemaChange' END,
+                e.ModifyDateUtc,
+                CASE WHEN e.ActivityKind = N'StatsUpdate' THEN N'StatsUpdate' ELSE N'SchemaChange' END,
                 N'Schema',
                 N'Informational',
-                LEFT(CASE WHEN a.ActivityKind = N'StatsUpdate'
-                          THEN N'Statistics updated: ' + ISNULL(a.SchemaName, N'') + N'.' + ISNULL(a.ObjectName, N'')
-                               + N' (' + ISNULL(a.StatName, N'') + N')'
-                          ELSE N'Object changed: ' + ISNULL(a.SchemaName, N'') + N'.' + ISNULL(a.ObjectName, N'')
+                LEFT(CASE WHEN e.ActivityKind = N'StatsUpdate'
+                          THEN N'Statistics updated: ' + ISNULL(e.SchemaName, N'') + N'.' + ISNULL(e.ObjectName, N'')
+                               + N' (' + ISNULL(e.StatName, N'') + N')'
+                          ELSE N'Object changed: ' + ISNULL(e.SchemaName, N'') + N'.' + ISNULL(e.ObjectName, N'')
                      END, 400),
-                a.DatabaseName,
-                LEFT(ISNULL(a.ObjectName, N''), 200),
-                a.SnapshotId,
-                LEFT(N'Kind=' + a.ActivityKind + N'; rowMod=' + ISNULL(CONVERT(nvarchar(20), a.RowModCount), N''), 1000)
-            FROM dbo.FR_SchemaActivity AS a
-            WHERE a.ModifyDateUtc >= @ReportStartUtc AND a.ModifyDateUtc <= @ReportEndUtc
-            ORDER BY a.ModifyDateUtc ASC;
+                e.DatabaseName,
+                LEFT(ISNULL(e.ObjectName, N''), 200),
+                e.SnapshotId,
+                LEFT(N'Kind=' + e.ActivityKind + N'; rowMod=' + ISNULL(CONVERT(nvarchar(20), e.RowModCount), N''), 1000)
+            FROM #fr_sa_events AS e
+            ORDER BY e.ModifyDateUtc ASC;
+
+            IF (SELECT COUNT(1) FROM #fr_sa_events) > @MaxFindings
+                INSERT INTO #fr_findings
+                (Severity, Confidence, EvidenceType, Category, RuleId, Title, Summary, Evidence, Recommendation, StartTimeUtc, EndTimeUtc, MoreInfo)
+                VALUES
+                (
+                    N'Informational', N'High', N'Observed', N'Coverage',
+                    N'FR_R0026_CoverageAndCapabilitySummary',
+                    N'Schema-activity timeline evidence was capped',
+                    CONCAT(N'More than ', @MaxFindings, N' distinct schema/stats events fall in the window; only the earliest ', @MaxFindings, N' are shown.'),
+                    N'Schema-activity timeline events are capped at @MaxFindings to keep Report bounded on large repositories.',
+                    N'Narrow the report window, raise @MaxFindings (max 2000), or reduce SnapshotRetentionDays so the repository stays smaller.',
+                    @ReportStartUtc, @ReportEndUtc,
+                    N'Evidence cap (D-199); full detail remains in dbo.FR_SchemaActivity.'
+                );
+
+            IF OBJECT_ID(N'tempdb..#fr_sa_events') IS NOT NULL DROP TABLE #fr_sa_events;
+        END;
 
         -- =====================================================================
         -- v0.2 timeline events (chronological; D-071/D-073 closed-set EventType).
@@ -6113,12 +6613,15 @@ ORDER BY ag.name, ar.replica_server_name, drs.database_id;';
             FROM dbo.FR_Configuration AS c
             INNER JOIN dbo.FR_Snapshot AS s ON s.SnapshotId = c.SnapshotId
             WHERE s.SnapshotUtc >= @ReportStartUtc AND s.SnapshotUtc <= @ReportEndUtc
+              AND c.SnapshotUtc >= @ReportStartUtc AND c.SnapshotUtc <= @ReportEndUtc
               AND EXISTS (
                     SELECT 1 FROM dbo.FR_Configuration AS c2
                     INNER JOIN dbo.FR_Snapshot AS s2 ON s2.SnapshotId = c2.SnapshotId
                     WHERE c2.ConfigurationKind = c.ConfigurationKind AND c2.Name = c.Name
                       AND s2.SnapshotUtc < s.SnapshotUtc
                       AND s2.SnapshotUtc >= @ReportStartUtc
+                      AND c2.SnapshotUtc < s.SnapshotUtc
+                      AND c2.SnapshotUtc >= @ReportStartUtc
                       AND ISNULL(c2.ValueText, N'') <> ISNULL(c.ValueText, N''));
 
             -- LogReuseWaitChanged (perf-counter-derived growth signal)
@@ -6132,6 +6635,7 @@ ORDER BY ag.name, ar.replica_server_name, drs.database_id;';
             FROM dbo.FR_PerfCounter AS p
             INNER JOIN dbo.FR_Snapshot AS s ON s.SnapshotId = p.SnapshotId
             WHERE s.SnapshotUtc >= @ReportStartUtc AND s.SnapshotUtc <= @ReportEndUtc
+              AND p.SnapshotUtc >= @ReportStartUtc AND p.SnapshotUtc <= @ReportEndUtc
               AND RTRIM(p.CounterName) = N'Log Growths'
               AND p.CounterValue > 0;
 
@@ -6151,6 +6655,7 @@ ORDER BY ag.name, ar.replica_server_name, drs.database_id;';
             FROM dbo.FR_HaState AS h
             INNER JOIN dbo.FR_Snapshot AS s ON s.SnapshotId = h.SnapshotId
             WHERE s.SnapshotUtc >= @ReportStartUtc AND s.SnapshotUtc <= @ReportEndUtc
+              AND h.SnapshotUtc >= @ReportStartUtc AND h.SnapshotUtc <= @ReportEndUtc
               AND h.SynchronizationHealthDesc IN (N'NOT_HEALTHY', N'PARTIALLY_HEALTHY');
         END TRY
         BEGIN CATCH

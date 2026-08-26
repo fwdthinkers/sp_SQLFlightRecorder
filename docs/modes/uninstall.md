@@ -1,10 +1,10 @@
 # Uninstall mode
 
-Removes all `FR_*` objects, and the Agent job if this tool created it.
+Removes all `FR_*` objects, and both Agent jobs (collector and daily purge) if this tool created them.
 
 ## Safety
 
-**Reversible-by-design cleanup.** `@WhatIf=1` previews without dropping. `@PreserveRunLog=1` renames the run-log tables to timestamped archives instead of dropping them (D-183). Safe on a database where Install never ran (returns a clean empty result).
+**Reversible-by-design cleanup.** `@WhatIf=1` previews without dropping, including both Agent jobs. `@PreserveRunLog=1` renames the run-log tables to timestamped archives instead of dropping them (D-183). Idempotent: an already-missing job or object never fails Uninstall. Safe on a database where Install never ran (returns a clean empty result).
 
 ## Parameters
 

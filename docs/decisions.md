@@ -270,10 +270,18 @@ These three decisions were created by the design lock / compliance review (see `
 
 ---
 
+## Post-1.0 hardening
+
+| ID | Source | Status | Decision | Rationale | Tradeoff accepted |
+|---|---|---|---|---|---|
+| D-199 | §4 (schema), §5.1/§9.5 (cadence/purge), D-005 (Agent opt-in), D-035 (run-log retention), field evidence from a multi-week deployment | Locked | **Retention is operationally safe by default.** (a) `Install @CreateAgentJob = 1` ensures **two** Agent jobs idempotently: the collector job gains a **`Purge` step after `Collect`** (`@WhatIf = 0`, normal cleanup; pre-existing single-step jobs are upgraded in place), and a separate **`SQLFlightRecorder Purge` daily backstop job** (02:30 server time) protects retention when the collector job is disabled, changed, or failing. `Uninstall` removes both when this tool created them; `@WhatIf` previews both. Agent creation remains opt-in (D-005 unchanged) and capability-gated: on Azure SQL Database/Express the Install result states that both `Collect` and `Purge @WhatIf = 0` must be scheduled externally. (b) **Retention guardrails:** `Configure` accepts `SnapshotRetentionDays` 1–31 and `RunLogRetentionDays` 1–124 only; out-of-range values are refused without updating `FR_Config`. SQLFR is an operational diagnostic recorder, not a long-term warehouse. (c) **Index hardening** (`SchemaVersion` 0.5.0, index-only DDL, forward-only per D-038): nonclustered `SnapshotId` indexes on every `FR_Snapshot` child, `RunId` indexes on `FR_Snapshot`/`FR_RunLogStep`, and `QueryHash` on `FR_Request`, so purge FK verification and window-first report reads stop scanning child tables. (d) **Status result set 7** (additive per D-023) reports retention/purge health; new tunable `RepositoryTableWarnRows` (default 5,000,000). (e) **Report reads are window-first** with a deduplicated, `@MaxFindings`-capped schema-activity timeline and a Coverage warning when capped; output contracts (D-067/D-071/D-085) and rule behavior unchanged, so `RulePackVersion` stays 0.4.3. | A real multi-week deployment without scheduled purge grew `FR_SchemaActivity` past 35M rows and `FR_QueryStoreTopN` past 12M; `Report` ran for hours. A diagnostic tool that silently becomes its own performance problem is a deployment blocker. Purge existed but nothing enforced it; the FK-check scans made purge itself unusably slow once the tables had grown — exactly when it was most needed. | Collect pays for maintaining one extra nonclustered index per child insert (two on `FR_Request`), and the first Install over a grown repository pays a one-time index build. The collector job now reports failure if its purge step fails, which is noisier — and intended. Retention above 31/124 days is no longer expressible; users who need longer diagnostic history must export it. The 02:30 default purge time is a judgment call, adjustable in msdb like any job schedule. |
+
+---
+
 ## Summary
 
-- **Total decisions:** 198 (D-001 through D-198)
-- **Locked:** 191
+- **Total decisions:** 199 (D-001 through D-199)
+- **Locked:** 192
 - **Tentative:** 1 (D-181)
 - **Deferred items inside otherwise-locked decisions:** 0 — the last one (D-180 `@TimeZone`) was discharged by D-198.
 - **Deferred:** 0 — the last one (D-182 demo data) was discharged by D-198. Nothing in this log is now pending a future release.

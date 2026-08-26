@@ -335,6 +335,23 @@ BEGIN
        SELECT *
        FROM dbo.FR_Config
        WHERE ConfigKey = N''DoesNotExist'';');
+
+    INSERT #Cases (Scenario, Expected, SqlText)
+    VALUES
+    (N'Configure retention out of range', N'Clean refusal (SnapshotRetentionDays allows 1-31, RunLogRetentionDays 1-124); FR_Config is not updated.',
+     N'EXEC dbo.sp_SQLFlightRecorder
+           @Mode = N''Configure'',
+           @ConfigKey = N''SnapshotRetentionDays'',
+           @ConfigValue = N''365'';
+
+       EXEC dbo.sp_SQLFlightRecorder
+           @Mode = N''Configure'',
+           @ConfigKey = N''RunLogRetentionDays'',
+           @ConfigValue = N''0'';
+
+       SELECT ConfigKey, ConfigValue, ModifiedUtc
+       FROM dbo.FR_Config
+       WHERE ConfigKey IN (N''SnapshotRetentionDays'', N''RunLogRetentionDays'');');
 END
 ELSE
 BEGIN
@@ -364,20 +381,29 @@ VALUES
 
 /*------------------------------------------------------------------------------
 Scenario: Agent job opt-in.
-Expected: Creates or cleanly skips Agent job. Agent test is off by default.
+Expected: Creates or updates BOTH jobs (collector with Collect + Purge steps,
+plus the daily purge backstop), or a clean unsupported response. Re-running
+must not duplicate jobs, steps, or schedules. Agent test is off by default.
 ------------------------------------------------------------------------------*/
 IF @HasCreateAgentJob = 1
 BEGIN
     INSERT #Cases (Scenario, Expected, SqlText, IsAgent)
     VALUES
-    (N'Install with @CreateAgentJob = 1', N'Creates SQL Agent job or clean unsupported/permission response.',
+    (N'Install with @CreateAgentJob = 1', N'Creates/updates the SQLFlightRecorder Collect job (Collect + Purge steps) and the SQLFlightRecorder Purge daily job, or a clean unsupported/permission response. Idempotent on re-run.',
      N'EXEC dbo.sp_SQLFlightRecorder @Mode = N''Install'', @CreateAgentJob = 1;
+       EXEC dbo.sp_SQLFlightRecorder @Mode = N''Install'', @CreateAgentJob = 1;
 
        IF DB_ID(N''msdb'') IS NOT NULL
        BEGIN
            SELECT name, enabled, date_created, date_modified
            FROM msdb.dbo.sysjobs
            WHERE name LIKE N''%SQLFlightRecorder%'';
+
+           SELECT j.name AS JobName, st.step_id, st.step_name, st.on_success_action
+           FROM msdb.dbo.sysjobsteps AS st
+           JOIN msdb.dbo.sysjobs AS j ON j.job_id = st.job_id
+           WHERE j.name LIKE N''%SQLFlightRecorder%''
+           ORDER BY j.name, st.step_id;
        END;', 1);
 END
 ELSE

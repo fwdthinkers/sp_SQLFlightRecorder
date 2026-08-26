@@ -42,6 +42,16 @@ the `FR_*` repository or a mode result set.
 | Purge returns `Status=PartialSuccess` with an `Errors` column | A table's batch loop hit an error (D-139); other tables still purged. | Read the `Errors` column; re-run Purge (it is resumable batch-by-batch). |
 | Large repository, Purge seems to "not finish" | Batched 5,000/loop with a 250 ms pause (D-139); catches up over multiple runs. | Let scheduled Purge run repeatedly; it will converge. No `TRUNCATE`/shrink is used by design. |
 
+### Repository grew huge / Report is slow or does not return
+
+| Symptom | Likely cause | What to do |
+|---|---|---|
+| `Report` runs for a very long time; `FR_SchemaActivity` / `FR_QueryStoreTopN` show millions of rows in `Status` result set 5 | Purge was never scheduled or stopped running, so `FR_*` data accumulated far past retention (D-199). | Check `Status` result set 7 (retention health). Preview with `Purge @WhatIf=1`, then run `Purge @WhatIf=0` repeatedly (or let the daily job catch up) — it deletes in 5,000-row batches and converges. Narrow the `Report` window (`@StartTime`/`@EndTime`) in the meantime. |
+| `Status` result set 7 shows `OldestSnapshotVsRetention=Warning` or `PurgeKeepingUp=Warning` | Purge is not running (job disabled/missing, external schedule dropped) or cannot keep up yet. | On Agent platforms, re-run `Install @CreateAgentJob=1` to restore the post-collect Purge step and the daily purge job. Elsewhere, schedule `Purge @WhatIf=0` daily. |
+| `CollectorJobPurgeStep=Warning` or `DailyPurgeJob=Warning` in result set 7 | The collector job predates v1.1 (no Purge step) or the daily backstop job was removed. | `EXEC dbo.sp_SQLFlightRecorder @Mode=N'Install', @CreateAgentJob=1;` — idempotent; it adds only what is missing. |
+| A Coverage finding says "Schema-activity timeline evidence was capped" | More distinct schema/stats events in the window than `@MaxFindings` (evidence cap, D-199). | Narrow the report window, raise `@MaxFindings` (max 2000), or reduce retention. Full detail stays in `dbo.FR_SchemaActivity`. |
+| First `Install` over a large old repository takes minutes | v1.1 creates purge/report-support indexes on existing `FR_*` tables (one-time, D-199). | Let it finish; subsequent installs are instant. Purge and Report are dramatically cheaper afterwards. |
+
 ### Report shows no findings (or only one Informational row)
 
 | Symptom | Likely cause | What to do |

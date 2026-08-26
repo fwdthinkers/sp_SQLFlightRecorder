@@ -227,7 +227,7 @@ EXEC dbo.sp_SQLFlightRecorder
 | `@Debug` | `0` | `Collect`, internal/debug paths | Enables debug behavior. Useful for troubleshooting collector readiness. |
 | `@ConfigKey` | `NULL` | `Configure` | Configuration key to update. If omitted, returns current configuration. |
 | `@ConfigValue` | `NULL` | `Configure` | New value for `@ConfigKey`. |
-| `@CreateAgentJob` | `0` | `Install` | Explicit opt-in to create a SQL Agent job for scheduled collection. |
+| `@CreateAgentJob` | `0` | `Install` | Explicit opt-in to create/update the SQL Agent jobs: the per-minute collector job (Collect step, then a Purge cleanup step) and a daily purge backstop job. |
 
 ### Common `@Mode` values
 
@@ -257,9 +257,12 @@ EXEC dbo.sp_SQLFlightRecorder
     @Mode = N'Install';
 ```
 
-### Install and create the SQL Agent job
+### Install and create the SQL Agent jobs
 
 Only use this if SQL Agent is available and you want scheduled collection.
+This creates or updates **two** jobs, idempotently: `SQLFlightRecorder Collect`
+(every minute: a Collect step, then a Purge cleanup step) and
+`SQLFlightRecorder Purge` (a daily retention backstop at 02:30 server time).
 
 ```sql
 EXEC dbo.sp_SQLFlightRecorder
@@ -467,15 +470,19 @@ DROP PROCEDURE dbo.sp_SQLFlightRecorder;
 
 ## Scheduling collection
 
-For useful history, run `Collect` on a schedule.
+For useful history, run `Collect` on a schedule — and **always schedule `Purge`
+too**. Purge is mandatory operational maintenance: without it the `FR_*`
+repository grows without bound and `Report` slows down or stops returning
+quickly.
 
 Typical cadence:
 
 ```text
-Every 1 minute
+Collect: every 1 minute
+Purge:   after each collect (cleanup step) plus a daily backstop
 ```
 
-If your build supports SQL Agent job creation, create it explicitly:
+If your build supports SQL Agent job creation, create both jobs explicitly:
 
 ```sql
 EXEC dbo.sp_SQLFlightRecorder
@@ -483,7 +490,15 @@ EXEC dbo.sp_SQLFlightRecorder
     @CreateAgentJob = 1;
 ```
 
-Verify the job:
+This ensures (idempotently — re-running never duplicates jobs, steps, or
+schedules):
+
+- **`SQLFlightRecorder Collect`** — every minute; step 1 runs `Collect`,
+  step 2 runs `Purge` (`@WhatIf = 0`) as normal cleanup.
+- **`SQLFlightRecorder Purge`** — daily at 02:30 server time; a retention
+  backstop in case the collector job is disabled, changed, or failing.
+
+Verify the jobs:
 
 ```sql
 SELECT 
@@ -492,18 +507,23 @@ SELECT
     date_created,
     date_modified
 FROM msdb.dbo.sysjobs
-WHERE name LIKE N'%sp_SQLFlightRecorder%';
+WHERE name LIKE N'%SQLFlightRecorder%';
 ```
 
-If SQL Agent is unavailable, schedule collection externally with `sqlcmd`, a DBA automation tool, Windows Task Scheduler, cron, or your preferred job runner.
-
-> **Platform-specific recipes** — cron + `sqlcmd` on Linux, a SQL Agent job step on Azure SQL Managed Instance, and Elastic Jobs or an external scheduler on Azure SQL Database (which has no SQL Agent and no msdb): see **[docs/operations/scheduling.md](docs/operations/scheduling.md)**.
-
-Example:
+If SQL Agent is unavailable, schedule externally with `sqlcmd`, a DBA
+automation tool, Windows Task Scheduler, cron, or your preferred job runner —
+and schedule **both** statements:
 
 ```bash
 sqlcmd -S MyServer -d MyDatabase -E -Q "EXEC dbo.sp_SQLFlightRecorder @Mode = N'Collect';"
+sqlcmd -S MyServer -d MyDatabase -E -Q "EXEC dbo.sp_SQLFlightRecorder @Mode = N'Purge', @WhatIf = 0;"
 ```
+
+> **Platform-specific recipes** — cron + `sqlcmd` on Linux, a SQL Agent job step
+> on Azure SQL Managed Instance, and Elastic Jobs or an external scheduler on
+> Azure SQL Database (which has no SQL Agent and no msdb — it must schedule both
+> `Collect` and `Purge` externally): see
+> **[docs/operations/scheduling.md](docs/operations/scheduling.md)**.
 
 ---
 
@@ -521,9 +541,10 @@ Common keys may include:
 |---|---|
 | `SchemaVersion` | Installed repository schema version |
 | `SnapshotIntervalSeconds` | Intended collection interval |
-| `SnapshotRetentionDays` | Snapshot data retention |
-| `RunLogRetentionDays` | Run-log retention |
+| `SnapshotRetentionDays` | Snapshot data retention (allowed 1–31) |
+| `RunLogRetentionDays` | Run-log retention (allowed 1–124) |
 | `MaxRowsPerCollector` | Per-collector row cap |
+| `RepositoryTableWarnRows` | Row threshold for the Status size warning |
 | `DisabledRules` | Semicolon-delimited disabled rule list |
 
 View configuration:
@@ -547,6 +568,12 @@ SnapshotRetentionDays = 7
 RunLogRetentionDays   = 28
 ```
 
+Retention is validated: `SnapshotRetentionDays` accepts 1–31 and
+`RunLogRetentionDays` accepts 1–124; out-of-range values are refused.
+SQLFlightRecorder is an operational diagnostic recorder, not a long-term
+warehouse — longer retention grows the repository and raises report cost.
+Export data you need to keep longer.
+
 Always preview purge before deleting:
 
 ```sql
@@ -555,9 +582,26 @@ EXEC dbo.sp_SQLFlightRecorder
     @WhatIf = 1;
 ```
 
+Then run the real purge (this is what the Agent jobs run for you):
+
+```sql
+EXEC dbo.sp_SQLFlightRecorder
+    @Mode = N'Purge',
+    @WhatIf = 0;
+```
+
+`Status` includes a retention-health result set that warns when the oldest
+snapshot exceeds retention, purge is not keeping up, a purge job/step is
+missing on Agent-capable platforms, or an `FR_*` table crosses
+`RepositoryTableWarnRows`.
+
 ---
 
 ## Uninstall
+
+Uninstall removes the `FR_*` repository objects and both SQL Agent jobs
+(`SQLFlightRecorder Collect` and `SQLFlightRecorder Purge`) if this tool
+created them. It is idempotent and does not fail if a job is already gone.
 
 Preview uninstall first:
 

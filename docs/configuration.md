@@ -17,11 +17,20 @@ hand. Multi-value keys are semicolon-delimited (D-026). Values marked
 ## Retention & cadence
 | Key | Default | Tunable | Purpose |
 |---|---|---|---|
-| `SchemaVersion` | 0.4.0 | Internal | Forward-only migration marker (D-038). |
+| `SchemaVersion` | 0.5.0 | Internal | Forward-only migration marker (D-038). |
 | `SnapshotIntervalSeconds` | 60 | Tunable | Intended collection cadence (D-042); also drives gap grading (D-066). |
-| `SnapshotRetentionDays` | 7 | Tunable | Snapshot data retention. |
-| `RunLogRetentionDays` | 28 | Tunable | Run-log retention (4× snapshot, D-035). |
+| `SnapshotRetentionDays` | 7 | Tunable | Snapshot data retention. **Allowed range 1–31** (D-199); out-of-range values are refused. |
+| `RunLogRetentionDays` | 28 | Tunable | Run-log retention (4× snapshot, D-035). **Allowed range 1–124** (D-199); out-of-range values are refused. |
 | `MaxRowsPerCollector` | 50 | Tunable | Per-collector row cap (D-181). |
+| `RepositoryTableWarnRows` | 5000000 | Tunable | Row count per `FR_*` table that raises a `Status` retention-health warning (D-199). |
+
+> **Retention is a guardrail, not a warehouse setting (D-199).** SQLFR is an
+> operational diagnostic recorder. Longer retention grows the `FR_*`
+> repository and raises Report cost; if you must keep diagnostic history
+> longer than the allowed ranges, export it elsewhere. **Purge is mandatory
+> operational maintenance** — schedule it (Agent installs get a post-collect
+> Purge step and a daily purge job automatically; see
+> [operations/scheduling.md](operations/scheduling.md)).
 
 ## Rule thresholds
 | Key | Default | Tunable | Drives |
@@ -61,9 +70,12 @@ hand. Multi-value keys are semicolon-delimited (D-026). Values marked
 | `TimeZoneName` | (empty) | Tunable | Windows time-zone id for `LOCAL` display (SQL 2016+); empty = server offset. |
 
 ## Internal (do not hand-edit)
-`AgentJobName`, `AgentJobCreatedBySQLFlightRecorder`, `AgentJobHighWaterInstanceId`,
+`AgentJobName`, `AgentJobCreatedBySQLFlightRecorder`, `PurgeAgentJobName`,
+`PurgeAgentJobCreatedBySQLFlightRecorder`, `AgentJobHighWaterInstanceId`,
 `BackupHighWaterBackupSetId`, `ErrorLogHighWaterUtc`, `MaintenanceJobNamePatterns`
-— install metadata and delta high-water markers maintained by the tool.
+— install metadata and delta high-water markers maintained by the tool. The
+`PurgeAgentJob*` keys record the daily purge backstop job that
+`Install @CreateAgentJob = 1` creates (D-199), so Uninstall knows to remove it.
 
 ---
 *Unknown keys and non-integer values for integer keys are refused by Configure.

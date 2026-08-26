@@ -7,8 +7,10 @@
 # artifact over it, and asserts the upgrade is non-destructive:
 #
 #   * install-over succeeds (idempotent, D-038);
-#   * SchemaVersion stays 0.4.0 before and after — i.e. NO persisted DDL
-#     migration is required;
+#   * SchemaVersion advances to the current artifact's version (v1.1 applies
+#     index-only DDL, D-199) — measured against a fresh reference install so
+#     this harness never hard-codes a version string;
+#   * the v1.1 retention/purge-support indexes exist after the upgrade;
 #   * pre-existing FR_* tables are all still present (none dropped);
 #   * pre-existing rows survive (FR_Snapshot count does not shrink);
 #   * every config key the current artifact seeds is present afterwards
@@ -80,7 +82,8 @@ docker cp "${CURRENT_HOST}" "${C}:/tmp/current.sql" >/dev/null
 db "FRUP_REF" -i /tmp/current.sql >/dev/null 2>&1
 db "FRUP_REF" -Q "EXEC dbo.sp_SQLFlightRecorder @Mode=N'Install';" >/dev/null 2>&1
 config_keys "FRUP_REF" > /tmp/ref_keys.txt
-echo "Reference: a fresh current install seeds $(wc -l < /tmp/ref_keys.txt | tr -d ' ') config keys."
+sv_ref=$(scalar "FRUP_REF" "SELECT ConfigValue FROM dbo.FR_Config WHERE ConfigKey=N'SchemaVersion';")
+echo "Reference: a fresh current install seeds $(wc -l < /tmp/ref_keys.txt | tr -d ' ') config keys; SchemaVersion=${sv_ref}."
 
 # Resolve an old artifact into $1 (out path). Echoes:
 #   AVAILABLE    extracted from the tag (or a manual artifacts/ file)
@@ -138,6 +141,7 @@ for v in ${SOURCES}; do
   sv_post=$(scalar "${DBN}" "SELECT ConfigValue FROM dbo.FR_Config WHERE ConfigKey=N'SchemaVersion';")
   snap_post=$(scalar "${DBN}" "SELECT COUNT(*) FROM dbo.FR_Snapshot;")
   tables_post=$(scalar "${DBN}" "SELECT COUNT(*) FROM sys.tables WHERE name LIKE N'FR[_]%';")
+  idx_post=$(scalar "${DBN}" "SELECT COUNT(*) FROM sys.indexes WHERE name LIKE N'IX[_]FR[_]%[_]SnapshotId';")
 
   # Report must run against the upgraded repository.
   rep=$(db "${DBN}" -h -1 -W -Q "SET NOCOUNT ON; EXEC dbo.sp_SQLFlightRecorder @Mode=N'Report';" | tr -d '\r')
@@ -148,10 +152,10 @@ for v in ${SOURCES}; do
   comm -23 /tmp/ref_keys.txt /tmp/keys_post.txt | sed 's/^/    MISSING KEY after upgrade: /'
   missing=$(comm -23 /tmp/ref_keys.txt /tmp/keys_post.txt | grep -c . || true)
 
-  echo "    upgraded: install=${instok} SchemaVersion=${sv_post} FR_tables=${tables_post} FR_Snapshot_rows=${snap_post} report=${repok} missing_keys=${missing}"
+  echo "    upgraded: install=${instok} SchemaVersion=${sv_post} FR_tables=${tables_post} FR_Snapshot_rows=${snap_post} snapshotid_indexes=${idx_post} report=${repok} missing_keys=${missing}"
   assert    "v${v}: install-over succeeds"                 "${instok}"  "Success"
-  assert    "v${v}: SchemaVersion stays 0.4.0 (no DDL migration)" "${sv_post}" "0.4.0"
-  assert    "v${v}: SchemaVersion unchanged by upgrade"    "${sv_post}" "${sv_pre}"
+  assert    "v${v}: SchemaVersion advances to current (index DDL, D-199)" "${sv_post}" "${sv_ref}"
+  assert_ge "v${v}: v1.1 SnapshotId indexes created"       "${idx_post}" "20"
   assert_ge "v${v}: FR_* tables not dropped"               "${tables_post}" "${tables_pre}"
   assert_ge "v${v}: FR_Snapshot rows preserved"            "${snap_post}"   "${snap_pre}"
   assert    "v${v}: Report runs on upgraded repo"          "${repok}"   "ok"

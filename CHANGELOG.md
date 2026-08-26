@@ -9,21 +9,103 @@ D-171 (major = contract break; minor = additive; patch = fixes).
 
 ## [Unreleased]
 
-Documentation only. The released `1.0.0` artifact is unchanged.
+Retention and repository-performance hardening (**D-199**). Root cause
+addressed: when purge was not scheduled or not enforced, `FR_*` repository
+tables grew without bound in real deployments (35M+ rows observed in
+`FR_SchemaActivity`, 12M+ in `FR_QueryStoreTopN`) and `Report` ran for hours.
+SQLFR must not silently become its own performance problem, so retention is
+now operationally safe by default. `ToolVersion` is `1.1.0`;
+`SchemaVersion` advances to `0.5.0` (index-only DDL, forward-only per D-038);
+`RulePackVersion` stays `0.4.3` (no rule logic or catalog change — the Report
+changes below are access-path and evidence-cap work, not rule behavior).
 
 ### Added
 
+- **Post-collect purge step in the collector job** (`@Mode = Install`,
+  `@CreateAgentJob = 1`): the `SQLFlightRecorder Collect` Agent job now has two
+  steps — `Collect`, then `Purge` (`@WhatIf = 0`) as normal cleanup. Existing
+  single-step jobs from earlier releases are upgraded in place (the step is
+  added and the Collect step is pointed at it). Job, step, and schedule
+  creation are idempotent: re-running Install never duplicates any of them.
+- **Daily purge backstop job** (`@Mode = Install`, `@CreateAgentJob = 1`): a
+  second Agent job, `SQLFlightRecorder Purge`, runs
+  `EXEC dbo.sp_SQLFlightRecorder @Mode = N'Purge', @WhatIf = 0;` daily at
+  02:30 server time, protecting retention when the collector job is disabled,
+  changed, or failing before its cleanup step. Recorded in `FR_Config` as
+  `PurgeAgentJobName` / `PurgeAgentJobCreatedBySQLFlightRecorder`.
+- **Retention/purge-support indexes** (`@Mode = Install`; the `SchemaVersion`
+  `0.5.0` DDL): a nonclustered `SnapshotId` index on every `FR_Snapshot` child
+  table, `IX_FR_Snapshot_RunId`, `IX_FR_RunLogStep_RunId`, and
+  `IX_FR_Request_QueryHash`. Purge deletes verify child foreign keys per
+  deleted `FR_Snapshot` row; without these indexes each check was a full
+  child-table scan, which is what made purge (and run-log cleanup, and
+  `FR_QueryText` orphan cleanup) unusable on grown repositories. Created
+  idempotently on fresh installs and upgrades — the first Install over a large
+  old repository pays a one-time index build.
+- **Retention guardrails** (`@Mode = Configure`): `SnapshotRetentionDays` now
+  accepts 1–31 and `RunLogRetentionDays` 1–124; out-of-range values return a
+  clean `InvalidConfigValue` error and `FR_Config` is not updated. New tunable
+  `RepositoryTableWarnRows` (default 5,000,000) drives the Status size warning.
+- **Status retention-health result set** (`@Mode = Status`; additive seventh
+  result set `CheckName, CheckStatus, Detail` per D-023): warns when the
+  oldest snapshot exceeds `SnapshotRetentionDays`, when purge appears not to
+  be keeping up (oldest data > retention + 2 days, with last-purge evidence),
+  when the collector job lacks a Purge step, when the daily purge job is
+  missing on Agent-capable platforms, and when an `FR_*` table exceeds
+  `RepositoryTableWarnRows`. msdb job checks are capability-gated and
+  permission-safe (`Unknown`, never an error).
+- **Schema-activity evidence cap warning** (`@Mode = Report`, RuleId
+  `FR_R0026_CoverageAndCapabilitySummary`): when the window holds more
+  distinct schema/stats events than `@MaxFindings`, the timeline is capped and
+  one Informational Coverage finding says so and recommends narrowing the
+  window or reducing retention.
 - **Scheduling guidance by platform** — `docs/operations/scheduling.md`. Which
   scheduler to use is a capability question, not a preference: cron + `sqlcmd` on
   Linux; a SQL Agent job step on Azure SQL Managed Instance (`HasAgent = 1`);
   Azure Elastic Jobs or an external scheduler on Azure SQL Database, which has
   neither Agent nor msdb. Includes copy-paste snippets and the all-platform
   defaults (leave `CollectErrorLog` and `EnableBufferPoolCollector` off unless
-  needed, periodic `Report`, occasional `Purge @WhatIf = 1`, UTC, and a
-  documented uninstall path).
+  needed, periodic `Report`, scheduled `Purge`, UTC, and a documented uninstall
+  path).
 
 ### Changed
 
+- **Uninstall removes both Agent jobs** (`@Mode = Uninstall`): the collector
+  job and the daily purge job are dropped when this tool created them;
+  `@WhatIf = 1` previews both; already-missing jobs never fail the uninstall;
+  `@PreserveRunLog` semantics are unchanged.
+- **Install on platforms without SQL Agent** (`@Mode = Install`,
+  `@CreateAgentJob = 1` on Azure SQL Database / Express): no job is attempted;
+  the Install result now states that BOTH
+  `EXEC dbo.sp_SQLFlightRecorder @Mode = N'Collect';` and
+  `EXEC dbo.sp_SQLFlightRecorder @Mode = N'Purge', @WhatIf = 0;` must be
+  scheduled externally.
+- **Report window-first reads** (`@Mode = Report`; performance only, output
+  contract and rule behavior unchanged): the baseline builder, restart
+  detection, FR_R0005's corroborating counter read, FR_R0021–FR_R0024's
+  window scans, and the v0.4 timeline events now carry child-side
+  `SnapshotUtc` range predicates (the child value always equals its parent's),
+  so every read rides the clustered index instead of joining through the
+  parent alone. The schema-activity timeline is rewritten window-first with
+  bounded `SnapshotUtc` access, deduplicated per distinct event (the collector
+  re-captures each event on every snapshot in its 7-day lookback; the timeline
+  previously emitted those duplicates), and capped at `@MaxFindings` with the
+  Coverage warning above.
+- **Repository footprint row counts** (`@Mode = Status` result set 5 and
+  `FR_v_RepositoryFootprint`): `RowCount` now counts heap/clustered rows only
+  (`index_id IN (0, 1)`), so the new nonclustered indexes do not inflate it;
+  `UsedKb` still includes index pages.
+- Upgrade harness (`tests/upgrade/run-upgrade.sh`) now asserts that
+  `SchemaVersion` advances to the current artifact's value (measured from a
+  fresh reference install, not a hard-coded string) and that the new
+  `SnapshotId` indexes exist after upgrade.
+- **Purge is documented as mandatory operational maintenance** across README,
+  the user guide, `docs/configuration.md` (retention ranges and the
+  not-a-warehouse note), `docs/operations/scheduling.md` (per-platform purge
+  scheduling, including Azure SQL Database external scheduling of both
+  statements), `docs/operations/troubleshooting.md` (huge-repository /
+  slow-Report recovery), and the regenerated mode pages for Install,
+  Uninstall, Status, Configure, and Purge.
 - **Azure SQL Managed Instance and Azure SQL Database are certified as
   supported** (**D-196**), both **Verified** by manual Tier-2 attestation against
   `v1.0.0`. MI ran the full collector set with only `AlwaysOnState` skipped;
