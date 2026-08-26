@@ -22,7 +22,7 @@
 --       implemented as the procedure evolves through the v0.1 roadmap
 --
 -- Tool-Version:   1.1.0
--- Build-Date-Utc: 2026-08-25
+-- Build-Date-Utc: 2026-08-26
 -- Design:         docs/design.md
 -- Decisions:      docs/decisions.md
 --
@@ -86,7 +86,7 @@ BEGIN
     -- Constants and version info
     -- =========================================================================
     DECLARE @ToolVersion             nvarchar(30)  = N'1.1.0';
-    DECLARE @BuildDateUtc            datetime2(3)  = CONVERT(datetime2(3), '2026-08-25T00:00:00');
+    DECLARE @BuildDateUtc            datetime2(3)  = CONVERT(datetime2(3), '2026-08-26T00:00:00');
     -- SchemaVersion 0.5.0: v1.1.0 adds retention/purge-support indexes on the
     -- existing FR_* tables (D-199). Index-only DDL; no table shape changes.
     -- Forward-only (D-038): Install creates the indexes on upgraded
@@ -5099,7 +5099,8 @@ ORDER BY ag.name, ar.replica_server_name, drs.database_id;';
                     -- not row count (so D-069 is preserved): a spike in a
                     -- hard-coded critical wait type (D-093) is High; any other
                     -- wait spike is Medium. This uses the hard-coded list, not
-                    -- the CriticalWaitTypes config key (honored from v1.1, D-105).
+                    -- the CriticalWaitTypes config key (honoring deferred to a
+                    -- later 1.x minor; D-105, re-aimed by D-200).
                     CASE WHEN WaitType LIKE N'PAGEIOLATCH[_]%'
                               OR WaitType = N'WRITELOG'
                               OR WaitType = N'RESOURCE_SEMAPHORE'

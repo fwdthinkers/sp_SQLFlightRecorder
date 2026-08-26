@@ -68,7 +68,7 @@ dbo.FR_QueryText
 dbo.FR_Rules
 ```
 
-Some builds may also create a SQL Agent job if you explicitly request scheduled collection.
+Some builds may also create two SQL Agent jobs if you explicitly request scheduled collection: a collector job (Collect, then Purge as cleanup) and a daily purge backstop job.
 
 SQLFlightRecorder is intended to be installed in a **user database**, not directly in `master`, unless your version explicitly supports and documents a master-install option.
 
@@ -328,6 +328,21 @@ Expected information may include:
 4. Repository table sizes
 5. Run-log summary
 6. Capability/version/permission information
+7. Retention and purge health checks (`CheckName, CheckStatus, Detail`)
+
+How to read the retention-health checks:
+
+- `OK` — nothing to do.
+- `Warning` — act on the `Detail` text: typically schedule or re-enable Purge,
+  re-run `Install @CreateAgentJob = 1` to restore a missing job/step, or lower
+  retention. Warnings fire when the oldest snapshot exceeds
+  `SnapshotRetentionDays`, purge is not keeping up, the collector job lacks a
+  Purge step, the daily purge job is missing, or an `FR_*` table exceeds
+  `RepositoryTableWarnRows`.
+- `NotApplicable` — the check does not apply here (for example, no SQL Agent
+  on this platform; schedule Collect and Purge externally instead).
+- `Unknown` — msdb job metadata could not be read (usually permissions); the
+  jobs may be fine, but Status cannot confirm it.
 
 Status should be safe to run at any time.
 
@@ -1538,8 +1553,9 @@ Before using SQLFlightRecorder on an important system, verify:
 - [ ] Known config key update works.
 - [ ] Unknown config key is refused.
 - [ ] `Purge @WhatIf = 1` previews without deleting.
-- [ ] SQL Agent job creation works, if used.
-- [ ] SQL Agent job runs against the correct database, if used.
+- [ ] SQL Agent job creation works, if used (collector job with Collect + Purge steps, plus the daily purge job).
+- [ ] Re-running Install with `@CreateAgentJob = 1` does not duplicate jobs, steps, or schedules.
+- [ ] SQL Agent jobs run against the correct database, if used.
 - [ ] `Uninstall @WhatIf = 1` previews objects.
 - [ ] `Uninstall` removes repository objects.
 - [ ] `Uninstall @PreserveRunLog = 1` works, if used.

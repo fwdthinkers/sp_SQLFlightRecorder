@@ -14,7 +14,7 @@ Read-only; reads only `FR_*`, allow-listed catalogs, and (where SQL Agent exists
 
 ## Result set(s)
 
-Seven result sets: installation summary; configuration; rule catalog; recent runs; repository size; capability snapshot; retention and purge health (`CheckName, CheckStatus, Detail` — warns when the oldest snapshot exceeds retention, purge is not keeping up, the collector job lacks a Purge step, the daily purge job is missing, or an `FR_*` table exceeds `RepositoryTableWarnRows`).
+Seven result sets: installation summary; configuration; rule catalog; recent runs; repository size; capability snapshot; retention and purge health (`CheckName, CheckStatus, Detail` — warns when the oldest snapshot exceeds retention, purge is not keeping up, the collector job lacks a Purge step, the daily purge job is missing, or an `FR_*` table exceeds `RepositoryTableWarnRows`). Reading the health checks: `OK` needs nothing; `Warning` names the fix in `Detail` (schedule or repair Purge, re-run Install `@CreateAgentJob=1`, or lower retention); `NotApplicable` means the check does not apply here (e.g., no SQL Agent — schedule Collect and Purge externally); `Unknown` means msdb job metadata could not be read (permissions).
 
 ## Examples
 

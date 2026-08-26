@@ -49,8 +49,12 @@ between either and on-prem. They were attested separately, and their capability
 surfaces differ materially — MI reports `HasMsdb 1` / `HasAgent 1`, Azure SQL DB
 reports `0` for both. Evidence for one says nothing about the other.
 
-Scheduling differs by platform because SQL Agent availability differs — see
-[../operations/scheduling.md](../operations/scheduling.md).
+Scheduling differs by platform because SQL Agent availability differs — SQL
+Server and Azure SQL Managed Instance can use the built-in Agent jobs
+(`@CreateAgentJob = 1` creates the collector job with its post-collect Purge
+step plus the daily purge backstop); Azure SQL Database, Express, and other
+no-Agent platforms must schedule **both** `Collect` and `Purge` externally.
+See [../operations/scheduling.md](../operations/scheduling.md).
 
 Older than 2012 is out of scope entirely, as are Synapse, Fabric, Big Data
 Clusters, and Stretch (D-108).
@@ -82,8 +86,10 @@ can regress silently until someone runs it again.
   `SchemaActivity` failure.
 - SQL Server 2017–2025 on **Windows** — supported and expected to behave as the
   Linux rows do (identical code path), but no manual attestation is on file yet.
-- `CriticalWaitTypes` config honoring is deferred to **v1.1** (D-105); FR_R0003
-  uses the hard-coded critical-wait list until then.
+- `CriticalWaitTypes` config honoring is deferred to **a later 1.x minor**
+  (D-105, target re-aimed by D-200 — v1.1.0 was the retention hardening
+  release and changed no rule logic); FR_R0003 uses the hard-coded
+  critical-wait list until then.
 - Plan-level analysis is **not** experimental-pending — it is permanently out of
   scope as plan-XML shredding (D-015/046/082/136).
 

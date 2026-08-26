@@ -9,15 +9,21 @@ D-171 (major = contract break; minor = additive; patch = fixes).
 
 ## [Unreleased]
 
-Retention and repository-performance hardening (**D-199**). Root cause
+Nothing yet.
+
+## [1.1.0] - 2026-08-26
+
+**Retention and repository-performance hardening** (**D-199**). Root cause
 addressed: when purge was not scheduled or not enforced, `FR_*` repository
 tables grew without bound in real deployments (35M+ rows observed in
 `FR_SchemaActivity`, 12M+ in `FR_QueryStoreTopN`) and `Report` ran for hours.
 SQLFR must not silently become its own performance problem, so retention is
-now operationally safe by default. `ToolVersion` is `1.1.0`;
-`SchemaVersion` advances to `0.5.0` (index-only DDL, forward-only per D-038);
-`RulePackVersion` stays `0.4.3` (no rule logic or catalog change — the Report
-changes below are access-path and evidence-cap work, not rule behavior).
+now operationally safe by default. `ToolVersion` is `1.1.0` (build date
+2026-08-26); `SchemaVersion` advances to `0.5.0` (index-only DDL, forward-only
+per D-038); `RulePackVersion` stays `0.4.3` (no rule logic or catalog change —
+the Report changes below are access-path and evidence-cap work, not rule
+behavior). Upgrades from `1.0.0` are in place: the first Install over an
+existing repository builds the new indexes (one-time cost on large tables).
 
 ### Added
 
@@ -95,6 +101,11 @@ changes below are access-path and evidence-cap work, not rule behavior).
   `FR_v_RepositoryFootprint`): `RowCount` now counts heap/clustered rows only
   (`index_id IN (0, 1)`), so the new nonclustered indexes do not inflate it;
   `UsedKb` still includes index pages.
+- **`CriticalWaitTypes` honoring is not part of this release** (RuleId
+  `FR_R0003_TopWaitTypeSpike`): D-105 originally targeted "v1.1"; 1.1.0 ships
+  retention hardening only, so FR_R0003 still uses the hard-coded D-093 list
+  and the honoring moves to a later 1.x minor (**D-200**). The config key
+  remains defined and settable, exactly as in v1.0.0.
 - Upgrade harness (`tests/upgrade/run-upgrade.sh`) now asserts that
   `SchemaVersion` advances to the current artifact's value (measured from a
   fresh reference install, not a hard-coded string) and that the new

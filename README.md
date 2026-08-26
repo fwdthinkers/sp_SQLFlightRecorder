@@ -2,7 +2,7 @@
 
 **sp_SQLFlightRecorder** is a lightweight, open-source, pure T-SQL stored procedure that captures safe SQL Server diagnostic snapshots and turns them into concise incident timelines, findings, and recommendations.
 
-**Current stable release: v1.0.0** (2026-07-29) — see the [CHANGELOG](CHANGELOG.md) and [releases](https://github.com/forward-thinkers-lab/sp_SQLFlightRecorder/releases). From v1.0.0 the output contract is frozen for v1.x: rule IDs, output columns, and the forward-only schema are ["1.0 is forever" promises](docs/compatibility/support-policy.md).
+**Current stable release: v1.1.0** (2026-08-26) — see the [CHANGELOG](CHANGELOG.md) and [releases](https://github.com/forward-thinkers-lab/sp_SQLFlightRecorder/releases). v1.1.0 makes retention operationally safe by default: Agent-capable installs now create both a collector job (Collect, then Purge) and a daily purge backstop job, retention values are validated, and the repository is indexed for purge/report at scale. From v1.0.0 the output contract is frozen for v1.x: rule IDs, output columns, and the forward-only schema are ["1.0 is forever" promises](docs/compatibility/support-policy.md).
 
 It is built for the question every DBA gets at 2 AM:
 
@@ -519,8 +519,8 @@ sqlcmd -S MyServer -d MyDatabase -E -Q "EXEC dbo.sp_SQLFlightRecorder @Mode = N'
 sqlcmd -S MyServer -d MyDatabase -E -Q "EXEC dbo.sp_SQLFlightRecorder @Mode = N'Purge', @WhatIf = 0;"
 ```
 
-> **Platform-specific recipes** — cron + `sqlcmd` on Linux, a SQL Agent job step
-> on Azure SQL Managed Instance, and Elastic Jobs or an external scheduler on
+> **Platform-specific recipes** — cron + `sqlcmd` on Linux, SQL Agent jobs on
+> Azure SQL Managed Instance, and Elastic Jobs or an external scheduler on
 > Azure SQL Database (which has no SQL Agent and no msdb — it must schedule both
 > `Collect` and `Purge` externally): see
 > **[docs/operations/scheduling.md](docs/operations/scheduling.md)**.

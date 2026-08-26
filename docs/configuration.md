@@ -37,7 +37,7 @@ hand. Multi-value keys are semicolon-delimited (D-026). Values marked
 |---|---|---|---|
 | `DisabledRules` | (empty) | Tunable | Semicolon-delimited disabled RuleIds (D-099). |
 | `WaitStatsIgnoreList` | (large list) | Tunable | Wait types excluded at collect time (D-033/D-057). |
-| `CriticalWaitTypes` | PAGEIOLATCH_*;… | Tunable | **Defined but honored from v1.1** (D-105). FR_R0003 uses the hard-coded D-093 list until then. |
+| `CriticalWaitTypes` | PAGEIOLATCH_*;… | Tunable | **Defined but not yet honored** (D-105; target re-aimed at a later 1.x minor by D-200). FR_R0003 uses the hard-coded D-093 list until then. |
 | `BlockingStormSessionThreshold` | 5 | Tunable | FR_R0007 *(tentative)*. |
 | `TempdbVersionStoreWarnKb` | 5242880 | Tunable | FR_R0008 escalation *(tentative)*. |
 | `LongOpenTxnSeconds` | 60 | Tunable | FR_R0002 span threshold *(tentative)*. |
