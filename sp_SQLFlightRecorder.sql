@@ -1297,7 +1297,7 @@ CREATE TABLE dbo.FR_Rules (
             -- v1.1 (D-199): ensures TWO jobs, idempotently (an existing job is
             -- completed in place; never duplicates a job, step, or schedule):
             --   1. 'SQLFlightRecorder Collect' — step 1 Collect, step 2 Purge
-            --      (@WhatIf = 0) as post-collect cleanup, every minute.
+            --      (@WhatIf = 0) as post-collect cleanup, every 15 minutes.
             --   2. 'SQLFlightRecorder Purge' — daily 02:30 retention backstop
             --      in case the collector job is disabled, changed, or failing.
             IF @CreateAgentJob = 1
@@ -1347,7 +1347,7 @@ BEGIN
     EXEC msdb.dbo.sp_add_job
           @job_name = N''SQLFlightRecorder Collect''
         , @enabled = 1
-        , @description = N''Runs dbo.sp_SQLFlightRecorder @Mode = Collect every minute, then @Mode = Purge as post-collect cleanup.'';
+        , @description = N''Runs dbo.sp_SQLFlightRecorder @Mode = Collect every 15 minutes, then @Mode = Purge as post-collect cleanup.'';
     SELECT @collectJobId = job_id FROM msdb.dbo.sysjobs WHERE name = N''SQLFlightRecorder Collect'';
 END;
 
@@ -1390,24 +1390,24 @@ IF @collectStepId IS NOT NULL
         , @step_id = @collectStepId
         , @on_success_action = 3;
 
-IF NOT EXISTS (SELECT 1 FROM msdb.dbo.sysschedules WHERE name = N''SQLFlightRecorder Every Minute'')
+IF NOT EXISTS (SELECT 1 FROM msdb.dbo.sysschedules WHERE name = N''SQLFlightRecorder Every 15 Minutes'')
 BEGIN
     EXEC msdb.dbo.sp_add_schedule
-          @schedule_name = N''SQLFlightRecorder Every Minute''
+          @schedule_name = N''SQLFlightRecorder Every 15 Minutes''
         , @enabled = 1
         , @freq_type = 4
         , @freq_interval = 1
         , @freq_subday_type = 4
-        , @freq_subday_interval = 1;
+        , @freq_subday_interval = 15;
 END;
 
 IF NOT EXISTS (SELECT 1
                FROM msdb.dbo.sysjobschedules AS js
                INNER JOIN msdb.dbo.sysschedules AS s ON s.schedule_id = js.schedule_id
-               WHERE js.job_id = @collectJobId AND s.name = N''SQLFlightRecorder Every Minute'')
+               WHERE js.job_id = @collectJobId AND s.name = N''SQLFlightRecorder Every 15 Minutes'')
     EXEC msdb.dbo.sp_attach_schedule
           @job_id = @collectJobId
-        , @schedule_name = N''SQLFlightRecorder Every Minute'';
+        , @schedule_name = N''SQLFlightRecorder Every 15 Minutes'';
 
 IF NOT EXISTS (SELECT 1 FROM msdb.dbo.sysjobservers WHERE job_id = @collectJobId)
     EXEC msdb.dbo.sp_add_jobserver @job_id = @collectJobId;
@@ -1483,7 +1483,7 @@ IF NOT EXISTS (SELECT 1 FROM msdb.dbo.sysjobservers WHERE job_id = @purgeJobId)
                     WHERE ConfigKey = N'AgentJobCreatedBySQLFlightRecorder'
                       AND ConfigValue <> N'1';
 
-                    SET @InstallAgentSummary = N' SQL Agent jobs ensured: SQLFlightRecorder Collect (Collect then Purge, every minute) and SQLFlightRecorder Purge (daily 02:30 retention backstop).';
+                    SET @InstallAgentSummary = N' SQL Agent jobs ensured: SQLFlightRecorder Collect (Collect then Purge, every 15 minutes) and SQLFlightRecorder Purge (daily 02:30 retention backstop).';
                 END;
             END;
 			
