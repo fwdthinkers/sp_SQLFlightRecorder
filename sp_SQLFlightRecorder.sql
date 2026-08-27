@@ -6,7 +6,7 @@
 -- Company:      Forward Thinkers Consulting, LLC.
 -- Web:          https://www.forwardthinkersconsulting.com/
 -- Contact:      contact@forwardthinkersconsulting.com
--- Repository:   https://github.com/forward-thinkers-lab/sp_SQLFlightRecorder
+-- Repository:   https://github.com/fwdthinkers/sp_SQLFlightRecorder
 -- License:      MIT
 --
 -- A single pure-T-SQL stored procedure for capturing bounded SQL Server
