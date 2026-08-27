@@ -670,7 +670,7 @@ ORDER BY o.name;
 
 ## Requirements
 
-**Primary supported range: SQL Server 2014–2025.**
+**Primary supported range: SQL Server 2014 through 2025.** SQL Server 2012 is legacy best-effort with a known `SchemaActivity` collector degradation, listed in the table for completeness.
 
 | Version | Platform | Support status |
 |---|---|---|
