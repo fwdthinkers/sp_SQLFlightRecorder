@@ -11,6 +11,56 @@ D-171 (major = contract break; minor = additive; patch = fixes).
 
 Nothing yet.
 
+## [1.1.3] - 2026-08-27
+
+Bug-fix release. **`@OutputFormat = N'Markdown'` silently rendered only one
+finding**, regardless of how many the report produced. No behavior or contract
+change otherwise: rule IDs, output columns, and the forward-only schema are
+untouched, and the D-085 Markdown header keeps its 14 keys.
+
+**If you ran a Markdown report on `1.0.0` through `1.1.2` and acted on it,
+re-run it.** The findings you were shown were incomplete. The header's
+`Finding-Count` and the Recommendation Summary were correct throughout, so a
+saved report that shows `Finding-Count: 32` above a single bullet is evidence
+of this defect, not of a quiet server — the other 31 findings were evaluated
+and then dropped at render time.
+
+### Fixed
+
+- **`Markdown` output rendered exactly one finding of N** (`@Mode = 'Report'`,
+  `@OutputFormat = 'Markdown'`; all rules). The Findings body was built by
+  concatenating into a variable with an `ORDER BY` over computed `CASE`
+  expressions — a construct SQL Server does not guarantee, and which in this
+  shape keeps only the last row in sort order. Because Informational sorts
+  last (D-068), the surviving row was almost always the `FR_R0026`
+  coverage summary. The render path now materialises the D-068 display rank
+  as a column and orders by it, so Markdown and `FindingsOnly` return the same
+  findings in the same order by construction.
+  - `@MinSeverity` never affected the symptom: the post-evaluation filter
+    (D-070) was always correct and `#fr_findings` was always fully populated —
+    the rows were lost at render time, not at filter time. At
+    `@MinSeverity = 'Critical'` the Findings section would have been empty
+    entirely, since the Informational row that had been surviving is itself
+    filtered out.
+  - **`Default`, `FindingsOnly`, and `TimelineOnly` were never affected.**
+    They emit plain result sets with no variable concatenation. Anyone using
+    those formats has complete output and needs to do nothing.
+- **The Markdown timeline used the same unguaranteed construct.** It rendered
+  correctly (its `ORDER BY` used plain columns, which happens to survive), but
+  was one refactor away from the identical silent truncation. It now uses the
+  same materialised-rank approach.
+
+### Added
+
+- **CI assertion that the Markdown header counts match the rendered bodies**
+  (`ci-tier1`): `Finding-Count` must equal the number of rendered finding
+  bullets, and `Timeline-Event-Count` the number of timeline bullets. Both
+  numbers derive from the same temp tables in the same code block, so any
+  disagreement is a defect by definition. The step previously asserted only
+  that the report's H1 was present, which is why this shipped. The check also
+  refuses to run against a fixture yielding fewer than two rows, where the
+  equality could not fail.
+
 ## [1.1.2] - 2026-08-27
 
 Documentation accuracy patch on `1.1.1`, and a **version-convention change**

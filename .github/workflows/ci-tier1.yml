@@ -266,6 +266,19 @@ jobs:
           docker exec mssql ${SQLTOOL} ${CFLAG} -S localhost -U sa -P "${SA_PASSWORD}" -b -d FRTest -y 0 \
             -Q "EXEC dbo.sp_SQLFlightRecorder @Mode = N'Report', @OutputFormat = N'Markdown';" | tee /tmp/md.out
           grep -q "# SQL Server Flight Recorder Report" /tmp/md.out
+          # The header counts and the rendered bodies come from the same temp
+          # tables in the same block, so any disagreement is a defect.
+          FC=$(grep -m1 '^Finding-Count:' /tmp/md.out | tr -dc '0-9')
+          FB=$(sed -n '/^## Findings$/,/^## Timeline$/p' /tmp/md.out | grep -cE '^- \*\*' || true)
+          TC=$(grep -m1 '^Timeline-Event-Count:' /tmp/md.out | tr -dc '0-9')
+          TB=$(sed -n '/^## Timeline$/,/^## Report Context$/p' /tmp/md.out | grep -cE '^- [0-9]{4}-' || true)
+          echo "markdown render: findings header=${FC} bullets=${FB}; timeline header=${TC} bullets=${TB}"
+          # Guard against a degenerate fixture: with 0/1 rows the equality below
+          # cannot fail, so the assertion would silently stop testing anything.
+          [ "${FC:-0}" -ge 2 ] || { echo "::error::fixture yields ${FC:-0} findings; assertion cannot fail"; exit 1; }
+          [ "${TC:-0}" -ge 2 ] || { echo "::error::fixture yields ${TC:-0} timeline events; assertion cannot fail"; exit 1; }
+          [ "${FC}" = "${FB}" ] || { echo "::error::Finding-Count ${FC} but ${FB} rendered"; exit 1; }
+          [ "${TC}" = "${TB}" ] || { echo "::error::Timeline-Event-Count ${TC} but ${TB} rendered"; exit 1; }
 
       - name: Lifecycle — Purge @WhatIf
         run: |
