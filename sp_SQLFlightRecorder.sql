@@ -21,7 +21,7 @@
 --   * Collect / CollectDebug / Report / Configure / Purge:
 --       implemented as the procedure evolves through the v0.1 roadmap
 --
--- Tool-Version:   1.1.2
+-- Tool-Version:   1.1.3
 -- Build-Date-Utc: 2026-08-27
 -- Design:         docs/design.md
 -- Decisions:      docs/decisions.md
@@ -85,7 +85,7 @@ BEGIN
     -- =========================================================================
     -- Constants and version info
     -- =========================================================================
-    DECLARE @ToolVersion             nvarchar(30)  = N'1.1.2';
+    DECLARE @ToolVersion             nvarchar(30)  = N'1.1.3';
     DECLARE @BuildDateUtc            datetime2(3)  = CONVERT(datetime2(3), '2026-08-27T00:00:00');
     -- SchemaVersion 0.5.0: v1.1.0 adds retention/purge-support indexes on the
     -- existing FR_* tables (D-199). Index-only DDL; no table shape changes.
@@ -6786,24 +6786,40 @@ ORDER BY ag.name, ar.replica_server_name, drs.database_id;';
 
 
 
-            -- Same deterministic order as the result-set output (D-068).
+            -- Same deterministic order as the result-set output (D-068). The
+            -- display rank is materialised first: variable concatenation whose
+            -- ORDER BY contains computed expressions keeps only the last row.
+            SELECT
+                  ROW_NUMBER() OVER (
+                      ORDER BY
+                          CASE Severity WHEN N'Critical' THEN 1 WHEN N'High' THEN 2
+                                        WHEN N'Medium' THEN 3 WHEN N'Low' THEN 4 ELSE 5 END,
+                          CASE Confidence WHEN N'High' THEN 1 WHEN N'Medium' THEN 2
+                                          WHEN N'Low' THEN 3 ELSE 4 END,
+                          CASE EvidenceType WHEN N'Observed' THEN 1 WHEN N'Inferred' THEN 2 ELSE 3 END,
+                          StartTimeUtc ASC, RuleId ASC, FindingOrdinal ASC
+                  ) AS DisplayRank
+                , Severity, RuleId, Title, Summary
+            INTO #fr_md_findings
+            FROM #fr_findings;
+
             SELECT @ReportMarkdown = @ReportMarkdown +
                 N'- **' + Severity + N'** [' + RuleId + N'] ' + Title + N': ' + Summary + CHAR(13) + CHAR(10)
-            FROM #fr_findings
-            ORDER BY
-                CASE Severity WHEN N'Critical' THEN 1 WHEN N'High' THEN 2
-                              WHEN N'Medium' THEN 3 WHEN N'Low' THEN 4 ELSE 5 END,
-                CASE Confidence WHEN N'High' THEN 1 WHEN N'Medium' THEN 2
-                                WHEN N'Low' THEN 3 ELSE 4 END,
-                CASE EvidenceType WHEN N'Observed' THEN 1 WHEN N'Inferred' THEN 2 ELSE 3 END,
-                StartTimeUtc ASC, RuleId ASC, FindingOrdinal ASC;
+            FROM #fr_md_findings
+            ORDER BY DisplayRank;
 
             SET @ReportMarkdown = @ReportMarkdown + CHAR(13) + CHAR(10) + N'## Timeline' + CHAR(13) + CHAR(10);
 
+            SELECT
+                  ROW_NUMBER() OVER (ORDER BY EventUtc, EventType, SnapshotId) AS DisplayRank
+                , EventUtc, EventType, Summary
+            INTO #fr_md_timeline
+            FROM #fr_timeline;
+
             SELECT @ReportMarkdown = @ReportMarkdown +
                 N'- ' + CONVERT(nvarchar(50), EventUtc, 126) + N'Z — ' + EventType + N': ' + Summary + CHAR(13) + CHAR(10)
-            FROM #fr_timeline
-            ORDER BY EventUtc, EventType, SnapshotId;
+            FROM #fr_md_timeline
+            ORDER BY DisplayRank;
 
             -- v0.4 Markdown enrichment (human-readable context; additive to
             -- the D-085 header block emitted above).

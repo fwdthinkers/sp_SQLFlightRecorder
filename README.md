@@ -16,7 +16,7 @@ Developed by **Ysaias Portes — Forward Thinkers Consulting, LLC.**
 > way. This project is unrelated to both. It is a stored procedure you install
 > yourself, and it stores its data in tables you can query.
 
-**Current release: v1.1.2** (2026-08-27) — see the [CHANGELOG](CHANGELOG.md) and [releases](https://github.com/fwdthinkers/sp_SQLFlightRecorder/releases). v1.1.0 made retention operationally safe by default: Agent-capable installs create both a collector job (Collect, then Purge) and a daily purge backstop job, retention values are validated, and the repository is indexed for purge/report at scale. From v1.0.0 the output contract is frozen for v1.x: rule IDs, output columns, and the forward-only schema are ["1.0 is forever" promises](docs/compatibility/support-policy.md).
+**Current release: v1.1.3** (2026-08-27) — see the [CHANGELOG](CHANGELOG.md) and [releases](https://github.com/fwdthinkers/sp_SQLFlightRecorder/releases). v1.1.3 fixes a defect in which `@OutputFormat = N'Markdown'` rendered only one finding of however many the report produced; if you acted on a Markdown report from v1.0.0–v1.1.2, re-run it. `Default`, `FindingsOnly`, and `TimelineOnly` were never affected. v1.1.0 made retention operationally safe by default: Agent-capable installs create both a collector job (Collect, then Purge) and a daily purge backstop job, retention values are validated, and the repository is indexed for purge/report at scale. From v1.0.0 the output contract is frozen for v1.x: rule IDs, output columns, and the forward-only schema are ["1.0 is forever" promises](docs/compatibility/support-policy.md).
 
 ---
 
