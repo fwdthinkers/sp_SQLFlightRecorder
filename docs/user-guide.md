@@ -498,7 +498,7 @@ Expected behavior:
 - Reads `FR_*` repository tables.
 - Does not collect new live DMV data.
 - Handles empty or low-data windows cleanly.
-- Returns findings, timeline, markdown, or other supported output formats.
+- Returns findings (the analytical output) and a timeline of discrete events, as result sets or markdown.
 - Applies filters such as severity and maximum finding count.
 
 ### Common report parameters
@@ -600,6 +600,10 @@ Expected result:
 
     Only timeline events.
 
+Returns discrete events only (see section 14). A window with nothing discrete in
+it yields only `SnapshotCaptured` rows; the findings are in the other result
+set.
+
 ### Markdown
 
 Example:
@@ -688,23 +692,62 @@ Evidence types:
 
 ## 14. Timeline
 
-Timeline output shows important events in chronological order.
+The timeline is a chronological record of discrete, timestamped occurrences in
+the report window. It is a correlation aid you read alongside the findings, not
+a chronological narration of them.
 
-Examples:
+Findings are the analytical output: rules evaluate the collected snapshots and
+emit ranked, severity-graded conclusions. The timeline is separate evidence.
+**Findings do not produce timeline events**, by design — see D-071, D-072 and
+D-078 in `docs/decisions.md`.
 
-- Snapshot captured
-- Collector skipped
-- Blocking observed
-- Restart detected
-- Report coverage gap
+The timeline records nine event types:
 
-Timeline is useful when investigating:
+| EventType | Recorded from |
+| --- | --- |
+| `SnapshotCaptured` | Each successful `Collect` |
+| `ErrorLogEvent` | Error-log entries (restart, I/O, corruption, failover, memory, high-severity) |
+| `SchemaChange` | DDL activity |
+| `StatsUpdate` | Statistics updates |
+| `DeadlockObserved` | Captured deadlock graphs |
+| `AgentJobFailed` | SQL Agent job runs that failed |
+| `BackupStarted` | Full and differential backups (log backups excluded) |
+| `ConfigurationChange` | Server or database setting changes |
+| `LogReuseWaitChanged` | Transaction-log reuse-wait transitions |
+| `AvailabilityStateChanged` | Availability-group synchronization health changes |
 
-- when a problem began
-- whether symptoms changed over time
+The timeline is useful when investigating:
+
+- when a discrete event occurred, and what preceded or followed it
 - whether the server restarted during the window
-- whether collectors were skipped
-- whether data coverage is sufficient
+- whether a configuration change lines up with a change in symptoms
+- whether backups or Agent jobs overlapped the incident
+- whether collection ran continuously across the window
+
+### A quiet window contains only SnapshotCaptured
+
+A window with no discrete events will contain only `SnapshotCaptured` rows, one
+per collection. **This is expected behaviour, not a failure**, and it happens
+even when the same report returns many findings.
+
+The two outputs draw on different evidence. Timeline sources are occurrences
+with a moment attached. Most rules instead evaluate sampled state and deltas —
+open transactions, wait-type spikes, file I/O latency, top CPU consumers — from
+`FR_Request`, `FR_Wait` and `FR_FileStat`, none of which produce timeline
+events. There is no single instant to place on a timeline for "the top wait
+type rose over the window"; that conclusion belongs to the window as a whole,
+which is what a finding describes.
+
+A report with thirty findings and thirty-seven `SnapshotCaptured` events is
+therefore consistent output. An empty timeline is permitted for the same reason
+(D-078).
+
+### The RuleId column
+
+Timeline rows carry a `RuleId` so an event can reference a related rule — a
+`ConfigurationChange` event names `FR_R0021`, for example, letting you connect
+the raw event to the finding that interprets it. The reference runs in that
+direction only: a finding never creates a timeline event.
 
 ---
 

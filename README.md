@@ -1,6 +1,6 @@
 ## SQL Server DBA Flight Recorder
 
-**sp_SQLFlightRecorder** is a lightweight, open-source, pure T-SQL stored procedure that captures safe SQL Server diagnostic snapshots and turns them into concise incident timelines, findings, and recommendations.
+**sp_SQLFlightRecorder** is a lightweight, open-source, pure T-SQL stored procedure that captures safe SQL Server diagnostic snapshots and turns them into concise findings and recommendations, alongside a timeline of the discrete events recorded in the same window.
 
 It is built for the question every DBA gets at 2 AM:
 
@@ -23,6 +23,7 @@ Developed by **Ysaias Portes — Forward Thinkers Consulting, LLC.**
 ## Navigation
 
 - [What it does](#what-it-does)
+- [What the report returns](#what-the-report-returns)
 - [Why this tool exists](#why-this-tool-exists)
 - [What it is not](#what-it-is-not)
 - [How it fits with other SQL Server tools](#how-it-fits-with-other-sql-server-tools)
@@ -61,6 +62,43 @@ Uninstall cleanly when done.
 ```
 
 The goal is not to replace your monitoring stack. The goal is to give DBAs a simple, portable, evidence-based incident recorder that is already inside SQL Server.
+
+---
+
+## What the report returns
+
+`Report` returns two things, and they answer different questions.
+
+**Findings** are the analytical output. Rules evaluate the collected snapshots and emit ranked, severity-graded conclusions — blocking chains, wait spikes, I/O latency, memory grants, plan regressions. If you read one result set, read this one.
+
+**The timeline** is a chronological record of discrete, timestamped occurrences in the same window. It is a correlation aid you read *alongside* the findings — "the latency spike began two minutes after that configuration change" — not a narration of the findings themselves. Findings do not appear in the timeline, and they are not meant to.
+
+The timeline records nine event types:
+
+| `EventType` | Recorded from |
+| --- | --- |
+| `SnapshotCaptured` | Each successful `Collect` |
+| `ErrorLogEvent` | Error-log entries (restart, I/O, corruption, failover, memory, high-severity) |
+| `SchemaChange` | DDL activity |
+| `StatsUpdate` | Statistics updates |
+| `DeadlockObserved` | Captured deadlock graphs |
+| `AgentJobFailed` | SQL Agent job runs that failed |
+| `BackupStarted` | Full and differential backups (log backups excluded) |
+| `ConfigurationChange` | Server or database setting changes |
+| `LogReuseWaitChanged` | Transaction-log reuse-wait transitions |
+| `AvailabilityStateChanged` | Availability-group synchronization health changes |
+
+### A quiet window contains only `SnapshotCaptured`
+
+On a healthy server with nothing discrete happening, the timeline will contain nothing but `SnapshotCaptured` rows — one per collection. **This is expected, not a failure**, and it can happen even when the same report returns many findings.
+
+The reason is that the two outputs draw on different evidence. The timeline's sources are discrete occurrences with a moment attached. Most rules, by contrast, evaluate *sampled state and deltas* — open transactions, wait-type spikes, file I/O latency, top CPU consumers — drawn from `FR_Request`, `FR_Wait`, and `FR_FileStat`, none of which produce timeline events. There is no single point in time to place on a timeline for "the top wait type rose over the window"; that conclusion belongs to the window, which is what a finding describes.
+
+So a report showing thirty findings and thirty-seven `SnapshotCaptured` events is consistent output. An empty timeline is permitted for the same reason.
+
+### The `RuleId` column on timeline events
+
+Timeline rows carry a `RuleId` so an event can point *at* a related rule — a `ConfigurationChange` event references `FR_R0021`, for instance, so you can connect the event to the finding that interprets it. The reference runs in that direction only: a finding never creates a timeline event.
 
 ---
 
@@ -136,7 +174,7 @@ I use and recommend the tools below. sp_SQLFlightRecorder is not a replacement f
 
 sp_SQLFlightRecorder fills a narrower gap: a small amount of retained, server-wide evidence, already inside SQL Server, for the case where the incident is over and nobody was watching. It collects bounded snapshots on a schedule, keeps them for a short configurable window, and reports on what changed.
 
-Several of these tools can be scheduled to persist their output, and if you already do that, you may not need this one. What sp_SQLFlightRecorder offers is a single procedure with no dependencies, a curated evidence set spanning waits, blocking, I/O, memory, restarts, configuration, and Agent history in one repository, and a report that reads as a timeline rather than a set of separate result sets.
+Several of these tools can be scheduled to persist their output, and if you already do that, you may not need this one. What sp_SQLFlightRecorder offers is a single procedure with no dependencies, a curated evidence set spanning waits, blocking, I/O, memory, restarts, configuration, and Agent history in one repository, and a report that pairs ranked findings with the discrete events recorded over the same window.
 
 ---
 
@@ -373,6 +411,8 @@ EXEC dbo.sp_SQLFlightRecorder
     @Mode = N'Report',
     @OutputFormat = N'TimelineOnly';
 ```
+
+Returns discrete events only — see [What the report returns](#what-the-report-returns). A window with nothing discrete in it yields only `SnapshotCaptured` rows; the findings are in the other result set.
 
 ### Return Markdown output
 
