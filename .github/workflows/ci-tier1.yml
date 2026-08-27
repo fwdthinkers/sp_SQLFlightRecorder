@@ -77,6 +77,13 @@ jobs:
       - name: Run linter self-tests
         run: python tests/static-analysis/lint.py --self-test
 
+      # No-op on untagged builds; fails when a version tag at HEAD does not
+      # match the artifact's Tool-Version header (D-201).
+      - name: Version/tag consistency (tagged builds)
+        run: |
+          git fetch --tags --quiet origin || true
+          bash scripts/check-version-tag.sh
+
   doc-coverage:
     name: Doc coverage (modes / rules / config + generator staleness)
     runs-on: ubuntu-latest

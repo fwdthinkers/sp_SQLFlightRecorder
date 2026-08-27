@@ -58,18 +58,10 @@ jobs:
           python-version: '3.12'
 
       # For a tag push, the tag must match the artifact header before we spend
-      # time on containers — catches a mistagged release immediately.
+      # time on containers — catches a mistagged release immediately (D-201).
       - name: Verify tag matches artifact Tool-Version (tag pushes only)
         if: github.event_name == 'push'
-        run: |
-          set -euo pipefail
-          HEADER=$(grep -m1 -E '^-- Tool-Version:' sp_SQLFlightRecorder.sql | awk '{print $3}')
-          TAG_VERSION="${GITHUB_REF_NAME#v}"
-          if [[ "${HEADER}" != "${TAG_VERSION}" ]]; then
-            echo "::error::tag ${GITHUB_REF_NAME} (version ${TAG_VERSION}) does not match artifact Tool-Version ${HEADER}."
-            exit 1
-          fi
-          echo "Tag and header agree on ${HEADER}."
+        run: bash scripts/check-version-tag.sh "${GITHUB_REF_NAME}"
 
       - name: Static analysis (linter + self-test)
         run: |

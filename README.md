@@ -10,7 +10,7 @@ sp_SQLFlightRecorder gives you a local, low-friction flight recorder for SQL Ser
 
 Developed by **Ysaias Portes — Forward Thinkers Consulting, LLC.**
 
-**Current release: v1.1.2** (2026-08-27; documentation patches on v1.1.0) — see the [CHANGELOG](CHANGELOG.md) and [releases](https://github.com/forward-thinkers-lab/sp_SQLFlightRecorder/releases). v1.1.0 made retention operationally safe by default: Agent-capable installs create both a collector job (Collect, then Purge) and a daily purge backstop job, retention values are validated, and the repository is indexed for purge/report at scale. From v1.0.0 the output contract is frozen for v1.x: rule IDs, output columns, and the forward-only schema are ["1.0 is forever" promises](docs/compatibility/support-policy.md).
+**Current release: v1.1.2** (2026-08-27) — see the [CHANGELOG](CHANGELOG.md) and [releases](https://github.com/forward-thinkers-lab/sp_SQLFlightRecorder/releases). v1.1.0 made retention operationally safe by default: Agent-capable installs create both a collector job (Collect, then Purge) and a daily purge backstop job, retention values are validated, and the repository is indexed for purge/report at scale. From v1.0.0 the output contract is frozen for v1.x: rule IDs, output columns, and the forward-only schema are ["1.0 is forever" promises](docs/compatibility/support-policy.md).
 
 ---
 

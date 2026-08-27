@@ -13,9 +13,15 @@ Nothing yet.
 
 ## [1.1.2] - 2026-08-27
 
-Documentation-only patch on `1.1.1`. The released `1.1.0` artifact is
-unchanged, so the in-proc `ToolVersion` still reports `1.1.0` (the same
-convention as 1.1.1; a tagged artifact is immutable).
+Documentation accuracy patch on `1.1.1`, and a **version-convention change**
+(**D-201**): from this release on, **every release bumps the in-proc
+`ToolVersion` and `Build-Date-Utc` — documentation-only releases included** —
+and a version/tag gate fails any tagged build whose artifact header does not
+match the tag. This release therefore ships `ToolVersion = 1.1.2` (build date
+2026-08-27) with **no behavior change**. For the record: `1.1.1` shipped with
+the artifact intentionally untouched, so its `About` output reports
+`ToolVersion 1.1.0` — that was the stated convention at the time, and this
+release supersedes it.
 
 ### Fixed
 
@@ -35,6 +41,11 @@ convention as 1.1.1; a tagged artifact is immutable).
 
 ### Added
 
+- **Version/tag consistency gate** — `scripts/check-version-tag.sh` (D-201):
+  fails a tagged build when the artifact's `Tool-Version` header does not
+  match the tag. Wired into `release.yml` (replacing its inline check, same
+  behavior, single implementation) and into the `ci-tier1` static-analysis
+  job, where it is a no-op on untagged builds. Locally runnable.
 - README: "How it fits with other SQL Server tools" section, and the missing
   `@TimeZone` parameter-table row (the parameter has existed since v1.0.0 but
   was absent from the README table).

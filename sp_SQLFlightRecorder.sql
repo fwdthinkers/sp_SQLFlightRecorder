@@ -21,8 +21,8 @@
 --   * Collect / CollectDebug / Report / Configure / Purge:
 --       implemented as the procedure evolves through the v0.1 roadmap
 --
--- Tool-Version:   1.1.0
--- Build-Date-Utc: 2026-08-26
+-- Tool-Version:   1.1.2
+-- Build-Date-Utc: 2026-08-27
 -- Design:         docs/design.md
 -- Decisions:      docs/decisions.md
 --
@@ -85,8 +85,8 @@ BEGIN
     -- =========================================================================
     -- Constants and version info
     -- =========================================================================
-    DECLARE @ToolVersion             nvarchar(30)  = N'1.1.0';
-    DECLARE @BuildDateUtc            datetime2(3)  = CONVERT(datetime2(3), '2026-08-26T00:00:00');
+    DECLARE @ToolVersion             nvarchar(30)  = N'1.1.2';
+    DECLARE @BuildDateUtc            datetime2(3)  = CONVERT(datetime2(3), '2026-08-27T00:00:00');
     -- SchemaVersion 0.5.0: v1.1.0 adds retention/purge-support indexes on the
     -- existing FR_* tables (D-199). Index-only DDL; no table shape changes.
     -- Forward-only (D-038): Install creates the indexes on upgraded
