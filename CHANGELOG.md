@@ -11,6 +11,54 @@ D-171 (major = contract break; minor = additive; patch = fixes).
 
 Nothing yet.
 
+## [1.1.2] - 2026-08-27
+
+Documentation-only patch on `1.1.1`. The released `1.1.0` artifact is
+unchanged, so the in-proc `ToolVersion` still reports `1.1.0` (the same
+convention as 1.1.1; a tagged artifact is immutable).
+
+### Fixed
+
+- **Finding-field column names were wrong in the user guide**
+  (`docs/user-guide.md` §13): the documented list included `FirstSeenUtc` and
+  `LastSeenUtc`, which do not exist in the 16-column Findings contract
+  (D-067). The actual columns are `StartTimeUtc` and `EndTimeUtc`, and the
+  full 16-column list is now documented in contract order. If you scripted
+  against the old documented names, switch to `StartTimeUtc`/`EndTimeUtc` —
+  the result set itself never changed.
+- **`Heuristic` removed from the documented evidence types**
+  (`docs/user-guide.md` §13): it appears nowhere in the artifact and has never
+  been emitted. The closed `EvidenceType` set is `Observed`, `Inferred`.
+  (Confidence values remain `High`, `Medium`, `Low`, and severity values are
+  unchanged; the old docs listed `Heuristic` as an evidence type that did not
+  exist.)
+
+### Added
+
+- README: "How it fits with other SQL Server tools" section, and the missing
+  `@TimeZone` parameter-table row (the parameter has existed since v1.0.0 but
+  was absent from the README table).
+
+### Changed
+
+- README safety notes and all remaining hedged phrasing rewritten as verified
+  statements of fact: exact collector row caps (most collectors cap at
+  `MaxRowsPerCollector`; file stats at `TOP (5000)`; perf counters at
+  `TOP (100)` over an 8-counter allow-list; `FR_Configuration` stores all of
+  `sys.configurations`; Query Store and schema activity cap per database
+  across up to 50 databases; `@TopN` validated 1–1000 while the
+  `MaxRowsPerCollector` config key is not range-checked), `@WhatIf` preview
+  behavior for `Purge`/`Uninstall`, `@PreserveRunLog`'s timestamped
+  `FR_RunLog_Archive_<yyyymmdd_hhmmss>` rename, opt-in Agent job creation,
+  the per-collector capability-gated skip list, and `Report`'s
+  repository-only evaluation (plus the fixed two-value capability probe that
+  runs on every invocation).
+- README lead reordered (what the tool is before the release note), the
+  Requirements heading reconciled with the SQL Server 2012 legacy row,
+  `@Debug` documented precisely (routes `Collect` to `CollectDebug`, no
+  collector rows), repository file paths linked consistently, and a stray
+  horizontal rule removed.
+
 ## [1.1.1] - 2026-08-27
 
 Documentation-only patch. The released `1.1.0` artifact is unchanged, so the
