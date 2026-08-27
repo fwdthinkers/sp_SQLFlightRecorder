@@ -19,6 +19,7 @@ Developed by **Ysaias Portes — Forward Thinkers Consulting, LLC.**
 - [What it does](#what-it-does)
 - [Why this tool exists](#why-this-tool-exists)
 - [What it is not](#what-it-is-not)
+- [How it fits with other SQL Server tools](#how-it-fits-with-other-sql-server-tools)
 - [When it is a big help](#when-it-is-a-big-help)
 - [Quick start](#quick-start)
 - [Parameters](#parameters)
@@ -112,6 +113,24 @@ sp_SQLFlightRecorder is **not**:
 It diagnoses. It does not take corrective action.
 
 It will not kill sessions, force plans, shrink files, clear cache, change indexes, or “fix” your server for you.
+
+---
+
+## How it fits with other SQL Server tools
+
+I use and recommend the tools below. sp_SQLFlightRecorder is not a replacement for any of them and does not try to be.
+
+- [sp_WhoIsActive](https://github.com/amachanic/sp_whoisactive) — what is running right now
+- [First Responder Kit](https://github.com/BrentOzarULTD/SQL-Server-First-Responder-Kit) — health checks, plan cache analysis, index analysis, first-response triage
+- [Ola Hallengren's Maintenance Solution](https://github.com/olahallengren/sql-server-maintenance-solution) — backups, integrity checks, index and statistics maintenance
+- [dbatools](https://dbatools.io/) — estate-wide automation and administration
+- [Glenn Berry's Diagnostic Queries](https://glennsqlperformance.com/resources/) — manual DMV inspection and configuration review
+- Query Store — per-database query runtime and plan history
+- Extended Events — precise, customizable event capture
+
+sp_SQLFlightRecorder fills a narrower gap: a small amount of retained, server-wide evidence, already inside SQL Server, for the case where the incident is over and nobody was watching. It collects bounded snapshots on a schedule, keeps them for a short configurable window, and reports on what changed.
+
+Several of these tools can be scheduled to persist their output, and if you already do that, you may not need this one. What sp_SQLFlightRecorder offers is a single procedure with no dependencies, a curated evidence set spanning waits, blocking, I/O, memory, restarts, configuration, and Agent history in one repository, and a report that reads as a timeline rather than a set of separate result sets.
 
 ---
 
