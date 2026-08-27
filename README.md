@@ -713,16 +713,15 @@ Notes:
 
 ## Safety notes
 
-sp_SQLFlightRecorder is designed to be DBA-safe:
+sp_SQLFlightRecorder is DBA-safe by construction:
 
-- default mode is `Help`
-- collection is bounded where practical
-- report reads from repository tables
-- destructive modes are explicit
-- purge should support `@WhatIf`
-- uninstall should support `@WhatIf`
-- SQL Agent job creation should be opt-in
-- no automatic remediation
+- The default mode is `Help`. Running the procedure with no parameters prints usage and does nothing else.
+- Collection is bounded. Most collectors cap at `MaxRowsPerCollector` (default 50); file stats cap at `TOP (5000)` rows, perf counters at `TOP (100)` over an 8-counter allow-list, `FR_Configuration` stores all of `sys.configurations` (roughly 80–110 rows), and several collectors write a single row per snapshot. Query Store and schema activity apply the cap per database across up to 50 databases. The `@TopN` parameter is validated 1–1000; the `MaxRowsPerCollector` config key is not range-checked.
+- `Report` evaluates findings and the timeline only from the `FR_*` repository tables. The only live reads on any invocation are the fixed two-value capability probe (target server memory and host platform).
+- Destructive modes are explicit, and `Purge` and `Uninstall` both accept `@WhatIf = 1` to preview without changing anything.
+- SQL Agent job creation requires an explicit `@CreateAgentJob = 1`. It never happens by default.
+- The procedure never issues `KILL`, never changes server or database configuration, and never modifies user objects — a CI linter enforces the forbidden list. It creates and drops only its own `FR_*` objects and, opt-in only, the two named Agent jobs.
+- No automatic remediation.
 
 Still, treat it like any DBA tool:
 
