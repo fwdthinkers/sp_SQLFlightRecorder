@@ -166,11 +166,7 @@ No external runtime.
 
 ### 1. Run the procedure file
 
-Open and execute:
-
-```text
-sp_SQLFlightRecorder.sql
-```
+Open and execute [`sp_SQLFlightRecorder.sql`](sp_SQLFlightRecorder.sql).
 
 This creates or updates:
 
@@ -738,17 +734,11 @@ Watch repository growth.
 
 ## Documentation
 
-Full documentation:
+Full documentation: [docs/user-guide.md](docs/user-guide.md)
 
-```text
-docs/user-guide.md
-```
+Configuration reference: [docs/configuration.md](docs/configuration.md)
 
-Main implementation file:
-
-```text
-sp_SQLFlightRecorder.sql
-```
+Main implementation file: [`sp_SQLFlightRecorder.sql`](sp_SQLFlightRecorder.sql)
 
 Useful commands:
 
