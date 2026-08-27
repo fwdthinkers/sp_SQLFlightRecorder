@@ -221,7 +221,7 @@ EXEC dbo.sp_SQLFlightRecorder
 | `@MaxFindings` | `200` | `Report` | Maximum number of findings to return. Valid range: `10` to `2000`. |
 | `@TopN` | `50` | `Collect` | Per-collector row cap for top-N style collection. Valid range: `1` to `1000`. |
 | `@OutputFormat` | `Default` | `Report` | Report format: `Default`, `FindingsOnly`, `TimelineOnly`, or `Markdown`. |
-| `@IncludeQueryPlans` | `0` | `Report` | Optional plan output if supported. Plans are not shredded by default. |
+| `@IncludeQueryPlans` | `0` | `Report` | **Reserved / no-op in this build.** Plan capture and plan-XML analysis are disabled by design; no plan output is returned. `1` records a Skipped step at Collect and one Informational coverage finding at Report. |
 | `@WhatIf` | `0` | `Purge`, `Uninstall` | Preview what would happen without making changes. |
 | `@PreserveRunLog` | `0` | `Uninstall` | When `1`, preserves or archives run-log tables during uninstall if supported. |
 | `@Debug` | `0` | `Collect`, internal/debug paths | Enables debug behavior. Useful for troubleshooting collector readiness. |
@@ -361,9 +361,13 @@ EXEC dbo.sp_SQLFlightRecorder
     @OutputFormat = N'Markdown';
 ```
 
-### Include query plans if supported
+### Reserved query-plan parameter
 
-Plans are optional and are not parsed/shredded by default.
+`@IncludeQueryPlans` is reserved and is a no-op in this build: plan capture
+and plan-XML analysis are disabled by design, so no plan output is returned.
+Setting it to `1` records a Skipped QueryPlans step at Collect and one
+Informational coverage finding at Report explaining this. Use Query Store for
+plan-level evidence.
 
 ```sql
 EXEC dbo.sp_SQLFlightRecorder

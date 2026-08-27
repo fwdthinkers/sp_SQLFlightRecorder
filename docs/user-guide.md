@@ -511,8 +511,14 @@ Depending on your procedure version, supported parameters may include:
 @MinSeverity
 @MaxFindings
 @OutputFormat
-@IncludeQueryPlans
+@IncludeQueryPlans   -- reserved / no-op
 ```
+
+`@IncludeQueryPlans` is reserved and is a no-op: plan capture and plan output
+are disabled by design, so no query plans are returned. Setting it to `1`
+records a Skipped QueryPlans step at Collect and adds one Informational
+coverage finding at Report stating this. Use Query Store for plan-level
+evidence.
 
 Example:
 

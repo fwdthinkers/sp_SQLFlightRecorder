@@ -11,6 +11,24 @@ D-171 (major = contract break; minor = additive; patch = fixes).
 
 Nothing yet.
 
+## [1.1.1] - 2026-08-27
+
+Documentation-only patch. The released `1.1.0` artifact is unchanged, so the
+in-proc `ToolVersion` still reports `1.1.0` — the same pattern as prior
+docs-only changes; a tagged artifact is immutable.
+
+### Fixed
+
+- Corrected `@IncludeQueryPlans` documentation (`README.md` parameter table
+  and example section; `docs/user-guide.md` §11): the parameter is
+  **reserved / no-op in this build** — plan capture and plan-XML analysis are
+  disabled by design (D-015/D-046/D-082/D-136) and no plan output is ever
+  returned; `1` records a Skipped step at Collect and one Informational
+  coverage finding at Report. The old wording ("optional plan output if
+  supported") promised a capability that does not exist.
+  `docs/modes/report.md`, `docs/modes/collect.md`, and the in-proc `Help`
+  output were already correct and are unchanged.
+
 ## [1.1.0] - 2026-08-26
 
 **Retention and repository-performance hardening** (**D-199**). Root cause
