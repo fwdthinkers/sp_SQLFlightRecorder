@@ -242,7 +242,7 @@ EXEC dbo.sp_SQLFlightRecorder
 | `@OutputFormat` | `Default` | `Report` | Report format: `Default`, `FindingsOnly`, `TimelineOnly`, or `Markdown`. |
 | `@IncludeQueryPlans` | `0` | `Report` | **Reserved / no-op in this build.** Plan capture and plan-XML analysis are disabled by design; no plan output is returned. `1` records a Skipped step at Collect and one Informational coverage finding at Report. |
 | `@WhatIf` | `0` | `Purge`, `Uninstall` | Preview what would happen without making changes. |
-| `@PreserveRunLog` | `0` | `Uninstall` | When `1`, preserves or archives run-log tables during uninstall if supported. |
+| `@PreserveRunLog` | `0` | `Uninstall` | When `1`, Uninstall renames `FR_RunLog`/`FR_RunLogStep` to timestamped `FR_RunLog_Archive_<yyyymmdd_hhmmss>` tables instead of dropping them. |
 | `@Debug` | `0` | `Collect`, internal/debug paths | Enables debug behavior. Useful for troubleshooting collector readiness. |
 | `@ConfigKey` | `NULL` | `Configure` | Configuration key to update. If omitted, returns current configuration. |
 | `@ConfigValue` | `NULL` | `Configure` | New value for `@ConfigKey`. |
@@ -558,7 +558,7 @@ Configuration is stored in:
 dbo.FR_Config
 ```
 
-Common keys may include:
+The most commonly tuned keys (full reference: [docs/configuration.md](docs/configuration.md)):
 
 | Key | Purpose |
 |---|---|
@@ -641,7 +641,7 @@ EXEC dbo.sp_SQLFlightRecorder
     @Mode = N'Uninstall';
 ```
 
-Preserve run-log tables if supported:
+Preserve the run log (renames `FR_RunLog`/`FR_RunLogStep` to timestamped `FR_*_Archive_*` tables):
 
 ```sql
 EXEC dbo.sp_SQLFlightRecorder
@@ -707,7 +707,7 @@ Notes:
 
 - SQL Agent is not available in SQL Server Express.
 - Azure SQL Database does not support SQL Agent.
-- Some collectors may degrade gracefully based on version, edition, permissions, or platform.
+- Capability-gated collectors skip cleanly where a source is absent: `AgentJobs` and `BackupHistory` without msdb (Azure SQL Database), `Deadlocks` on Azure SQL Database, `AlwaysOnState` and the advanced HA collector without Always On, Query Store before SQL 2016 or with no Query Store-enabled database, the opt-in error log on Azure SQL Database, and the opt-in buffer pool above 256 GB target memory. `SchemaActivity` degrades on SQL Server 2012 (collect runs return `PartialSuccess`). Per-platform detail: [docs/compatibility/matrix.md](docs/compatibility/matrix.md).
 
 ---
 

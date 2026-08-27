@@ -76,15 +76,15 @@ SQLFlightRecorder is intended to be installed in a **user database**, not direct
 
 ## 3. Safety model
 
-SQLFlightRecorder is designed to be production-conscious:
+SQLFlightRecorder is production-conscious:
 
 - Default mode is `Help`, so accidental execution is non-destructive.
-- Collection uses bounded reads where practical.
-- Report mode reads from `FR_*` repository tables, not live workload DMVs.
+- Collection uses bounded reads (per-collector row caps; the README Safety notes list the exact caps).
+- Report mode reads from `FR_*` repository tables, not live workload DMVs (apart from the fixed two-value capability probe that runs on every invocation).
 - Destructive operations require explicit modes such as `Uninstall` or `Purge`.
-- `Purge` should delete in batches and should support `@WhatIf = 1`.
-- SQL Agent scheduling should be opt-in only.
-- Uninstall should remove only SQLFlightRecorder-owned objects.
+- `Purge` deletes in 5,000-row batches and accepts `@WhatIf = 1` to preview.
+- SQL Agent scheduling is opt-in only (`@CreateAgentJob = 1`).
+- Uninstall removes only SQLFlightRecorder-owned objects.
 
 Recommended first use:
 
@@ -320,7 +320,7 @@ EXEC dbo.sp_SQLFlightRecorder @Mode = N'Status';
 
 Status is intended to show the current repository state.
 
-Expected information may include:
+Status returns:
 
 1. Configuration values from `FR_Config`
 2. Rule catalog from `FR_Rules`
@@ -503,14 +503,16 @@ Expected behavior:
 
 ### Common report parameters
 
-Depending on your procedure version, supported parameters may include:
+Report accepts these parameters:
 
 ```sql
+@DatabaseName
 @StartTime
 @EndTime
 @MinSeverity
 @MaxFindings
 @OutputFormat
+@TimeZone            -- display-only time zone for Markdown output
 @IncludeQueryPlans   -- reserved / no-op
 ```
 
@@ -537,7 +539,7 @@ EXEC dbo.sp_SQLFlightRecorder
 
 ### Markdown report
 
-If supported:
+Markdown output is always available:
 
 ```sql
 EXEC dbo.sp_SQLFlightRecorder
@@ -626,19 +628,24 @@ A finding should answer:
 - What evidence supports it?
 - What should the DBA do next?
 
-Common finding fields may include:
+Common finding fields (the 16-column v1.x output contract, in column order):
 
-    RuleId
+    FindingOrdinal
     Severity
     Confidence
     EvidenceType
     Category
+    RuleId
     Title
     Summary
     Evidence
     Recommendation
-    FirstSeenUtc
-    LastSeenUtc
+    DatabaseName
+    ObjectName
+    SessionId
+    StartTimeUtc
+    EndTimeUtc
+    MoreInfo
 
 Severity values:
 
@@ -648,17 +655,16 @@ Severity values:
     High
     Critical
 
-Confidence values may include:
+Confidence values:
 
-    Low
-    Medium
     High
+    Medium
+    Low
 
-Evidence types may include:
+Evidence types:
 
     Observed
     Inferred
-    Heuristic
 
 ### Interpreting severity
 
@@ -739,7 +745,7 @@ Verify:
 
 ### Common configuration keys
 
-Your build may include keys such as:
+The most commonly tuned keys (full reference: [configuration.md](configuration.md)):
 
 | Key | Purpose |
 |---|---|
@@ -1032,7 +1038,7 @@ If you also want to remove the procedure:
 
 ### Preserve run log
 
-If supported:
+Renames `FR_RunLog`/`FR_RunLogStep` to timestamped `FR_RunLog_Archive_<yyyymmdd_hhmmss>` tables instead of dropping them:
 
     EXEC dbo.sp_SQLFlightRecorder
         @Mode = N'Uninstall',
@@ -1061,7 +1067,7 @@ After normal uninstall, expected result:
 
     0 rows
 
-After preserve-run-log uninstall, expected result may include archived run-log tables.
+After preserve-run-log uninstall, the timestamped `FR_RunLog_Archive_*` and `FR_RunLogStep_Archive_*` tables remain.
 
 ---
 
@@ -1640,7 +1646,7 @@ To remove repository data:
     EXEC dbo.sp_SQLFlightRecorder
         @Mode = N'Uninstall';
 
-To preserve run-log tables if supported:
+To preserve the run log (timestamped rename instead of drop):
 
     EXEC dbo.sp_SQLFlightRecorder
         @Mode = N'Uninstall',
