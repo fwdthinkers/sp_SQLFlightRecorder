@@ -211,7 +211,6 @@ EXEC dbo.sp_SQLFlightRecorder
     @MinSeverity = N'Informational',
     @OutputFormat = N'Default';
 ```
----
 
 ---
 
