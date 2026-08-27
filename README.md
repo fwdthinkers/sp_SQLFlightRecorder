@@ -2,8 +2,6 @@
 
 **sp_SQLFlightRecorder** is a lightweight, open-source, pure T-SQL stored procedure that captures safe SQL Server diagnostic snapshots and turns them into concise incident timelines, findings, and recommendations.
 
-**Current stable release: v1.1.0** (2026-08-26) — see the [CHANGELOG](CHANGELOG.md) and [releases](https://github.com/forward-thinkers-lab/sp_SQLFlightRecorder/releases). v1.1.0 makes retention operationally safe by default: Agent-capable installs now create both a collector job (Collect, then Purge) and a daily purge backstop job, retention values are validated, and the repository is indexed for purge/report at scale. From v1.0.0 the output contract is frozen for v1.x: rule IDs, output columns, and the forward-only schema are ["1.0 is forever" promises](docs/compatibility/support-policy.md).
-
 It is built for the question every DBA gets at 2 AM:
 
 > “SQL Server was slow earlier — what happened?”
@@ -11,6 +9,8 @@ It is built for the question every DBA gets at 2 AM:
 sp_SQLFlightRecorder gives you a local, low-friction flight recorder for SQL Server: collect small snapshots over time, then report on blocking, waits, I/O, memory pressure, restarts, configuration signals, and collection coverage.
 
 Developed by **Ysaias Portes — Forward Thinkers Consulting, LLC.**
+
+**Current release: v1.1.1** (2026-08-27, a documentation patch on v1.1.0) — see the [CHANGELOG](CHANGELOG.md) and [releases](https://github.com/forward-thinkers-lab/sp_SQLFlightRecorder/releases). v1.1.0 made retention operationally safe by default: Agent-capable installs create both a collector job (Collect, then Purge) and a daily purge backstop job, retention values are validated, and the repository is indexed for purge/report at scale. From v1.0.0 the output contract is frozen for v1.x: rule IDs, output columns, and the forward-only schema are ["1.0 is forever" promises](docs/compatibility/support-policy.md).
 
 ---
 
