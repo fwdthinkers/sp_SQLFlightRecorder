@@ -239,10 +239,11 @@ EXEC dbo.sp_SQLFlightRecorder
 | `@IncludeQueryPlans` | `0` | `Report` | **Reserved / no-op in this build.** Plan capture and plan-XML analysis are disabled by design; no plan output is returned. `1` records a Skipped step at Collect and one Informational coverage finding at Report. |
 | `@WhatIf` | `0` | `Purge`, `Uninstall` | Preview what would happen without making changes. |
 | `@PreserveRunLog` | `0` | `Uninstall` | When `1`, Uninstall renames `FR_RunLog`/`FR_RunLogStep` to timestamped `FR_RunLog_Archive_<yyyymmdd_hhmmss>` tables instead of dropping them. |
-| `@Debug` | `0` | `Collect`, internal/debug paths | Enables debug behavior. Useful for troubleshooting collector readiness. |
+| `@Debug` | `0` | `Collect` | `1` routes `Collect` to `CollectDebug`: validates collector readiness and writes no collector rows. |
 | `@ConfigKey` | `NULL` | `Configure` | Configuration key to update. If omitted, returns current configuration. |
 | `@ConfigValue` | `NULL` | `Configure` | New value for `@ConfigKey`. |
 | `@CreateAgentJob` | `0` | `Install` | Explicit opt-in to create/update the SQL Agent jobs: the per-minute collector job (Collect step, then a Purge cleanup step) and a daily purge backstop job. |
+| `@TimeZone` | `NULL` | `Report` | Display-only IANA/Windows time zone for Markdown output (SQL 2016+/Azure; falls back to UTC elsewhere). Storage and sorting stay UTC. |
 
 ### Common `@Mode` values
 
