@@ -24,6 +24,7 @@ Developed by **Ysaias Portes — Forward Thinkers Consulting, LLC.**
 
 - [What it does](#what-it-does)
 - [What the report returns](#what-the-report-returns)
+- [Sample output](#sample-output)
 - [Why this tool exists](#why-this-tool-exists)
 - [What it is not](#what-it-is-not)
 - [How it fits with other SQL Server tools](#how-it-fits-with-other-sql-server-tools)
@@ -100,6 +101,97 @@ So a report showing thirty findings and thirty-seven `SnapshotCaptured` events i
 
 Timeline rows carry a `RuleId` so an event can point *at* a related rule — a `ConfigurationChange` event references `FR_R0021`, for instance, so you can connect the event to the finding that interprets it. The reference runs in that direction only: a finding never creates a timeline event.
 
+---
+
+## Sample output
+
+A seven-hour window on a busy production instance, reported after the fact.
+Database names have been changed; every value, threshold, and timing below is
+unmodified.
+
+```sql
+EXEC dbo.sp_SQLFlightRecorder
+    @Mode         = N'Report',
+    @OutputFormat = N'FindingsOnly',
+    @StartTime    = '2026-08-24 02:00',
+    @EndTime      = '2026-08-24 09:00';
+```
+
+![Findings output in SSMS](docs/sample-report.png)
+
+### What it found
+
+| # | Severity | Conf. | Type | Category | Rule | Database | Evidence |
+|---|---|---|---|---|---|---|---|
+| 1 | Critical | High | Observed | Blocking | `FR_R0007_BlockingStorm` | — | Peak blocked sessions in one snapshot: 6; threshold: 5 |
+| 2 | High | High | Observed | Tempdb | `FR_R0008_TempdbVersionStoreGrowth` | — | Min version store: 128 KB; max: 6669440 KB; escalation threshold: 5242880 KB |
+| 3 | High | Medium | Inferred | IO | `FR_R0004_FileIoLatencySpike` | `master` | windowLatencyMs=97.96; baselineAvgMs=23.104; floorMs=20; baselineSamples=502 |
+| 4 | High | Medium | Inferred | QueryStore | `FR_R0015_QueryPlanRegression` | `UserScripts` | QsQueryId=124810; latestAvgUs=92465981; bestPriorAvgUs=3218773; factor>=2.00 |
+| 6 | High | Medium | Inferred | QueryStore | `FR_R0015_QueryPlanRegression` | `ETLStaging` | QsQueryId=743889; latestAvgUs=512947; bestPriorAvgUs=39; factor>=2.00 |
+| 11 | Medium | High | Observed | QueryStore | `FR_R0016_TopCpuConsumerInWindow` | `Operations` | QsQueryId=31281; totalCpuUs=607890292740; execCount=60; avgLogicalReads=1226132077 |
+| 15 | Medium | Medium | Inferred | Waits | `FR_R0003_TopWaitTypeSpike` | — | WaitType=SOS_WORK_DISPATCHER; DeltaWaitMs=3778160175; Class=Non-critical (Medium) |
+| 16 | Medium | Medium | Inferred | IO | `FR_R0004_FileIoLatencySpike` | `msdb` | windowLatencyMs=520.55; baselineAvgMs=187.766; floorMs=20 |
+| 17 | Medium | Medium | Inferred | IO | `FR_R0004_FileIoLatencySpike` | `SSISDB` | windowLatencyMs=198.14; baselineAvgMs=65.894; floorMs=20 |
+| 26 | Informational | High | Observed | Coverage | `FR_R0026_CoverageAndCapabilitySummary` | — | Snapshots=420; SkippedOrPartial=AlwaysOnState (Always On not enabled, capability-gated) |
+
+Read in order: long-running open transactions held row versions, the tempdb
+version store grew from 128 KB to roughly 6.5 GB, six sessions were blocked
+within a single snapshot, and file I/O latency ran four times its own baseline
+across nine databases. None of it was still visible by the time anyone asked
+what had happened.
+
+The coverage row is part of the output, not an afterthought. It reports how many
+snapshots the window contained and which collectors were skipped, so the absence
+of a finding can be told apart from the absence of evidence.
+
+### One finding in full
+
+`FindingsOnly` returns 16 columns per finding. The first row from the run above,
+shown vertically:
+
+```text
+FindingOrdinal   1
+Severity         Critical
+Confidence       High
+EvidenceType     Observed
+Category         Blocking
+RuleId           FR_R0007_BlockingStorm
+Title            Blocking storm observed
+Summary          Multiple sessions were blocked within a single snapshot in the window.
+Evidence         Peak blocked sessions in one snapshot: 6; threshold: 5
+Recommendation   Consider reviewing the lead blocker and the involved transactions
+                 only after validating which session is at the head of the chain.
+DatabaseName     NULL
+ObjectName       NULL
+SessionId        NULL
+StartTimeUtc     2026-08-24 06:30:00.055
+EndTimeUtc       2026-08-24 12:52:00.072
+MoreInfo         Computed from FR_Request.BlockingSessionId per snapshot. Folds the
+                 same anchor as FR_R0001/FR_R0002. Folded 96 blocking contributor(s):
+                 FR_R0001_ActiveBlockingChain(SessionId=204);
+                 FR_R0002_LongRunningOpenTransaction(SessionId=52); ...
+```
+
+Four columns are worth calling out.
+
+**`Recommendation`** states what to look at and what to confirm first. It does
+not tell you to kill a session. The tool does not diagnose on your behalf.
+
+**`Confidence` and `EvidenceType`** separate what was directly observed from what
+was inferred from deltas. A blocking storm counted in a snapshot is `Observed` /
+`High`; an I/O latency elevation measured against a rolling baseline is
+`Inferred` / `Medium`. You can weigh them differently, because they are not the
+same kind of claim.
+
+**`DatabaseName`, `ObjectName`, and `SessionId`** are populated where the finding
+is scoped to one — the I/O and Query Store rows above name their database. They
+are `NULL` on instance-wide findings rather than being filled with a guess.
+
+**`MoreInfo`** names the source and the method: which repository table the value
+came from, which decision record governs the calculation, and — when several
+related findings were folded into one — how many contributors were folded and
+which sessions they came from. The blocking storm above folded 96 contributing
+findings into a single row.
 ---
 
 ## Why this tool exists
